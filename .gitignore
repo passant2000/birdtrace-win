@@ -1,0 +1,31 @@
+# 鸟迹 BirdTrace Win — 源码仓库忽略规则
+# 大文件与第三方资产不入库(模型/数据由 tools/extract_assets.py 从APK提取,
+# 发布二进制见 GitHub Releases), 本仓库只收代码与文档。
+
+__pycache__/
+*.pyc
+.venv/
+
+# 运行产物与本地数据(测试库/截图/模型实验/临时工具链)
+data/
+startup_timing.log
+
+# 发布目录与打包产物
+releases/
+packaging/dist/
+packaging/build/
+
+# 资产(从birdtrace.apk提取 + 模型权重, 许可见README)
+assets/
+
+# 大二进制一律防误提交
+*.onnx
+*.pth
+*.safetensors
+*.apk
+*.db
+*.sqlite
+
+# 系统杂项
+Thumbs.db
+Desktop.ini
