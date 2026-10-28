@@ -13,8 +13,19 @@ from pathlib import Path
 
 from ..paths import assets_dir
 
-MONTH_TIERS = [(1.0, "常见"), (0.0, "可见"), (-1.0, "偶见"), (-4.01, "罕见")]
-RARITY_TIERS = ["常见", "较常见", "不常见", "稀有", "罕见"]
+MONTH_TIERS = [(1.0, "常见"), (0.0, "可见"), (-1.0, "偶见"), (-4.01, "罕见")]  # i18n:ok
+RARITY_TIERS = ["常见", "较常见", "不常见", "稀有", "罕见"]  # i18n:ok
+
+# 中文层级码的英文显示(内部码保持中文, 展示点用tier_display)
+TIER_EN = {"常见": "Common", "可见": "Seen", "偶见": "Occasional",  # i18n:ok
+           "罕见": "Rare", "较常见": "Fairly common", "不常见": "Uncommon",  # i18n:ok
+           "稀有": "Very rare"}  # i18n:ok
+
+
+def tier_display(tier: str) -> str:
+    from ..i18n import t
+    return t(tier, TIER_EN.get(tier, tier))
+RARITY_TIERS = ["常见", "较常见", "不常见", "稀有", "罕见"]  # i18n:ok
 
 
 class PriorHint:
@@ -35,7 +46,7 @@ class PriorHint:
         if idx is None:
             return None
         v = float(vec[idx])
-        for floor, name in MONTH_TIERS:
+        for floor, name in MONTH_TIERS:  # i18n:ok
             if v >= floor:
                 return name
         return None
@@ -56,8 +67,8 @@ class PriorHint:
             order = present[np.argsort(maxima[present])[::-1]]  # 降序
             n = len(order)
             for rank, idx in enumerate(order):
-                tier = min(4, int(rank / n * 5))
-                tiers[int(idx)] = RARITY_TIERS[tier]
+                tier = min(4, int(rank / n * 5))  # i18n:ok
+                tiers[int(idx)] = RARITY_TIERS[tier]  # i18n:ok
         self._rarity_cache[region_id] = tiers
         return tiers
 

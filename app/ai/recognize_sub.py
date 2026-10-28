@@ -121,7 +121,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--assets", required=True)
     ap.add_argument("--conf", default="0.25")
-    ap.add_argument("--cpu", action="store_true", help="CPU推理(单张重识别)")
+    ap.add_argument("--cpu", action="store_true", help="CPU推理(单张重识别)")  # i18n:ok
     args, _ = ap.parse_known_args()
     run_worker(args.assets, args.conf, use_gpu=not args.cpu)
 

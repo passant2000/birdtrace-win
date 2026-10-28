@@ -11,14 +11,14 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
 from ..core import regions
 from ..core.birddex import get_dex
 from ..core.culture import get_culture
-from ..core.prior_hint import get_hint
+from ..core.prior_hint import get_hint, tier_display
 from ..i18n import t, sname
 from ..media import cached_thumbnail, ensure_thumbnail
 from .. import theme
 from .viewer import PhotoViewer
 
-IUCN_CN = {"LC": "无危", "NT": "近危", "VU": "易危", "EN": "濒危", "CR": "极危",
-           "EW": "野外灭绝", "EX": "灭绝", "DD": "数据缺乏", "NE": "未评估"}
+IUCN_CN = {"LC": "无危", "NT": "近危", "VU": "易危", "EN": "濒危", "CR": "极危",  # i18n:ok
+           "EW": "野外灭绝", "EX": "灭绝", "DD": "数据缺乏", "NE": "未评估"}  # i18n:ok
 IUCN_EN = {"LC": "Least Concern", "NT": "Near Threatened", "VU": "Vulnerable",
            "EN": "Endangered", "CR": "Critically Endangered",
            "EW": "Extinct in the Wild", "EX": "Extinct", "DD": "Data Deficient",

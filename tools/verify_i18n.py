@@ -56,7 +56,7 @@ def data_strings(lib) -> list[str]:
     return out
 
 
-def collect_texts(root) -> list[str]:
+def collect_texts(root, skip_lists: bool = False) -> list[str]:
     """递归收集一个widget树里所有用户可见文案。"""
     from PySide6.QtWidgets import (QComboBox, QDialog, QGroupBox, QLabel,
                                    QLineEdit, QListWidget, QPushButton,
@@ -82,7 +82,7 @@ def collect_texts(root) -> list[str]:
             elif isinstance(w, QComboBox):
                 for i in range(w.count()):
                     add(w.itemText(i))
-            elif isinstance(w, QListWidget):
+            elif isinstance(w, QListWidget) and not skip_lists:
                 for i in range(w.count()):
                     add(w.item(i).text())
             elif isinstance(w, QGroupBox):
@@ -268,11 +268,16 @@ def main():
                              BatchSpotDialog(lib, win, [1, 2])))
             except Exception as e:
                 check(False, f"批量挂点可构造 ({e})")
+            try:
+                from app.ui.species_pick import SpeciesPickDialog
+                dlgs.append(("speciespick", SpeciesPickDialog(lib)))
+            except Exception as e:
+                check(False, f"选鸟种对话框可构造 ({e})")
             for name, d in dlgs:
                 d.resize(900, 640)
                 d.show()
                 app.processEvents()
-                texts = collect_texts(d)
+                texts = collect_texts(d, skip_lists=(name == "speciespick"))
                 bad = zh_residue(texts, lib_data) if lang == "en" else []
                 residues[f"{lang}:{name}"] = bad
                 check(not bad, f"对话框[{name}] " + ("无中文残留" if not bad

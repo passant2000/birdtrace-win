@@ -19,15 +19,15 @@ from pathlib import Path
 from ..paths import assets_dir
 
 CATEGORY_ZH = {
-    "nameOrigin": "名称由来", "naturalHistory": "博物史", "historicalStory": "历史故事",
-    "conservationCulture": "保护文化", "nationalSymbolism": "国家象征",
-    "literature": "文学", "symbolism": "象征", "folklore": "民俗",
-    "art": "艺术", "indigenousTradition": "原住民传统", "etymology": "词源",
-    "poetry": "诗歌", "mythology": "神话", "traditionalKnowledge": "传统知识",
-    "music": "音乐", "historicalNaturalHistory": "博物史",
-    "heraldry": "纹章", "religion": "宗教", "royalSymbolism": "王室象征",
-    "historicalMisidentification": "历史误认", "omen": "征兆",
-    "seasonalKnowledge": "季节知识", "ritual": "仪式",
+    "nameOrigin": "名称由来", "naturalHistory": "博物史", "historicalStory": "历史故事",  # i18n:ok
+    "conservationCulture": "保护文化", "nationalSymbolism": "国家象征",  # i18n:ok
+    "literature": "文学", "symbolism": "象征", "folklore": "民俗",  # i18n:ok
+    "art": "艺术", "indigenousTradition": "原住民传统", "etymology": "词源",  # i18n:ok
+    "poetry": "诗歌", "mythology": "神话", "traditionalKnowledge": "传统知识",  # i18n:ok
+    "music": "音乐", "historicalNaturalHistory": "博物史",  # i18n:ok
+    "heraldry": "纹章", "religion": "宗教", "royalSymbolism": "王室象征",  # i18n:ok
+    "historicalMisidentification": "历史误认", "omen": "征兆",  # i18n:ok
+    "seasonalKnowledge": "季节知识", "ritual": "仪式",  # i18n:ok
 }
 
 

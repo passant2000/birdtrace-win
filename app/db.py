@@ -630,8 +630,8 @@ class Library:
                 "series": series}
 
     # ---------- 个人成就 ----------
-    RAPTOR_ORDERS = ("鹰形目", "隼形目", "鸮形目")
-    WATERBIRD_ORDERS = ("鸻形目", "雁形目", "鹈形目", "鹤形目", "鸊鷉目", "鲣鸟目")
+    RAPTOR_ORDERS = ("鹰形目", "隼形目", "鸮形目")  # i18n:ok
+    WATERBIRD_ORDERS = ("鸻形目", "雁形目", "鹈形目", "鹤形目", "鸊鷉目", "鲣鸟目")  # i18n:ok
 
     def shooting_days(self) -> int:
         return self.conn.execute(
@@ -703,8 +703,8 @@ class Library:
             "photos": n_photos, "species": n_species,
             "spots": n_spots, "shooting_days": self.shooting_days(),
             "cur_streak": cur_streak, "max_streak": max_streak,
-            "raptors": self.group_species_count(self.RAPTOR_ORDERS),
-            "waterbirds": self.group_species_count(self.WATERBIRD_ORDERS),
+            "raptors": self.group_species_count(self.RAPTOR_ORDERS),  # i18n:ok
+            "waterbirds": self.group_species_count(self.WATERBIRD_ORDERS),  # i18n:ok
             "species_unlock": species_unlock,
             "photos_unlock": photos_unlock,
             "spots_unlock": spots_unlock,
@@ -911,7 +911,7 @@ class Library:
                     old.unlink()
                 except OSError:
                     pass
-            print(f"backup: {dst.name} (保留{min(len(backups), keep)}份)")
+            print(f"backup: {dst.name} (保留{min(len(backups), keep)}份)")  # i18n:ok
             return dst
         except Exception as e:
             print(f"backup failed: {e}")

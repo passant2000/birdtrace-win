@@ -10,6 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .i18n import t
 from .paths import assets_dir
 
 
@@ -36,16 +37,16 @@ def _startup_mark(name: str):
 
 
 def main():
-    _startup_mark("main入口")
+    _startup_mark("main入口")  # i18n:ok
     ap = argparse.ArgumentParser()
-    ap.add_argument("--library", default=None, help="照片库目录")
-    ap.add_argument("--no-gpu", action="store_true", help="禁用DirectML, 用CPU推理")
+    ap.add_argument("--library", default=None, help="照片库目录")  # i18n:ok
+    ap.add_argument("--no-gpu", action="store_true", help="禁用DirectML, 用CPU推理")  # i18n:ok
     ap.add_argument("--open-page", default=None,
-                    help="启动后直接切到某页(如 map)，测试用")
+                    help="启动后直接切到某页(如 map)，测试用")  # i18n:ok
     ap.add_argument("--recognize-worker", action="store_true",
-                    help="内部: 以识别worker模式运行(不建GUI, 冻结态识别子进程复用本exe)")
+                    help="内部: 以识别worker模式运行(不建GUI, 冻结态识别子进程复用本exe)")  # i18n:ok
     ap.add_argument("--gpu-probe", action="store_true",
-                    help="显卡诊断: 测试DirectML各配置并写gpu_probe_result.txt")
+                    help="显卡诊断: 测试DirectML各配置并写gpu_probe_result.txt")  # i18n:ok
     ap.add_argument("--cpu", action="store_true",
                     help=argparse.SUPPRESS)  # 冻结态worker自我复用时的CPU开关
     ap.add_argument("--conf", default="0.25", help=argparse.SUPPRESS)
@@ -66,11 +67,12 @@ def main():
 
     assets = assets_dir()
     if not (assets / "models" / "BirdTraceRecognitionModel.onnx").exists():
-        sys.exit("缺少模型资产: 请将 assets/ 目录放在程序旁, 或运行 tools/extract_assets.py")
+        sys.exit(t("缺少模型资产: 请将 assets/ 目录放在程序旁, 或运行 tools/extract_assets.py",
+          "Missing model assets: place the assets/ folder next to the app, or run tools/extract_assets.py"))
 
     # WebEngine(地图页)要求: AA_ShareOpenGLContexts属性在QApplication创建前设置。
     # QtWebEngineWidgets本身懒加载(地图页首开时import), 不在启动期拉起194MB DLL
-    _startup_mark("资产检查完")
+    _startup_mark("资产检查完")  # i18n:ok
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
@@ -79,8 +81,8 @@ def main():
     from .db import Library, default_library_dir
 
     app = QApplication(sys.argv)
-    app.setApplicationName("鸟迹 BirdTrace")
-    _startup_mark("QApplication创建")
+    app.setApplicationName("鸟迹 BirdTrace")  # i18n:ok
+    _startup_mark("QApplication创建")  # i18n:ok
 
     lib = Library(Path(args.library) if args.library else default_library_dir())
     # 主题须在创建任何窗口前应用(库先行以读取设置)
@@ -90,17 +92,17 @@ def main():
     if not lib.species_filled():
         lib.fill_species()
     lib.maybe_backup()   # 自动备份(24h节流)
-    _startup_mark("库打开+species+备份")
+    _startup_mark("库打开+species+备份")  # i18n:ok
 
     from .ui.main_window import MainWindow
     win = MainWindow(lib, assets)
-    _startup_mark("MainWindow构建")
+    _startup_mark("MainWindow构建")  # i18n:ok
     win.show()
-    _startup_mark("show")
+    _startup_mark("show")  # i18n:ok
     if args.open_page:
         win.switch_to(args.open_page)
     win.start_recognition()  # 恢复上次未完成的识别
-    _startup_mark("启动完成")
+    _startup_mark("启动完成")  # i18n:ok
     sys.exit(app.exec())
 
 

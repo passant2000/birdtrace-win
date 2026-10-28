@@ -46,7 +46,7 @@ class SettingsPage(QWidget):
         lang_row = QHBoxLayout()
         lang_lab = QLabel(t("语言 Language", "Language 语言"))
         lang_lab.setObjectName("RowLabel")
-        self.lang_seg = SegmentedControl(["中文", "English"])
+        self.lang_seg = SegmentedControl(["中文", "English"])  # i18n:ok
         self.lang_seg.setCurrent(1 if self.lib.get_setting("lang", "zh") == "en" else 0)
         self.lang_seg.changed.connect(self._save_lang)
         lang_row.addWidget(lang_lab)

@@ -40,9 +40,9 @@ THEMES = {
 
 
 # 罕见度档位(内部中文码) -> 英文对照; 绘制时按当前语言取
-RARITY_EN = {"常见": "Common", "较常见": "Fairly common",
-             "不常见": "Uncommon", "稀有": "Rare", "罕见": "Very rare",
-             "数据不足": "Insufficient data"}
+RARITY_EN = {"常见": "Common", "较常见": "Fairly common",  # i18n:ok
+             "不常见": "Uncommon", "稀有": "Rare", "罕见": "Very rare",  # i18n:ok
+             "数据不足": "Insufficient data"}  # i18n:ok
 
 
 def _font(size: int, weight: int = 400, italic: bool = False) -> QFont:
@@ -236,13 +236,13 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
     # 罕见度胶囊(日期行右侧; 稀有/罕见醒目红橙, 不常见橙, 常见系灰)
     rarity = info.get("rarity")
     if rarity:
-        if rarity in ("稀有", "罕见"):
+        if rarity in ("稀有", "罕见"):  # i18n:ok
             bg, fg = "#E5484D", "white"
-        elif rarity == "不常见":
+        elif rarity == "不常见":  # i18n:ok
             bg, fg = "#F5A623", "white"
         else:
             bg, fg = tc["line"], tc["meta"]
-        rarity_txt = t(rarity, RARITY_EN.get(rarity, rarity))
+        rarity_txt = t(rarity, RARITY_EN.get(rarity, rarity))  # i18n:ok
         p.setFont(_font(38, 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
         pw, ph = tw + 56, 62

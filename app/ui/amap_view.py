@@ -32,7 +32,7 @@ DEFAULT_WEB_KEY = ""
 DEFAULT_MAPTILER_KEY = "QMZGF8IiSPfyUQeVTOEQ"
 
 # MapLibre版页面(本地maplibre-gl.js + MapTiler style, 桥接口与高德版同构)
-_HTML_MAPLIBRE = """<!doctype html>
+_HTML_MAPLIBRE = """<!doctype html>  # i18n:ok
 <html><head><meta charset="utf-8">
 <link rel="stylesheet" href="maplibre-gl.css">
 <style>
@@ -147,7 +147,7 @@ function apiSetPick(on){ pickMode=on;
 """
 
 
-_HTML = """<!doctype html>
+_HTML = """<!doctype html>  # i18n:ok
 <html><head><meta charset="utf-8">
 <style>
   html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;
@@ -364,14 +364,14 @@ class AmapView(QWidget):
         return engine, key, secret
 
     # MapLibre style: 高德栅格瓦片(免Key, GCJ-02坐标系, 中文标注, 国内快)
-    _AMAP_TILES_STYLE = (
-        '{version:8,'
+    _AMAP_TILES_STYLE = (  # i18n:ok
+        '{version:8,'  # i18n:ok
         ' sources:{amap:{type:"raster",tileSize:256,minzoom:3,maxzoom:18,'
         '  tiles:["https://webst01.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}",'
         '         "https://webst02.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}",'
         '         "https://webst03.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}",'
         '         "https://webst04.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}"],'
-        '  attribution:"高德地图"}},'
+        '  attribution:"高德地图"}},'  # i18n:ok
         ' layers:[{id:"amap",type:"raster",source:"amap"}]}'
     )
 
@@ -391,12 +391,11 @@ class AmapView(QWidget):
             return
         qc = _qwebchannel_js()
         if self._engine in ("maplibre_free", "maptiler"):
-            from ..i18n import t as _t
             from ..paths import assets_dir
             map_js = (assets_dir() / "map" / "maplibre-gl.js").as_uri()
             map_css = (assets_dir() / "map" / "maplibre-gl.css").as_uri()
             if self._engine == "maplibre_free":
-                style_js = self._AMAP_TILES_STYLE
+                style_js = self._AMAP_TILES_STYLE  # i18n:ok
             else:
                 style_js = (f"'https://api.maptiler.com/maps/streets-v2/style.json"
                             f"?key={self._key}&language=zh'")
@@ -405,7 +404,7 @@ class AmapView(QWidget):
                      .replace("href=\"maplibre-gl.css\"", f"href=\"{map_css}\"")
                      .replace("src=\"maplibre-gl.js\"", f"src=\"{map_js}\""))
             html_path = self.lib.root / "maplibre.html"
-            label = _t("开源地图（免Key高德底图）", "Open map (keyless Amap tiles)") \
+            label = t("开源地图（免Key高德底图）", "Open map (keyless Amap tiles)") \
                 if self._engine == "maplibre_free" else "MapTiler"
             self.placeholder.setText(
                 t(f"地图加载中…（{label}，需联网）",

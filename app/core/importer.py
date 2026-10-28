@@ -16,6 +16,7 @@ from PIL import Image, ImageOps
 
 from ..db import Library
 from ..exif import SUPPORTED_EXTS, read_exif
+from ..i18n import t
 from ..media import ensure_thumbnail, file_hash
 
 
@@ -88,7 +89,7 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
             stats["skipped_dup"] += 1
         if progress_cb:
             progress_cb(stats["added"] + stats["skipped_dup"] + stats["failed"], total,
-                        f"检查 {f.name}")
+                        t(f"检查 {f.name}", f"Checking {f.name}") )
 
     # 按内容hash去重(分批查库)
     CHUNK = 400

@@ -48,13 +48,13 @@ def build_tree() -> dict:
 def _build_tree_impl(en: bool) -> dict:
     zh = _country_zh()
     countries: dict[str, dict] = {}
-    global_name = "World" if en else "全球"
+    global_name = "World" if en else "全球"  # i18n:ok
     for r in load_regions():
         names = r.get("localizedNames") or {}
         rid = r["id"]
         if r["administrativeLevel"] == "global":
             global_name = (r.get("sourceName") if en
-                           else names.get("zh-Hans", "全球"))
+                           else names.get("zh-Hans", "全球"))  # i18n:ok
             continue
         if r["administrativeLevel"] == "country":
             cn_name = names.get("zh-Hans") or zh.get(rid) or r["sourceName"]

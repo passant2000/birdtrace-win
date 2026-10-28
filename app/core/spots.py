@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+from ..i18n import t
+
 AUTO_GROUP_M = 300.0
 
 
@@ -19,7 +21,7 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def format_coord(lat: float | None, lon: float | None) -> str:
     if lat is None or lon is None:
-        return "无坐标"
+        return t("无坐标", "No coordinates")
     return f"{lat:.4f}, {lon:.4f}"
 
 
@@ -34,10 +36,10 @@ def auto_assign_spot(lib, photo_id: int, lat: float, lon: float) -> tuple[int, b
         lib.set_photo_spot(photo_id, spot["id"])
         return spot["id"], False
     n = lib.conn.execute("SELECT COUNT(*) FROM spots").fetchone()[0] + 1
-    name = f"鸟点 {n}"
+    name = f"鸟点 {n}"  # i18n:ok
     while lib.conn.execute("SELECT 1 FROM spots WHERE name=?", (name,)).fetchone():
         n += 1
-        name = f"鸟点 {n}"
-    sid = lib.create_spot(name, lat, lon, note="按GPS自动创建")
+        name = f"鸟点 {n}"  # i18n:ok
+    sid = lib.create_spot(name, lat, lon, note="按GPS自动创建")  # i18n:ok
     lib.set_photo_spot(photo_id, sid)
     return sid, True
