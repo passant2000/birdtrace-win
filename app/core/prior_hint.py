@@ -49,7 +49,7 @@ class PriorHint:
         self.gp = GeoPrior(data_dir / "geo_prior.sqlite")
         labels = json.loads((data_dir / "labels.json").read_text(encoding="utf-8"))
         self.code_idx = {l["code"]: l["i"] for l in labels}
-        self._rarity_cache: dict[str, dict[int, str]] = {}
+        self._rarity_cache: dict[str, dict[int, tuple[str, float]]] = {}
         self._peaks_cache: dict[str, dict[str, float]] = {}
 
     def region_tier(self, code: str, region_id: str | None) -> str | None:
@@ -62,7 +62,7 @@ class PriorHint:
             return None
         return value_tier(float(vec[idx]))
 
-    def _rarity_for_region(self, region_id: str) -> dict[int, str]:
+    def _rarity_for_region(self, region_id: str) -> dict[int, tuple[str, float]]:
         tiers = self._rarity_cache.get(region_id)
         if tiers is not None:
             return tiers
@@ -79,7 +79,11 @@ class PriorHint:
             n = len(order)
             for rank, idx in enumerate(order):
                 tier = min(4, int(rank / n * 5))  # i18n:ok
-                tiers[int(idx)] = RARITY_TIERS[tier]  # i18n:ok
+                # 百分位("前X%")=比它更稀有的有数据物种占比: 最稀有→~0%,
+                # 最常见→~100%。与档位同源(同 rank), 供分享卡"罕见 · 前 3%"
+                # 等口径; 不外泄原始先验值。
+                pct = (n - rank) / n * 100.0
+                tiers[int(idx)] = (RARITY_TIERS[tier], pct)  # i18n:ok
         self._rarity_cache[region_id] = tiers
         return tiers
 
@@ -87,7 +91,18 @@ class PriorHint:
         idx = self.code_idx.get(code)
         if idx is None or not region_id or region_id == "GLOBAL":
             return None
-        return self._rarity_for_region(region_id).get(idx)
+        got = self._rarity_for_region(region_id).get(idx)
+        return got[0] if got else None
+
+    def rarity_percentile(self, code: str, region_id: str | None) -> float | None:
+        """该物种在区域有数据物种中的稀有百分位("前X%", 越小越罕见)。
+
+        与 rarity_tier 同一次排序派生; 无数据/全球区域返回None。"""
+        idx = self.code_idx.get(code)
+        if idx is None or not region_id or region_id == "GLOBAL":
+            return None
+        got = self._rarity_for_region(region_id).get(idx)
+        return got[1] if got else None
 
     def region_peaks(self, code: str) -> dict[str, float]:
         """该物种全球各区域的峰值先验 {region_id: max(12个月)}。

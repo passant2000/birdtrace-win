@@ -184,13 +184,19 @@ class ShareDialog(QDialog):
         lifer_no = None
         if species and self.lifer_toggle.isChecked():
             lifer_no = self.lib.lifer_no_for_species(species["code"])
-        # 罕见度(参考birdtrace/慧眼观鸟分享卡): 按照片批次地区计算
+        # 罕见度(参考birdtrace/慧眼观鸟分享卡): 按照片批次地区计算;
+        # 稀有/罕见再取百分位("罕见 · 前 3%", 0.8方案⑤)
         rarity = None
+        rarity_pct = None
         if species:
             try:
                 from ..core.prior_hint import get_hint
-                rarity = get_hint().rarity_tier(
+                hint = get_hint()
+                rarity = hint.rarity_tier(
                     species["code"], self.photo.get("region_id"))
+                if rarity in ("稀有", "罕见"):  # i18n:ok
+                    rarity_pct = hint.rarity_percentile(
+                        species["code"], self.photo.get("region_id"))
             except Exception:
                 rarity = None
         return {
@@ -200,6 +206,7 @@ class ShareDialog(QDialog):
             "sci": species["sci"] if species else "",
             "lifer_no": lifer_no,
             "rarity": rarity,
+            "rarity_pct": rarity_pct,
             "photographer": self.name_edit.text().strip(),
             "date": self.taken,
             "place": self.place_edit.text().strip(),

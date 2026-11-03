@@ -78,6 +78,14 @@ def _fit(fm: QFontMetrics, text: str, mode, width: int) -> str:
         else fm.elidedText(text, mode, width)
 
 
+def _fmt_pct(p: float) -> str:
+    """百分位显示: ≥10%取整, <10%留一位小数(0.2%/3.5%), 舍入到0给<0.1。"""
+    if p >= 10:
+        return str(int(round(p)))
+    s = f"{p:.1f}".rstrip("0").rstrip(".")
+    return "<0.1" if not s or s == "0" else s
+
+
 def _card_path(w: float, h: float, r: float) -> QPainterPath:
     path = QPainterPath()
     path.addRoundedRect(QRectF(0, 0, w, h), r, r)
@@ -251,6 +259,11 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         else:
             bg, fg = tc["line"], tc["meta"]
         rarity_txt = t(rarity, RARITY_EN.get(rarity, rarity))  # i18n:ok
+        # 稀有/罕见追加百分位口径("罕见 · 前 3%")——地区相对, 卡上已带地区
+        pct = info.get("rarity_pct")
+        if pct is not None and rarity in ("稀有", "罕见"):  # i18n:ok
+            rarity_txt += t(f" · 前 {_fmt_pct(pct)}%",
+                            f" · Top {_fmt_pct(pct)}%")
         p.setFont(_font(38, 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
         pw, rph = tw + 56, 62
