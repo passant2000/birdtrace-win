@@ -280,6 +280,7 @@ class Library:
             self.conn.execute("UPDATE photos SET cand_json=NULL WHERE id=?",
                               (photo_id,))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
 
     def pending_photo_ids(self) -> list[int]:
         rows = self.conn.execute(
@@ -302,6 +303,7 @@ class Library:
             "UPDATE photos SET rec_fail=3, cand_json=NULL WHERE id=?",
             (photo_id,))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
 
     def mark_not_bird(self, photo_id: int):
         """待复核「不是鸟」: 撤回该照片的识别记录并标为无鸟(未识别)。
@@ -312,6 +314,7 @@ class Library:
             "UPDATE photos SET rec_fail=3, cand_json=NULL WHERE id=?",
             (photo_id,))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
 
     def reset_recognition(self, photo_ids: list[int]):
         """批量重新识别: 清空识别记录并复位失败计数(人工确认一并清除)。"""
@@ -321,6 +324,7 @@ class Library:
                 "UPDATE photos SET rec_fail=0, cand_json=NULL WHERE id=?",
                 (pid,))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=list(photo_ids))
 
     def set_confirmed(self, record_id: int, code: str | None):
         """人工确认/纠正: 写confirmed_code并标记已复核。"""
@@ -328,6 +332,7 @@ class Library:
             "UPDATE records SET confirmed_code=?, reviewed=1 WHERE id=?",
             (code, record_id))
         self.conn.commit()
+        self._sidecar_touch(record_id=record_id)
 
     def set_main_record(self, photo_id: int, record_id: int):
         """把某条识别记录设为该照片的rank=1(主鸟), 其余顺延。"""
@@ -337,6 +342,7 @@ class Library:
         for i, rid in enumerate([record_id] + ids, 1):
             self.conn.execute("UPDATE records SET rank=? WHERE id=?", (i, rid))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
 
     def remove_record(self, record_id: int) -> None:
         """删除单条识别记录(多鸟照片清掉误识的次要鸟, 如同种鸟只拍到屁股
@@ -359,6 +365,7 @@ class Library:
         else:
             self.conn.execute("UPDATE photos SET rec_fail=3 WHERE id=?", (pid,))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[pid])
 
     def update_record_box(self, record_id: int, box: list[float]) -> None:
         """用户在查看器里拖动检测框后写回(仅几何, 不动识别结果)。"""
@@ -366,6 +373,7 @@ class Library:
             "UPDATE records SET box_json=? WHERE id=?",
             (json.dumps([round(float(v), 1) for v in box]), record_id))
         self.conn.commit()
+        self._sidecar_touch(record_id=record_id)
 
     def replace_record(self, record_id: int, rec: dict) -> None:
         """"用此框重新识别"落库: 原位替换鸟种/置信度/top5/框, 保持record_id
@@ -381,6 +389,7 @@ class Library:
              json.dumps(rec.get("box")), json.dumps(top5, ensure_ascii=False),
              record_id))
         self.conn.commit()
+        self._sidecar_touch(record_id=record_id)
 
     def add_manual_record(self, photo_id: int, code: str) -> int:
         """无识别记录的照片手工标注鸟种(计入全部统计)。"""
@@ -391,6 +400,7 @@ class Library:
         self.conn.execute("UPDATE photos SET cand_json=NULL WHERE id=?",
                           (photo_id,))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
         return cur.lastrowid
 
     def remove_photo(self, photo_id: int):
@@ -632,6 +642,7 @@ class Library:
 
     def delete_spot(self, spot_id: int):
         """删点不删照片, 挂载自动解除。"""
+        self._sidecar_touch(spot_id=spot_id)
         self.conn.execute("UPDATE photos SET spot_id=NULL WHERE spot_id=?",
                           (spot_id,))
         self.conn.execute("DELETE FROM spots WHERE id=?", (spot_id,))
@@ -641,6 +652,7 @@ class Library:
         self.conn.execute("UPDATE photos SET spot_id=? WHERE id=?",
                           (spot_id, photo_id))
         self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
 
     def set_photos_spot(self, photo_ids: list[int], spot_id: int | None):
         """批量挂载(单事务)。"""
@@ -648,6 +660,7 @@ class Library:
             "UPDATE photos SET spot_id=? WHERE id=?",
             [(spot_id, pid) for pid in photo_ids])
         self.conn.commit()
+        self._sidecar_touch(photo_ids=list(photo_ids))
 
     def spot_photos(self, spot_id: int) -> list[dict]:
         """鸟点内照片(含已识别种数与代表种名), 按拍摄时间倒序。"""
@@ -831,6 +844,60 @@ class Library:
     def invalidate_file_status(self):
         self._fs_cache = None
 
+    # ---------- 标注随文件夹走(0.8-①): 脏目录标记 + flush ----------
+    def _sidecar_touch(self, photo_ids=None, record_id=None, spot_id=None,
+                       paths=None):
+        """标记相关照片所在文件夹需要重写 .birdtrace.json(主窗口定时/退出 flush)。
+        线程安全(识别worker线程也会调)。"""
+        import os
+        import threading
+        lock = getattr(self, "_sc_lock", None)
+        if lock is None:
+            lock = self._sc_lock = threading.Lock()
+            self._sc_dirty = set()
+        ps = list(paths or [])
+        ids = list(photo_ids or [])
+        if record_id is not None:
+            r = self.conn.execute("SELECT photo_id FROM records WHERE id=?",
+                                  (record_id,)).fetchone()
+            if r:
+                ids.append(r["photo_id"])
+        if spot_id is not None:
+            ids += [r["id"] for r in self.conn.execute(
+                "SELECT id FROM photos WHERE spot_id=?", (spot_id,))]
+        if ids:
+            q = ",".join("?" * len(ids))
+            ps += [r["path"] for r in self.conn.execute(
+                f"SELECT path FROM photos WHERE id IN ({q})", ids)]
+        with lock:
+            for pth in ps:
+                self._sc_dirty.add(os.path.dirname(pth))
+
+    def flush_sidecars(self) -> int:
+        """把脏目录的 sidecar 写出; 返回写成功的目录数。
+        目录不可达(盘离线)保留脏标记, 挂回后再写。"""
+        import os
+        lock = getattr(self, "_sc_lock", None)
+        if lock is None:
+            return 0
+        with lock:
+            dirs = list(self._sc_dirty)
+            self._sc_dirty.clear()
+        if not dirs:
+            return 0
+        from .core.sidecar import export_folder
+        n = 0
+        for d in dirs:
+            if export_folder(self, d) is not None:
+                n += 1
+            elif not os.path.isdir(d):
+                with lock:
+                    self._sc_dirty.add(d)
+        return n
+
+    def sidecar_dirty_count(self) -> int:
+        return len(self._sc_dirty) if getattr(self, "_sc_lock", None) else 0
+
     def missing_photo_ids(self) -> list[int]:
         """当前不可读的照片id(离线卷+不在原位置)。"""
         st = self.file_status(max_age=0)
@@ -891,6 +958,7 @@ class Library:
                 taken.add(target)
                 self.conn.execute("UPDATE photos SET path=?, missing=0 WHERE id=?",
                                   (str(target), r["id"]))
+                self._sidecar_touch(paths=[str(target)])
                 relinked += 1
         self.conn.commit()
         self.invalidate_file_status()
@@ -993,6 +1061,7 @@ class Library:
     def set_aesthetic(self, photo_id: int, score: float):
         self.conn.execute("UPDATE photos SET aesthetic=? WHERE id=?",
                           (score, photo_id))
+        self._sidecar_touch(photo_ids=[photo_id])
 
     def pending_aesthetic(self) -> list[dict]:
         """有识别记录但还没打美学分的照片(按id升序, 后台逐张补)。"""

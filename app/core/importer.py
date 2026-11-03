@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from pathlib import Path
@@ -77,6 +78,7 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
              "spots_created": 0}
     total = len(files)
     hash_cache: dict[str, str] = {}
+    imported: list[tuple[int, str, str]] = []   # (pid, hash, 源文件夹)
 
     # 先按路径排除已导入的(统一绝对路径: 相对路径会让识别子进程在
     # 别的cwd下找不到文件; UI的QFileDialog天然绝对, 此处防御脚本/API调用)
@@ -135,9 +137,13 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
                     if created:
                         stats["spots_created"] += 1
                 ensure_thumbnail(lib.root, str(target), fh, 512)
+                imported.append((pid, fh, str(f.parent)))
                 known.add(fh)
                 stats["added"] += 1
             except Exception:
+                if os.environ.get("BIRDTRACE_IMPORT_DEBUG"):
+                    import traceback
+                    traceback.print_exc()
                 stats["failed"] += 1
             if progress_cb:
                 progress_cb(stats["added"] + stats["skipped_dup"] + stats["failed"],
@@ -146,4 +152,15 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
     lib.conn.execute("UPDATE batches SET count=? WHERE id=?",
                      (stats["added"], batch_id))
     lib.conn.commit()
+    # 标注随文件夹走(0.8-①): 读源文件夹的 .birdtrace.json 回填
+    # (确认码/记录/鸟点/评分/无鸟); 已有编辑优先。引用模式managed目录=
+    # 源目录, 之后写回同一份; copy/move的managed目录是库内目标, 导入页
+    # 识别完成后的flush会自动在新目录落一份。
+    try:
+        from .sidecar import apply_for_imports
+        stats["sidecar"] = apply_for_imports(lib, imported)
+    except Exception:
+        stats["sidecar"] = {"restored": 0, "spots": 0, "folders": 0}
+    for _pid, _fh, _src in imported:
+        lib._sidecar_touch(photo_ids=[_pid])
     return stats

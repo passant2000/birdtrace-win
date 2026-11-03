@@ -44,6 +44,12 @@ class MainWindow(QMainWindow):
         self.aes_worker = None
         self.burst_worker = None
         self._regroup_pending = False   # 识别刚完成: 新照片待分组
+        # 标注随文件夹走(0.8-①): 标注变更→库标脏目录, 定时flush(识别进行中不动)
+        from PySide6.QtCore import QTimer as _QTimer
+        self._sc_timer = _QTimer(self)
+        self._sc_timer.setInterval(3000)
+        self._sc_timer.timeout.connect(self._flush_sidecars_tick)
+        self._sc_timer.start()
         self.setWindowTitle(t("鸟迹 · 鸟类照片管理", "BirdTrace · Bird photo manager"))
         self.setWindowIcon(QIcon(str(assets_dir / "brand" / "logo.png")))
         self.setMinimumSize(860, 540)
@@ -65,6 +71,10 @@ class MainWindow(QMainWindow):
             self.aes_worker.wait(3000)
         if self.burst_worker and self.burst_worker.isRunning():
             self.burst_worker.wait(3000)
+        try:
+            self.lib.flush_sidecars()   # 退出前把标注写进各文件夹
+        except Exception:
+            pass
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -338,6 +348,18 @@ class MainWindow(QMainWindow):
                 page = self.pages.get(key)
                 if page is not None:
                     page.refresh()
+
+    def _flush_sidecars_tick(self):
+        """定时写 .birdtrace.json; 识别/导入运行中让路(避免与worker抢库)。"""
+        if not self.lib.sidecar_dirty_count():
+            return
+        if self.worker and self.worker.isRunning():
+            return
+        imp = self.pages.get("import")
+        if imp is not None and imp.import_thread is not None \
+                and imp.import_thread.isRunning():
+            return
+        self.lib.flush_sidecars()
 
     def _update_status(self):
         imp = self.pages.get("import")
