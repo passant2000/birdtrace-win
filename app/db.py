@@ -122,7 +122,9 @@ class Library:
 
     def _migrate(self):
         """旧库升级: photos.spot_id (鸟点挂载, B3); photos.aesthetic (美学评分);
-        photos.cand_json (未识别候选Top3, 2026-11-02一键采纳)。"""
+        photos.cand_json (未识别候选Top3, 2026-11-02一键采纳);
+        photos.phash (感知哈希dHash64缓存, 0.8连拍分组/十八图去重);
+        photos.group_id (连拍分组, 0.8-③); photos.missing INTEGER (原图离线标记)。"""
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(photos)")}
         if "spot_id" not in cols:
             self.conn.execute(
@@ -135,6 +137,15 @@ class Library:
             "CREATE INDEX IF NOT EXISTS idx_photos_aesthetic ON photos(aesthetic)")
         if "cand_json" not in cols:
             self.conn.execute("ALTER TABLE photos ADD COLUMN cand_json TEXT")
+        if "phash" not in cols:
+            self.conn.execute("ALTER TABLE photos ADD COLUMN phash TEXT")
+        if "group_id" not in cols:
+            self.conn.execute("ALTER TABLE photos ADD COLUMN group_id TEXT")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_photos_group ON photos(group_id)")
+        if "missing" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN missing INTEGER DEFAULT 0")
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -923,10 +934,37 @@ class Library:
             "ORDER BY p.id").fetchall()
         return [dict(r) for r in rows]
 
-    def best_of_year(self, year: str, want: int = 18,
-                     per_species: int = 2) -> list[dict]:
-        """年度最佳(美学评分Top-N, 每种鸟最多per_species张, 避免一种刷屏)。
+    def phash_of(self, photo_id: int) -> str | None:
+        """照片感知哈希(dHash 64bit, 16位hex); 缩略图计算+落库缓存。
 
+        连拍分组/年度十八图去重共用。优先用已缓存缩略图, 原图离线
+        也能算(0.8-②); 连缩略图都没有(原图离线且从未打开过)返回None。
+        """
+        row = self.conn.execute(
+            "SELECT path, file_hash AS fh, phash FROM photos WHERE id=?",
+            (photo_id,)).fetchone()
+        if row is None:
+            return None
+        if row["phash"]:
+            return row["phash"]
+        from .media import ensure_thumbnail
+        from .core.phash import dhash_file
+        tp = ensure_thumbnail(self.root, row["path"], row["fh"], 96)
+        if tp is None:
+            return None
+        val = dhash_file(tp)
+        if val:
+            self.conn.execute("UPDATE photos SET phash=? WHERE id=?",
+                              (val, photo_id))
+            self.conn.commit()
+        return val
+
+    def best_of_year(self, year: str, want: int = 18) -> list[dict]:
+        """年度最佳(美学评分Top-N), 0.8-⑦去重版(用户定):
+
+        先按美学分**每鸟种一张**取满18; 凑不够(鸟种少)再从各鸟种第2张补,
+        第2张放宽条件 = 与该种第1张感知哈希距离≥BEST18_DIFF_MIN(不同构图/
+        姿态, 原图离线算不出哈希则不补) 且美学分高于已选图的中位数。
         只取rank=1(主鸟)记录; 未评分照片不参与。
         """
         rows = self.conn.execute(
@@ -937,16 +975,42 @@ class Library:
             "LEFT JOIN species s ON s.code=v.eff_code "
             "WHERE v.yr=? AND v.rank=1 AND p.aesthetic IS NOT NULL "
             "ORDER BY p.aesthetic DESC", (year,)).fetchall()
+        # 第一遍: 每种最高分1张
         picked: list[dict] = []
-        per: dict[str, int] = {}
+        first: dict[str, dict] = {}
+        rest: list[dict] = []
         for r in rows:
             c = r["eff_code"]
-            if per.get(c, 0) >= per_species:
+            if c in first:
+                rest.append(dict(r))
                 continue
-            per[c] = per.get(c, 0) + 1
-            picked.append(dict(r))
+            first[c] = dict(r)
+            picked.append(first[c])
             if len(picked) >= want:
+                return picked
+        # 第二遍: 各鸟种第2张补位(构图不同+高于已选中位数)
+        import statistics
+        from .core.phash import BEST18_DIFF_MIN, hamming
+        n_per: dict[str, int] = {c: 1 for c in first}
+        while len(picked) < want and rest:
+            med = statistics.median(p["aesthetic"] for p in picked)
+            chosen = None
+            for r in rest:
+                if r["aesthetic"] <= med:
+                    break            # rest按分降序, 后面更不可能过中位数
+                if n_per.get(r["eff_code"], 0) >= 2:
+                    continue
+                d = hamming(self.phash_of(r["photo_id"]),
+                            self.phash_of(first[r["eff_code"]]["photo_id"]))
+                if d is not None and d >= BEST18_DIFF_MIN:
+                    chosen = r
+                    break
+            if chosen is None:
                 break
+            n_per[chosen["eff_code"]] = n_per.get(chosen["eff_code"], 0) + 1
+            picked.append(chosen)
+            rest.remove(chosen)
+        picked.sort(key=lambda p: p["aesthetic"], reverse=True)
         return picked
 
     def close(self):
