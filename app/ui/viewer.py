@@ -57,6 +57,40 @@ class ZoomableView(QGraphicsView):
         self._user_zoomed = False
         self._fit_if_ready()
 
+    def set_placeholder(self, text: str | None):
+        """原图不可读时在视口上覆盖说明文字; None=撤掉。
+
+        不动场景/_item(此前用 _scene.clear() 连 _item 一起删了, 之后
+        _render_records 取裁剪缩略图/左右切图再碰 _item 就崩; 改用
+        QGraphicsProxyWidget 又在 removeItem 时触发 Qt 断言——0.8-②
+        离线验证两次踩坑, 覆盖层最省事也最稳)。"""
+        ov = getattr(self, "_overlay", None)
+        if text is None:
+            if ov is not None:
+                ov.hide()
+            return
+        if ov is None:
+            ov = QLabel(self.viewport())
+            ov.setWordWrap(True)
+            ov.setAlignment(Qt.AlignCenter)
+            ov.setStyleSheet(f"color:{theme.LABEL_2};font-size:13px;"
+                             "background:#F7F7FA;border-radius:10px;"
+                             "padding:20px;")
+            self._overlay = ov
+        ov.setText(text)
+        ov.show()
+        self._place_overlay()
+
+    def _place_overlay(self):
+        ov = getattr(self, "_overlay", None)
+        if ov is None or not ov.isVisible():
+            return
+        vw, vh = self.viewport().width(), self.viewport().height()
+        w = max(240, min(640, vw - 80))
+        ov.setFixedWidth(w)
+        ov.adjustSize()
+        ov.move((vw - w) // 2, max(20, (vh - ov.height()) // 2))
+
     def _fit_if_ready(self):
         # 必须已可见且拿到真实视口尺寸: 构造期视口还是占位大小,
         # 提前fit会让图片按错误尺寸渲染(打开后四周一圈空白)
@@ -75,6 +109,7 @@ class ZoomableView(QGraphicsView):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._place_overlay()
         # 用户没动过缩放时跟随窗口大小, 手动缩放后不抢用户的视角
         if self.isVisible() and not self._user_zoomed:
             self._need_fit = False
@@ -252,34 +287,37 @@ class PhotoViewer(QDialog):
         self.recs = recs
         missing = not Path(photo["path"]).exists()
         if missing:
-            # 引用模式下原文件被移动/删除: 明示原因+给出去向建议, 不留空白
-            from PySide6.QtWidgets import QLabel
-            tip = QLabel(
-                t("原始照片文件不存在\n\n", "Original photo file not found\n\n")
-                + t(f"记录的路径：{photo['path']}\n\n",
-                    f"Recorded path: {photo['path']}\n\n")
-                + t("可能被移动、重命名或所在盘未接入。"
-                    "把文件放回原位置后点「重新识别」可恢复；"
-                    "或直接「从鸟迹移除」这条记录。",
-                    "It may have been moved or renamed, or its drive is not "
-                    "connected. Put the file back and click \"Re-identify\" "
-                    "to restore it, or \"Remove from BirdTrace\" to drop "
-                    "this record."))
-            tip.setWordWrap(True)
-            tip.setAlignment(Qt.AlignCenter)
-            tip.setStyleSheet(f"color:{theme.LABEL_2};font-size:13px;"
-                              "background:#F7F7FA;border-radius:10px;"
-                              "padding:20px;")
+            # 引用模式下原文件不可读: 区分"硬盘没插"(0.8-②, 插回即好)与
+            # "被移动/删除", 明示原因+去向建议, 不留空白
+            from ..core.offline import OFFLINE, drive_label, drive_root, path_state
+            if path_state(photo["path"]) == OFFLINE:
+                drv = drive_label(drive_root(photo["path"]))
+                body = (t(f"原图离线：所在硬盘（{drv}）未接入\n\n",
+                          f"Original offline: drive {drv} is not connected\n\n")
+                        + t(f"记录的路径：{photo['path']}\n\n",
+                            f"Recorded path: {photo['path']}\n\n")
+                        + t("插回硬盘后即可查看大图；缩略图、标注、统计、分享卡文字"
+                            "等不受影响。",
+                            "Reconnect the drive to view the full image; "
+                            "thumbnails, labels, stats and card text are "
+                            "unaffected."))
+            else:
+                body = (t("原始照片文件不存在\n\n", "Original photo file not found\n\n")
+                        + t(f"记录的路径：{photo['path']}\n\n",
+                            f"Recorded path: {photo['path']}\n\n")
+                        + t("可能被移动、重命名或删除。"
+                            "把文件放回原位置后点「重新识别」可恢复；"
+                            "在时间线用「重新链接」按内容找回；"
+                            "或直接「从鸟迹移除」这条记录。",
+                            "It may have been moved, renamed or deleted. "
+                            "Put the file back and click \"Re-identify\" to "
+                            "restore it, use \"Relink\" on the Timeline to find "
+                            "it by content, or \"Remove from BirdTrace\" to drop "
+                            "this record."))
             self.view.set_image("")
-            lay = QVBoxLayout()
-            lay.addStretch(1)
-            lay.addWidget(tip)
-            lay.addStretch(1)
-            host = QWidget()
-            host.setLayout(lay)
-            self.view._scene.clear()
-            self.view._scene.addWidget(host)
+            self.view.set_placeholder(body)
         else:
+            self.view.set_placeholder(None)
             self.view.set_image(photo["path"])
         self.navi.setText(
             t(f"{self.index + 1} / {len(self.ids)}  ·  ← → 切换\n"

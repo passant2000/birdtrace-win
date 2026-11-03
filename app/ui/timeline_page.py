@@ -33,6 +33,8 @@ class TimelinePage(QWidget):
         super().__init__()
         self.lib = lib
         self.win = win
+        self._offline_ids: set[int] = set()
+        self._missing_ids: set[int] = set()
         self._thumb_cache: dict[int, QPixmap] = {}
         self._select_mode = False
         self._selected: set[int] = set()
@@ -328,7 +330,21 @@ class TimelinePage(QWidget):
         q = ",".join("?" * len(ids))
         rows = self.lib.conn.execute(
             f"SELECT id, path FROM photos WHERE id IN ({q})", ids).fetchall()
-        missing = [r["path"] for r in rows if not Path(r["path"]).exists()]
+        from ..core.offline import classify_paths, drive_label
+        cls = classify_paths((r["id"], r["path"]) for r in rows)
+        if cls["offline"] and not cls["ok"] and not cls["missing"]:
+            # 全部在离线卷上: 不是丢失, 插回硬盘即可(0.8-②)
+            drives = "、".join(drive_label(d) for d in cls["offline"])
+            QMessageBox.information(
+                self, t("原图离线", "Originals offline"),
+                t(f"选中的 {len(ids)} 张原图都在未接入的硬盘上（{drives}）。\n"
+                  "插回硬盘后再「重新识别」即可，记录与标注不受影响。",
+                  f"All {len(ids)} selected originals are on a disconnected "
+                  f"drive ({drives}).\nReconnect it and re-identify; records "
+                  "and labels are unaffected."))
+            return
+        missing = [r["path"] for r in rows if r["id"] in cls["missing"]
+                   or any(r["id"] in v for v in cls["offline"].values())]
         if missing and len(missing) == len(ids):
             QMessageBox.question(
                 self, t("原文件不在这台电脑上",
@@ -416,24 +432,43 @@ class TimelinePage(QWidget):
         total = sum(len(v) for v in data.values())
         self.title.setText(t(f"时间线 · {total} 张照片", f"Timeline · {total} photos"))
         self._sync_sel_ui()
-        # 原文件丢失统计(引用模式换电脑/移动后): 横幅+重新链接入口
+        # 原图可用性(0.8-②): 离线卷(移动硬盘没插)与真丢失分开——离线不是
+        # 丢失, 缩略图/标注/统计照常, 插回即恢复, 不引导"重新链接"。
         try:
-            all_ids = [r["id"] for r in self.lib.conn.execute(
-                "SELECT id, path FROM photos")]
-            missing = [r["path"] for r in self.lib.conn.execute(
-                "SELECT id, path FROM photos") if not Path(r["path"]).exists()]
+            fs = self.lib.file_status()
         except Exception:
-            missing = []
-        if missing:
+            fs = {"offline": {}, "missing": [], "n_offline": 0}
+        self._offline_ids = {i for ids in fs["offline"].values() for i in ids}
+        self._missing_ids = set(fs["missing"])
+        if fs["n_offline"]:
+            from ..core.offline import drive_label
+            drives = "、".join(drive_label(d) for d in fs["offline"])
+            ob = QFrame()
+            ob.setObjectName("Card")
+            oh = QHBoxLayout(ob)
+            oh.setContentsMargins(14, 10, 14, 10)
+            ot = QLabel(t(f"📴 {fs['n_offline']} 张原图离线（{drives} 未接入）"
+                          "——缩略图、标注、统计照常可用；插回硬盘后自动恢复，"
+                          "只有查看大图/重新识别/分享卡需要原图。",
+                          f"📴 {fs['n_offline']} originals offline ({drives} "
+                          "not connected) — thumbnails, labels and stats still "
+                          "work; reconnect the drive to restore. Only full-size "
+                          "view / re-identify / share cards need the originals."))
+            ot.setWordWrap(True)
+            ot.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};"
+                             "background:transparent;")
+            oh.addWidget(ot, 1)
+            self.content_lay.addWidget(ob)
+        if fs["missing"]:
             mb = QFrame()
             mb.setObjectName("Card")
             mh = QHBoxLayout(mb)
             mh.setContentsMargins(14, 10, 14, 10)
-            mt = QLabel(t(f"⚠️ {len(missing)} 张照片的原文件不在这台电脑上"
-                          "（引用模式记录的是原路径）。",
-                          f"⚠️ The original files for {len(missing)} photos are "
-                          "not on this computer (reference mode records the "
-                          "original paths)."))
+            mt = QLabel(t(f"⚠️ {len(fs['missing'])} 张照片的原文件不在原位置"
+                          "（被移动/改名/删除，或引用模式记录的是另一台电脑的路径）。",
+                          f"⚠️ The original files for {len(fs['missing'])} photos "
+                          "are not at their recorded location (moved, renamed, "
+                          "deleted, or the paths belong to another computer)."))
             mt.setWordWrap(True)
             mt.setStyleSheet(f"font-size:13px;color:{theme.ORANGE};"
                              "background:transparent;")
@@ -488,8 +523,10 @@ class TimelinePage(QWidget):
                 else:
                     corner = None
                 thumb = self._thumb(ph)
-                if thumb is None and not Path(ph["path"]).exists():
-                    corner = t("文件丢失", "File missing")   # 引用模式原文件不在这台电脑
+                if ph["id"] in self._offline_ids:
+                    corner = t("原图离线", "Offline")       # 卷未接入, 插回即恢复
+                elif ph["id"] in self._missing_ids:
+                    corner = t("文件丢失", "File missing")   # 不在原位置
                 item = PhotoGridItem(thumb, label="", corner=corner)
                 item.setFixedSize(THUMB + 12, THUMB + 12)
                 item.setCursor(Qt.PointingHandCursor)

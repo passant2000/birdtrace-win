@@ -794,37 +794,103 @@ class Library:
             "spots_unlock": spots_unlock,
         }
 
-    # ---------- 重新链接(换电脑/文件移动后) ----------
+    # ---------- 原图可用性 / 重新链接(换电脑/文件移动后) ----------
+    def file_status(self, max_age: float = 3.0) -> dict:
+        """全库原图可用性一次扫描(0.8-②):
+        {"ok": n, "offline": {卷根: [ids]}, "missing": [ids], "n_offline": n}。
+
+        同一刷新周期多页共享(缓存max_age秒); 结果写回 photos.missing
+        (0可用/1离线卷/2不在原位置)供轻量查询。离线卷按卷只stat一次。"""
+        import time
+        cached = getattr(self, "_fs_cache", None)
+        if cached and time.monotonic() - cached[0] < max_age:
+            return cached[1]
+        from .core.offline import classify_paths
+        rows = self.conn.execute("SELECT id, path FROM photos").fetchall()
+        cls = classify_paths((r["id"], r["path"]) for r in rows)
+        n_off = sum(len(v) for v in cls["offline"].values())
+        res = {"ok": len(cls["ok"]), "offline": cls["offline"],
+               "missing": cls["missing"], "n_offline": n_off}
+        try:
+            self.conn.execute("UPDATE photos SET missing=0 WHERE missing<>0")
+            for ids in cls["offline"].values():
+                self.conn.executemany(
+                    "UPDATE photos SET missing=1 WHERE id=?",
+                    [(i,) for i in ids])
+            self.conn.executemany("UPDATE photos SET missing=2 WHERE id=?",
+                                  [(i,) for i in cls["missing"]])
+            self.conn.commit()
+        except sqlite3.Error:
+            pass
+        self._fs_cache = (time.monotonic(), res)
+        return res
+
+    def invalidate_file_status(self):
+        self._fs_cache = None
+
     def missing_photo_ids(self) -> list[int]:
-        out = []
-        for r in self.conn.execute("SELECT id, path FROM photos"):
-            if not Path(r["path"]).exists():
-                out.append(r["id"])
-        return out
+        """当前不可读的照片id(离线卷+不在原位置)。"""
+        st = self.file_status(max_age=0)
+        out = list(st["missing"])
+        for ids in st["offline"].values():
+            out.extend(ids)
+        return sorted(out)
 
     def relink_photos(self, new_dir: Path) -> int:
-        """原文件移动/换电脑后: 在新目录(含子目录)按文件名重新匹配。
-        只处理当前路径已失效的照片; 返回重新链接成功数。"""
+        """原文件移动/换电脑后: 在新目录(含子目录)重新匹配。
+
+        匹配顺序(0.8-②按hash自动化): ①同名候选里 file_hash 相同者;
+        ②按 size 预筛再比 hash(改过名的文件也能找回, 内容优先于名字);
+        ③仍未匹配且同名唯一→按名(旧行为, 兼容重存过/内容变了的文件)。
+        只处理当前路径不可读的照片; 返回重新链接成功数。"""
         import os
+        from .media import file_hash as _fh
         new_dir = Path(new_dir)
-        # 新目录文件名索引(同名多份时取最早修改的)
-        index: dict[str, Path] = {}
+        exts = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif",
+                ".bmp", ".tif", ".tiff")
+        by_name: dict[str, list[Path]] = {}
+        by_size: dict[int, list[Path]] = {}
         for f in new_dir.rglob("*"):
-            if f.is_file() and f.suffix.lower() in (
-                    ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif",
-                    ".bmp", ".tif", ".tiff"):
-                index.setdefault(f.name.lower(), f)
+            if f.is_file() and f.suffix.lower() in exts:
+                by_name.setdefault(f.name.lower(), []).append(f)
+                try:
+                    by_size.setdefault(f.stat().st_size, []).append(f)
+                except OSError:
+                    pass
+        hash_cache: dict[Path, str] = {}
+
+        def h(p: Path) -> str:
+            v = hash_cache.get(p)
+            if v is None:
+                try:
+                    v = _fh(p)
+                except OSError:
+                    v = ""
+                hash_cache[p] = v
+            return v
+
         relinked = 0
-        for r in self.conn.execute("SELECT id, path FROM photos").fetchall():
-            if Path(r["path"]).exists():
+        taken: set[Path] = set()
+        for r in self.conn.execute(
+                "SELECT id, path, file_hash, size FROM photos").fetchall():
+            if os.path.exists(r["path"]):
                 continue
             name = os.path.basename(r["path"]).lower()
-            target = index.get(name)
+            cands = [c for c in by_name.get(name, []) if c not in taken]
+            target = next((c for c in cands if h(c) == r["file_hash"]), None)
+            if target is None and r["size"]:
+                target = next((c for c in by_size.get(r["size"], [])
+                               if c not in taken and h(c) == r["file_hash"]),
+                              None)
+            if target is None and len(cands) == 1:
+                target = cands[0]
             if target:
-                self.conn.execute("UPDATE photos SET path=? WHERE id=?",
+                taken.add(target)
+                self.conn.execute("UPDATE photos SET path=?, missing=0 WHERE id=?",
                                   (str(target), r["id"]))
                 relinked += 1
         self.conn.commit()
+        self.invalidate_file_status()
         return relinked
 
     # ---------- eBird 导出 ----------

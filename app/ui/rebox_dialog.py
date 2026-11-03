@@ -41,8 +41,16 @@ class ReboxDialog(QDialog):
             self.view.set_image(self.photo["path"])
             self._enter_draw()
         else:
-            self.hint.setText(t("原始照片文件不存在，无法画框识别。",
-                                "Original photo file not found; cannot box & recognize."))
+            from ..core.offline import OFFLINE, drive_label, drive_root, path_state
+            if path_state(self.photo["path"]) == OFFLINE:
+                drv = drive_label(drive_root(self.photo["path"]))
+                self.hint.setText(t(
+                    f"原图离线（{drv} 未接入），插回硬盘后再画框识别。",
+                    f"Original offline (drive {drv} not connected); "
+                    "reconnect it to box & recognize."))
+            else:
+                self.hint.setText(t("原始照片文件不存在，无法画框识别。",
+                                    "Original photo file not found; cannot box & recognize."))
 
     # ---------- UI ----------
     def _build_ui(self):

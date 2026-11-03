@@ -61,7 +61,11 @@ def step1():
         app.processEvents()
         time.sleep(0.05)
     n_rec = lib.conn.execute("SELECT count(*) c FROM records").fetchone()["c"]
-    check(f"重链后识别(records={n_rec})>=6", n_rec >= 6)
+    # 2026-11-03 未识别语义: 无鸟/非鸟照片不写记录(rec_fail=3), 期望按此扣除
+    n_nobird = lib.conn.execute(
+        "SELECT count(*) c FROM photos WHERE rec_fail>=3").fetchone()["c"]
+    check(f"重链后识别(records={n_rec}, 无鸟={n_nobird})>=6-无鸟",
+          n_rec >= 6 - n_nobird and n_rec >= 1)
     fails = [x for x, ok in r if not ok]
     OUT.append("VERDICT: " + ("ALL PASS" if not fails else f"FAIL: {fails}"))
     (PROJ / "data" / "relink_result.txt").write_text("\n".join(OUT), encoding="utf-8")

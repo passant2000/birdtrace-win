@@ -182,9 +182,21 @@ class ShareDialog(QDialog):
         # 拍摄参数摘要(取自库内EXIF字段, 照片文件丢失也能显示)
         parts = self._exif_parts(respect_toggle=False)
         summary = " · ".join(v for v in parts.values() if v)
-        self.exif_hint.setText(summary if summary else
-                               t("照片未检测到拍摄参数",
-                                 "No camera data in this photo"))
+        text = summary if summary else t("照片未检测到拍摄参数",
+                                         "No camera data in this photo")
+        # 原图不可读(0.8-②): 卡片会没有照片, 提前说清原因
+        from ..core.offline import OFFLINE, OK, drive_label, drive_root, path_state
+        st = path_state(photo["path"])
+        if st == OFFLINE:
+            drv = drive_label(drive_root(photo["path"]))
+            text = t(f"⚠️ 原图离线（{drv} 未接入），插回硬盘后再生成分享卡。\n",
+                     f"⚠️ Original offline (drive {drv} not connected); "
+                     "reconnect it before making the card.\n") + text
+        elif st != OK:
+            text = t("⚠️ 原图不在原位置，分享卡将没有照片。\n",
+                     "⚠️ Original not at its recorded location; the card "
+                     "will have no photo.\n") + text
+        self.exif_hint.setText(text)
         self.exif_hint.setEnabled(self.exif_toggle.isChecked())
 
     def _on_exif_toggle(self, on: bool):
