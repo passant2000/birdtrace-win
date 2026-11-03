@@ -286,6 +286,11 @@ def main():
             except Exception as e:
                 check(False, f"批量分享卡可构造 ({e})")
             try:
+                from app.ui.export_dialog import ExportDialog
+                dlgs.append(("export", ExportDialog(lib, win)))
+            except Exception as e:
+                check(False, f"导出向导可构造 ({e})")
+            try:
                 dlgs.append(("rebox", ReboxDialog(lib, win, 1)))
             except Exception as e:
                 check(False, f"画框识别可构造 ({e})")

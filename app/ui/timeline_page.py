@@ -78,6 +78,10 @@ class TimelinePage(QWidget):
         self.share_btn.setCursor(Qt.PointingHandCursor)
         self.share_btn.clicked.connect(self._batch_share)
         head.addWidget(self.share_btn)
+        self.export_btn = QPushButton(t("导出…", "Export…"))
+        self.export_btn.setCursor(Qt.PointingHandCursor)
+        self.export_btn.clicked.connect(self._export_wizard)
+        head.addWidget(self.export_btn)
         self.select_btn = QPushButton(t("选择", "Select"))
         self.select_btn.setObjectName("Primary")
         self.select_btn.setCursor(Qt.PointingHandCursor)
@@ -167,6 +171,11 @@ class TimelinePage(QWidget):
         """批量分享卡导出(0.8-⑥): 日期范围+可选鸟种 → 每鸟种一张最美。"""
         from .batch_share_dialog import BatchShareDialog
         BatchShareDialog(self.lib, self.win).exec()
+
+    def _export_wizard(self):
+        """导出向导(0.8-④): 复制到新位置 / 原地重命名。"""
+        from .export_dialog import ExportDialog
+        ExportDialog(self.lib, self.win).exec()
 
     # ---------- 多选模式 ----------
     def _toggle_select(self):
