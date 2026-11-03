@@ -281,6 +281,11 @@ def main():
             except Exception as e:
                 check(False, f"分享卡可构造 ({e})")
             try:
+                from app.ui.batch_share_dialog import BatchShareDialog
+                dlgs.append(("batchshare", BatchShareDialog(lib, win)))
+            except Exception as e:
+                check(False, f"批量分享卡可构造 ({e})")
+            try:
                 dlgs.append(("rebox", ReboxDialog(lib, win, 1)))
             except Exception as e:
                 check(False, f"画框识别可构造 ({e})")

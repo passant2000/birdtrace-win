@@ -1013,6 +1013,42 @@ class Library:
         picked.sort(key=lambda p: p["aesthetic"], reverse=True)
         return picked
 
+    def best_share_cards(self, date_from: str, date_to: str,
+                         code: str | None = None) -> list[dict]:
+        """批量分享卡候选(0.8-⑥): 日期区间内每鸟种一张"最美"。
+
+        "最美" = 美学分 × 置信度 取最高; 只取 已确认(confirmed_code非空,
+        含手工标注, 其confidence=1.0) 或 原始置信≥0.5 的rank=1记录——
+        待复核里的低置信错名不印进卡。未评分照片不参与。
+        """
+        sql = (
+            "SELECT v.photo_id, v.eff_code, v.path, p.file_hash AS hash, "
+            "  p.aesthetic, v.confidence, "
+            "  COALESCE(s.cn, s.en, v.eff_code) AS cn, s.en AS en_name, "
+            "  s.sci, v.taken_at, b.region_id AS region_id, "
+            "  e.dt_original, e.make, e.model, e.lens, e.iso, e.exposure, "
+            "  e.fnum, e.focal_len, e.artist "
+            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "LEFT JOIN species s ON s.code=v.eff_code "
+            "LEFT JOIN batches b ON b.id=p.batch_id "
+            "LEFT JOIN exif e ON e.photo_id=p.id "
+            "WHERE v.rank=1 AND p.aesthetic IS NOT NULL "
+            "  AND (v.confirmed_code IS NOT NULL OR v.confidence >= 0.5) "
+            "  AND substr(v.taken_at,1,10) BETWEEN ? AND ? ")
+        args: list = [date_from, date_to]
+        if code:
+            sql += "AND v.eff_code=? "
+            args.append(code)
+        sql += "ORDER BY p.aesthetic * v.confidence DESC, v.confidence DESC"
+        out: list[dict] = []
+        seen: set[str] = set()
+        for r in self.conn.execute(sql, args).fetchall():
+            if r["eff_code"] in seen:
+                continue
+            seen.add(r["eff_code"])
+            out.append(dict(r))
+        return out
+
     def close(self):
         self.conn.close()
 

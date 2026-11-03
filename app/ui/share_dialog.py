@@ -23,6 +23,52 @@ def pinyin_spaced(cn: str) -> list[str]:
     return pys if len(pys) == len(cn) else ["".join(pys)]
 
 
+def exif_parts_of(p: dict) -> dict:
+    """拍摄参数三段(机身/镜头/焦·孔·快·ISO); 库里有什么显示什么。
+
+    纯函数, 供单卡ShareDialog与批量导出(0.8-⑥)共用; 字段取自库内
+    EXIF(照片文件丢失也能显示)。"""
+    make = (p.get("make") or "").strip()
+    model = (p.get("model") or "").strip()
+    body = model if model and make and model.startswith(make) \
+        else " ".join(x for x in (make, model) if x)
+    shot: list[str] = []
+    if p.get("focal_len"):
+        try:
+            shot.append(f"{float(p['focal_len']):g}mm")
+        except (TypeError, ValueError):
+            pass
+    if p.get("fnum"):
+        try:
+            shot.append(f"f/{float(p['fnum']):g}")
+        except (TypeError, ValueError):
+            pass
+    if p.get("exposure"):
+        shot.append(f"{str(p['exposure']).strip()}s")
+    if p.get("iso"):
+        shot.append(f"ISO {p['iso']}")
+    return {"body": body, "lens": str(p.get("lens") or "").strip(),
+            "shot": " · ".join(shot)}
+
+
+def rarity_info(code: str | None, region_id: str | None
+                ) -> tuple[str | None, float | None]:
+    """(罕见度档位, 百分位) — 百分位仅稀有/罕见档返回(0.8-⑤)。
+
+    异常/无数据/全球区域 = (None, None)。单卡与批量导出共用。"""
+    if not code:
+        return None, None
+    try:
+        from ..core.prior_hint import get_hint
+        hint = get_hint()
+        tier = hint.rarity_tier(code, region_id)
+        pct = hint.rarity_percentile(code, region_id) \
+            if tier in ("稀有", "罕见") else None  # i18n:ok
+        return tier, pct
+    except Exception:
+        return None, None
+
+
 class ShareDialog(QDialog):
     def __init__(self, lib, win, photo_id: int):
         super().__init__(win)
@@ -146,31 +192,10 @@ class ShareDialog(QDialog):
         self._update()
 
     def _exif_parts(self, respect_toggle: bool = True) -> dict:
-        """拍摄参数三段: 机身/镜头/焦·孔·快·ISO; 库里有什么显示什么。"""
+        """拍摄参数三段(勾选后); 取自库内EXIF字段。"""
         if respect_toggle and not self.exif_toggle.isChecked():
             return {}
-        p = self.photo or {}
-        make = (p.get("make") or "").strip()
-        model = (p.get("model") or "").strip()
-        body = model if model and make and model.startswith(make) \
-            else " ".join(x for x in (make, model) if x)
-        shot: list[str] = []
-        if p.get("focal_len"):
-            try:
-                shot.append(f"{float(p['focal_len']):g}mm")
-            except (TypeError, ValueError):
-                pass
-        if p.get("fnum"):
-            try:
-                shot.append(f"f/{float(p['fnum']):g}")
-            except (TypeError, ValueError):
-                pass
-        if p.get("exposure"):
-            shot.append(f"{str(p['exposure']).strip()}s")
-        if p.get("iso"):
-            shot.append(f"ISO {p['iso']}")
-        return {"body": body, "lens": str(p.get("lens") or "").strip(),
-                "shot": " · ".join(shot)}
+        return exif_parts_of(self.photo or {})
 
     def _card_info(self) -> dict:
         species = self.species
@@ -186,19 +211,9 @@ class ShareDialog(QDialog):
             lifer_no = self.lib.lifer_no_for_species(species["code"])
         # 罕见度(参考birdtrace/慧眼观鸟分享卡): 按照片批次地区计算;
         # 稀有/罕见再取百分位("罕见 · 前 3%", 0.8方案⑤)
-        rarity = None
-        rarity_pct = None
-        if species:
-            try:
-                from ..core.prior_hint import get_hint
-                hint = get_hint()
-                rarity = hint.rarity_tier(
-                    species["code"], self.photo.get("region_id"))
-                if rarity in ("稀有", "罕见"):  # i18n:ok
-                    rarity_pct = hint.rarity_percentile(
-                        species["code"], self.photo.get("region_id"))
-            except Exception:
-                rarity = None
+        rarity, rarity_pct = rarity_info(
+            species["code"] if species else None,
+            self.photo.get("region_id"))
         return {
             "cn": title,
             "pinyin": pys,
