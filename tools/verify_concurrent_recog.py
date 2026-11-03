@@ -83,8 +83,12 @@ def main() -> int:
     n_rec = lib.conn.execute(
         "SELECT COUNT(DISTINCT photo_id) c FROM records").fetchone()["c"]
     pending = len(lib.pending_photo_ids())
-    check(n_rec == 5 and pending == 0,
-          f"5张全部识别完成(有记录照片={n_rec}, 待识别={pending})")
+    # 2026-11-03 未识别语义: 零检测/非鸟门照片不写记录(rec_fail=3),
+    # 计入"已处理"而非"有记录"。全部5张都应离开待识别队列。
+    n_nobird = lib.conn.execute(
+        "SELECT COUNT(*) c FROM photos WHERE rec_fail>=3").fetchone()["c"]
+    check(n_rec + n_nobird == 5 and pending == 0,
+          f"5张全部处理完(有记录={n_rec}, 无鸟={n_nobird}, 待识别={pending})")
 
     # worker已退出后再新增 -> 重启拉起(导入页_import_progress的行为)
     import_files(lib, [imgs[5]], mode="ref", dest_root=None, region_id="CN")
@@ -93,14 +97,18 @@ def main() -> int:
     while time.time() - t0 < 120:
         QTimer.singleShot(200, done_loop.quit)
         done_loop.exec()
-        if lib.conn.execute(
-                "SELECT COUNT(DISTINCT photo_id) c FROM records"
-        ).fetchone()["c"] >= 6:
+        _n = lib.conn.execute(
+            "SELECT COUNT(DISTINCT photo_id) c FROM records"
+        ).fetchone()["c"] + lib.conn.execute(
+            "SELECT COUNT(*) c FROM photos WHERE rec_fail>=3").fetchone()["c"]
+        if _n >= 6:
             break
     n6 = lib.conn.execute(
         "SELECT COUNT(DISTINCT photo_id) c FROM records").fetchone()["c"]
-    check(n6 == 6 and len(lib.pending_photo_ids()) == 0,
-          f"退出后重启worker拾取新增(={n6}/6)")
+    n_all6 = n6 + lib.conn.execute(
+        "SELECT COUNT(*) c FROM photos WHERE rec_fail>=3").fetchone()["c"]
+    check(n_all6 == 6 and len(lib.pending_photo_ids()) == 0,
+          f"退出后重启worker拾取新增(有记录={n6}+无鸟={n_all6 - n6}/6)")
 
     print()
     print("FAILED" if FAILED["v"] else "ALL PASS")

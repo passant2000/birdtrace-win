@@ -2,6 +2,28 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+# 鸟迹 Win · 进度记录
+
+> 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
+
+## 2026-11-03深夜 · **0.8.0 八项全部完成（dev-0.8.0分支，未打包）**
+
+从 v0.7.0-final(c85a783) 开分支 `dev-0.8.0`，按 docs/后续开发方案.md 八项开发，全部带验证工具：
+
+- **① 标注随文件夹走**（`app/core/sidecar.py`）：每个被管理文件夹一份 `.birdtrace.json`（Windows隐藏属性），按 file_hash 键存 记录/确认码/鸟点(名+坐标)/评分/美学分/无鸟标记；标注变更→库标脏目录（15处钩子）→主窗口3s定时与退出时 flush（识别/导入让路）；导入自动读回（**已有编辑优先**：本地人工确认/鸟点不被覆盖；回填后不重复识别）；写出时合并本库不认识的条目（另一台机器导得更多的照片不丢）。verify_sidecar 全过。**多机互通路径：5080机导入F盘照片→自动带回本机的标注。**
+- **② 移动硬盘离线韧性**（`app/core/offline.py`）：三态判定 OK/离线卷/不在原位置（离线卷按卷只stat一次，万张库瞬间）；时间线横幅分开——"📴 N张原图离线（F: 未接入）"不引导重新链接、"⚠ N张不在原位置"才带重链按钮；网格角标"原图离线"vs"文件丢失"；查看器/画框/分享卡离线文案含盘符；批量重识别全离线时提示插盘而非"丢失"。**relink升级**：同名候选hash校验→按size+hash找改名文件（内容优先于名字）→同名唯一按名兜底。**顺修真bug**：查看器打开缺失文件照片必崩（`_scene.clear()`删掉_item后`_render_records`再碰→shiboken崩溃；改视口覆盖层）。verify_offline 全过。**坑：QGraphicsProxyWidget removeItem 触发Qt断言中止，覆盖层方案才稳。**
+- **③ 连拍分组+封面**（`app/core/burst.py`）：**按鸟种分流后各自链式成组**（Δt≤2s + dHash≤10；异种交错不拆链，逐帧漂移可连组）；`photos.group_id`(=g<min_id>)+`photos.phash`(dHash64懒计算落库)；封面=组内美学最高；时间线/鸟种详情折叠成封面（角标"❐ ×N"），点封面组内翻看，多选自动展开，开关持久化；BurstWorker在识别/美学回填完成与启动版本门变化时后台重算。verify_burst 全过。
+- **④ 导出向导**（`app/core/exporter.py`+`export_dialog.py`，时间线"导出…"入口）：范围=日期/鸟种/鸟点/评分；**复制到新位置**（层级 时间→鸟种/鸟种→时间/平铺 × 文件名 原名/日期_鸟种_序号，树形预览）| **原地重命名**（只改名，确认框+新旧对照，执行后按hash同步库path，失败行不动库）；**同名RAW+JPG成对同号**；重名安全编号绝不覆盖（计划内+盘上已存在）；换名冲突两段式临时名；离线跳过并列出。verify_export 全过。**抓出真bug：复制目标盘上已存在时原会静默覆盖。**
+- **⑤ 分享卡罕见度百分位**：`rarity_percentile`（与档位同一次排序派生"前X%"，不外泄原始先验值）；卡上稀有/罕见档胶囊追加"· 前 3%"/"Top 3%"（<10%留一位小数）。verify_rarity_pct 全过。
+- **⑥ 分享卡批量导出**（`batch_share_dialog.py`，时间线入口）：日期范围+可选鸟种→每鸟种一张"最美"（**美学×置信最高，只取已确认或原始置信≥0.5**，待复核错名不印卡）→`日期_鸟种名.png`落盘；主题/署名/Life#/参数一次批量设置；原图离线跳过并说明。share_dialog 抽出 `exif_parts_of`/`rarity_info` 复用。verify_batch_share 全过。
+- **⑦ 年度十八图去重**：`best_of_year` 改两遍——先每鸟种美学最高1张取满18；凑不够再从各鸟种第2张补（与该种第1张 dHash≥12 构图不同 且 高于已选中位数；原图离线算不出哈希不补）；返回仍按美学降序（旧断言"每种≤2张/降序"兼容）。verify_best18 全过。
+- **⑧ MapTiler死代码清理**：删 POI 无Key回退分支/原作者团队Key/`_parse_maptiler`（内置Key后不可达且OSM中文POI差=5080机搜不到根因）；无Key显性报错引导设置页；settings_page 旧值兼容行保留；MapLibre 渲染库不动。verify_spot_poi 同步重写后全过。
+
+- **回归**：i18n两道检查CLEAN/32项、e2e、smoke、verify_viewer/share_exif/sharecard_dpi/count_logic/temp_id/multibird/rebox/species_map_fix/aesthetic/tree_nav/scroll_restore/distribution_map/migration/spot_poi/timeline_select 全绿；verify_concurrent_recog/verify_relink 的过期断言按 11-03 无鸟语义修正（零检测/非鸟照片不写记录=已处理，此前退出码FAIL）；**新工具 7 个**：verify_offline/burst/sidecar/export/batch_share/best18/rarity_pct。源码级启动冒烟（--library 临时库 --open-page timeline/species 存活60s）✓。
+- **未跑**：verify_usb_scenario（需真U盘）、verify_port T3/T6（F盘仍离线）、冻结exe实测（未打包）。
+- **提交**：dev-0.8.0 分支 8 个提交（每项一个），基线 v0.7.0-final。
+- **待用户**：①整体看一遍功能（重点是导出向导/连拍折叠/批量分享卡）②决定是否打 0.8.0-test1（打包前按惯例先问：上一轮 0.7.0 有没有遗留问题）。
+
 ## 2026-11-03 · **v0.7.0 第四次重建打包（用户批准）——累计修复：名录拆分/裁剪/中文名刷新/鸟点删除/时间线三项**
 
 用户指示"打包吧"。本包相对上一版（11-02 14:36）的全部变化：
