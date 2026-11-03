@@ -42,6 +42,8 @@ class MainWindow(QMainWindow):
         self.assets = assets_dir
         self.worker = None
         self.aes_worker = None
+        self.burst_worker = None
+        self._regroup_pending = False   # 识别刚完成: 新照片待分组
         self.setWindowTitle(t("鸟迹 · 鸟类照片管理", "BirdTrace · Bird photo manager"))
         self.setWindowIcon(QIcon(str(assets_dir / "brand" / "logo.png")))
         self.setMinimumSize(860, 540)
@@ -61,6 +63,8 @@ class MainWindow(QMainWindow):
         if self.aes_worker and self.aes_worker.isRunning():
             self.aes_worker.stop()
             self.aes_worker.wait(3000)
+        if self.burst_worker and self.burst_worker.isRunning():
+            self.burst_worker.wait(3000)
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -233,7 +237,8 @@ class MainWindow(QMainWindow):
         self.library_changed.emit()
         self._refresh_skipped()
         self._update_status()
-        # 新识别的照片接着补美学分(鸟种排序/年度十八图要用)
+        # 新识别的照片接着补美学分(鸟种排序/年度十八图要用), 之后重算连拍分组
+        self._regroup_pending = True
         self.start_aesthetic_backfill()
         # 大量原文件丢失(典型: 引用模式库拷到别的电脑): 明确告知
         missing = summary.get("missing_files", 0)
@@ -280,6 +285,7 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             return          # _recognition_done 会拉起
         if not self.lib.pending_aesthetic():
+            self.start_burst_regroup()   # 没有美学可补也要保证分组是新的
             return
         from ..core.aesthetic_worker import AestheticWorker
         self.aes_worker = AestheticWorker(self.lib, self.assets, parent=self)
@@ -304,6 +310,34 @@ class MainWindow(QMainWindow):
         if tl is not None:
             tl.refresh()
         self._update_status()
+        self.start_burst_regroup(force=True)   # 美学分变了→封面可能变
+
+    # ---------- 连拍分组(0.8-③) ----------
+    def start_burst_regroup(self, force: bool = False):
+        """后台重算连拍分组: 识别/美学回填完成后(force)或规则版本变化。"""
+        if self.burst_worker and self.burst_worker.isRunning():
+            return
+        imp = self.pages.get("import")
+        if imp is not None and imp.import_thread is not None \
+                and imp.import_thread.isRunning():
+            return
+        if self.worker and self.worker.isRunning():
+            return
+        if not (force or self._regroup_pending or self.lib.bursts_stale()):
+            return
+        from ..core.aesthetic_worker import BurstWorker
+        self.burst_worker = BurstWorker(self.lib, parent=self)
+        self.burst_worker.finished_all.connect(self._burst_done)
+        self.burst_worker.start()
+
+    def _burst_done(self, res: dict):
+        self.burst_worker = None
+        self._regroup_pending = False
+        if res.get("changed"):
+            for key in ("timeline", "species"):
+                page = self.pages.get(key)
+                if page is not None:
+                    page.refresh()
 
     def _update_status(self):
         imp = self.pages.get("import")

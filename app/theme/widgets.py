@@ -142,13 +142,14 @@ class PhotoGridItem(QWidget):
     """缩略图网格项: 图片 + 角标(已导入/lifer) + 选中框。"""
 
     def __init__(self, pixmap: QPixmap | None, label: str = "",
-                 corner: str | None = None, parent=None):
+                 corner: str | None = None, parent=None, stack: int = 0):
         super().__init__(parent)
         self.setFixedSize(120, 140)
         self.selected = False
         self.pixmap = pixmap
         self.label = label
         self.corner = corner
+        self.stack = stack          # 连拍封面: 组内张数(≥2才画 ×N 角标)
 
     def set_selected(self, v: bool):
         self.selected = v
@@ -191,6 +192,22 @@ class PhotoGridItem(QWidget):
             f.setBold(True)
             p.setFont(f)
             p.drawText(QRectF(120 - tw - 6, 6, tw, 20), Qt.AlignCenter, self.corner)
+        if self.stack and self.stack > 1:
+            # 连拍封面角标(右下): 叠层小图标 + ×N (0.8-③)
+            txt = f"❐ ×{self.stack}"
+            f = QFont(self.font())
+            f.setPointSize(7)
+            f.setBold(True)
+            p.setFont(f)
+            tw = p.fontMetrics().horizontalAdvance(txt) + 14
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(0, 0, 0, 150))
+            pr = QPainterPath()
+            pr.addRoundedRect(QRectF(120 - tw - 6, 120 - 20 - 6, tw, 20), 10, 10)
+            p.drawPath(pr)
+            p.setPen(QColor("white"))
+            p.drawText(QRectF(120 - tw - 6, 120 - 20 - 6, tw, 20),
+                       Qt.AlignCenter, txt)
         if self.label:
             p.setPen(QColor(theme.LABEL_2))
             f = QFont(self.font())

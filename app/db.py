@@ -440,16 +440,19 @@ class Library:
         return dict(photo), [dict(r) for r in recs]
 
     def timeline(self) -> dict[str, list[dict]]:
-        """时间线: 全部照片按拍摄年月分组(未识别照片也显示)。"""
+        """时间线: 全部照片按拍摄年月分组(未识别照片也显示)。
+        带 group_id/aesthetic 供连拍折叠(core.burst.collapse_bursts)。"""
         rows = self.conn.execute(
-            "SELECT p.id, p.path, COALESCE(e.dt_original, p.added_at) AS taken_at "
+            "SELECT p.id, p.path, p.group_id, p.aesthetic, "
+            "  COALESCE(e.dt_original, p.added_at) AS taken_at "
             "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
             "ORDER BY taken_at DESC").fetchall()
         out: dict[str, list] = {}
         for r in rows:
             ym = (r["taken_at"] or "")[:7] or t("未知时间", "Unknown date")
             out.setdefault(ym, []).append(
-                {"id": r["id"], "path": r["path"], "taken_at": r["taken_at"]})
+                {"id": r["id"], "path": r["path"], "taken_at": r["taken_at"],
+                 "group_id": r["group_id"], "aesthetic": r["aesthetic"]})
         return out
 
     # ---------- 鸟种库 / 成就 ----------
@@ -500,7 +503,7 @@ class Library:
     def photos_of_species(self, code: str) -> list[dict]:
         """该鸟种照片, 最美优先(美学评分降序, 无评分排后按拍摄时间)。"""
         rows = self.conn.execute(
-            "SELECT v.photo_id, v.path, v.taken_at, p.aesthetic, "
+            "SELECT v.photo_id, v.path, v.taken_at, p.aesthetic, p.group_id, "
             "  MAX(confidence) AS confidence, "
             "  MAX(reviewed) AS reviewed, MAX(confirmed_code) AS confirmed_code "
             "FROM v_records v JOIN photos p ON p.id=v.photo_id "
@@ -1078,6 +1081,47 @@ class Library:
             rest.remove(chosen)
         picked.sort(key=lambda p: p["aesthetic"], reverse=True)
         return picked
+
+    # ---------- 连拍分组(0.8-③) ----------
+    def regroup_bursts(self) -> dict:
+        """全量重算连拍分组(规则见 core/burst), 只写有变化的行。
+
+        返回 {"groups": 组数, "photos": 入组照片数, "changed": 改写行数}。
+        可在后台线程调用(线程本地连接)。"""
+        from .core.burst import BURST_VERSION, group_bursts
+        rows = self.conn.execute(
+            "SELECT p.id, COALESCE(e.dt_original, p.added_at) AS taken_at, "
+            "  (SELECT COALESCE(r.confirmed_code, r.species_code) FROM records r "
+            "   WHERE r.photo_id=p.id AND r.rank=1 LIMIT 1) AS code, "
+            "  p.group_id "
+            "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id").fetchall()
+        mapping = group_bursts(({"id": r["id"], "taken_at": r["taken_at"],
+                                 "code": r["code"]} for r in rows),
+                               self.phash_of)
+        changed = 0
+        for r in rows:
+            new = mapping.get(r["id"])
+            if new != r["group_id"]:
+                self.conn.execute("UPDATE photos SET group_id=? WHERE id=?",
+                                  (new, r["id"]))
+                changed += 1
+        self.conn.commit()
+        self.set_setting("burst_version", BURST_VERSION)
+        return {"groups": len(set(mapping.values())), "photos": len(mapping),
+                "changed": changed}
+
+    def bursts_stale(self) -> bool:
+        """分组规则版本变了(或从未分过)→需要重算一次。"""
+        from .core.burst import BURST_VERSION
+        return self.get_setting("burst_version", "") != BURST_VERSION
+
+    def group_members(self, group_id: str) -> list[int]:
+        """组内照片id, 按拍摄时间升序。"""
+        rows = self.conn.execute(
+            "SELECT p.id FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
+            "WHERE p.group_id=? ORDER BY COALESCE(e.dt_original, p.added_at), p.id",
+            (group_id,)).fetchall()
+        return [r["id"] for r in rows]
 
     def best_share_cards(self, date_from: str, date_to: str,
                          code: str | None = None) -> list[dict]:

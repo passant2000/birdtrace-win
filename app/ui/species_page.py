@@ -671,6 +671,10 @@ class SpeciesPage(QWidget):
 
     def _render_overview(self, code: str, li):
         photos = self.lib.photos_of_species(code)
+        if self.lib.get_setting("burst_collapse", "1") == "1":
+            # 连拍折叠(0.8-③): 组内美学最高者为封面, 最美照必是封面不会被藏
+            from ..core.burst import collapse_bursts
+            photos = collapse_bursts(photos, id_key="photo_id")
         if not photos:
             tip = QLabel(t("库里还没有这个物种的照片 · 去导入页添加后识别即可",
                            "No photos of this species yet · import some and "
@@ -709,10 +713,11 @@ class SpeciesPage(QWidget):
             corner = t("★最美", "★ Best") if (ph["photo_id"] == best_pid
                                               and len(photos) > 1) else None
             item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10],
-                                 corner=corner)
+                                 corner=corner, stack=ph.get("group_n", 0))
             item.setFixedSize(132, 150)
             item.setCursor(Qt.PointingHandCursor)
-            item.mousePressEvent = lambda e, pid=ph["photo_id"], i2=list(ids): self._open(pid, i2)
+            item.mousePressEvent = lambda e, pid=ph["photo_id"], i2=list(
+                ph.get("group_ids") or ids): self._open(pid, i2)
             grid.addWidget(item, i // cols, i % cols)
             if pm is None and row and row["path"]:
                 self._thumb_items[row["file_hash"]] = item

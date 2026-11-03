@@ -54,3 +54,22 @@ class AestheticWorker(QThread):
                 self.progress.emit(done, total)
         self.lib.conn.commit()
         self.finished_all.emit({"done": done, "ok": ok})
+
+
+class BurstWorker(QThread):
+    """连拍分组重算(0.8-③): 识别/美学回填完成后或规则版本变化时后台跑。
+
+    只读照片表+缩略图算哈希(首次对老库会逐张算 dHash, 之后落库缓存);
+    结果直接写 photos.group_id, 完成后主窗口刷新时间线/鸟种页。"""
+    finished_all = Signal(dict)        # {"groups": n, "photos": n, "changed": n}
+
+    def __init__(self, lib: Library, parent=None):
+        super().__init__(parent)
+        self.lib = lib
+
+    def run(self):
+        try:
+            res = self.lib.regroup_bursts()
+        except Exception as e:          # 分组失败不影响任何现有功能
+            res = {"groups": 0, "photos": 0, "changed": 0, "error": str(e)}
+        self.finished_all.emit(res)

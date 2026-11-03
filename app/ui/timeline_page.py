@@ -64,6 +64,16 @@ class TimelinePage(QWidget):
                                  "background:transparent;")
         head.addWidget(self.title)
         head.addStretch(1)
+        self.burst_btn = QPushButton(t("连拍折叠", "Stack bursts"))
+        self.burst_btn.setCheckable(True)
+        self.burst_btn.setChecked(self.lib.get_setting("burst_collapse", "1") == "1")
+        self.burst_btn.setCursor(Qt.PointingHandCursor)
+        self.burst_btn.setToolTip(t(
+            "2秒内同鸟种的连拍折成一张封面（角标 ×N），点开看全组；多选时自动展开",
+            "Stack same-species burst shots taken within 2s into one cover "
+            "(×N badge); click to browse the group. Auto-expanded in select mode"))
+        self.burst_btn.toggled.connect(self._toggle_collapse)
+        head.addWidget(self.burst_btn)
         self.share_btn = QPushButton(t("批量分享卡…", "Batch share cards…"))
         self.share_btn.setCursor(Qt.PointingHandCursor)
         self.share_btn.clicked.connect(self._batch_share)
@@ -194,7 +204,7 @@ class TimelinePage(QWidget):
         self.all_btn.setText(t("全不选", "Deselect all") if n >= self.lib.photo_count()
                              else t("全选", "Select all"))
 
-    def _on_item_click(self, pid: int, item=None):
+    def _on_item_click(self, pid: int, item=None, group_ids=None):
         if self._select_mode:
                 # Shift+click: 以上次点击为锚点, 按显示顺序选中头尾之间全部
             # (2026-11-03用户要求); 锚点无效时退化为普通点击。
@@ -213,6 +223,10 @@ class TimelinePage(QWidget):
                 item.set_selected(pid in self._selected)
             self._sync_sel_ui()
         else:
+            if group_ids:
+                # 连拍封面: 在组内左右翻看(0.8-③"展开看全组")
+                self._open(pid, list(group_ids))
+                return
             ids = [r["id"] for r in self.lib.conn.execute(
                 "SELECT id FROM photos ORDER BY id")]
             self._open(pid, ids)
@@ -408,7 +422,18 @@ class TimelinePage(QWidget):
         r = c.execute("SELECT COUNT(*), IFNULL(MAX(id),0), "
                       "CAST(IFNULL(SUM(CAST(confidence*1000 AS INT)),0) AS INT) "
                       "FROM records").fetchone()
-        return (p[0], p[1], r[0], r[1], r[2], datetime.date.today())
+        g = c.execute("SELECT COUNT(DISTINCT group_id) FROM photos "
+                      "WHERE group_id IS NOT NULL").fetchone()[0]
+        return (p[0], p[1], r[0], r[1], r[2], datetime.date.today(),
+                g, self._collapse_on())
+
+    def _collapse_on(self) -> bool:
+        """连拍折叠生效: 开关开 且 不在多选模式(多选必须看到每一张)。"""
+        return self.burst_btn.isChecked() and not self._select_mode
+
+    def _toggle_collapse(self, on: bool):
+        self.lib.set_setting("burst_collapse", "1" if on else "0")
+        self.refresh(force=True)
 
     def refresh(self, force: bool = False):
         if not force and self._tl_sig == self._data_sig():
@@ -425,11 +450,17 @@ class TimelinePage(QWidget):
             item = self.content_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        data = self.lib.timeline()
+        raw = self.lib.timeline()
+        counts = {ym: len(v) for ym, v in raw.items()}
+        if self._collapse_on():
+            from ..core.burst import collapse_bursts
+            data = {ym: collapse_bursts(v) for ym, v in raw.items()}
+        else:
+            data = raw
         lifer_ids = self.lib.lifer_photo_ids()
         import datetime
         year_ids = self.lib.year_bird_photo_ids(datetime.date.today().strftime('%Y'))
-        total = sum(len(v) for v in data.values())
+        total = sum(counts.values())
         self.title.setText(t(f"时间线 · {total} 张照片", f"Timeline · {total} photos"))
         self._sync_sel_ui()
         # 原图可用性(0.8-②): 离线卷(移动硬盘没插)与真丢失分开——离线不是
@@ -499,8 +530,9 @@ class TimelinePage(QWidget):
             return
         for ym, photos in data.items():
             year, month = (ym.split("-") + [""])[:2]
-            head_txt = (t(f"{year}年{int(month)}月 · {len(photos)} 张",
-                          f"{year}-{int(month):02d} · {len(photos)} photos")
+            n_ym = counts.get(ym, len(photos))
+            head_txt = (t(f"{year}年{int(month)}月 · {n_ym} 张",
+                          f"{year}-{int(month):02d} · {n_ym} photos")
                         if month else ym)
             head = QLabel(head_txt)
             head.setStyleSheet(f"font-size:17px;font-weight:700;color:{theme.LABEL_2};"
@@ -527,14 +559,16 @@ class TimelinePage(QWidget):
                     corner = t("原图离线", "Offline")       # 卷未接入, 插回即恢复
                 elif ph["id"] in self._missing_ids:
                     corner = t("文件丢失", "File missing")   # 不在原位置
-                item = PhotoGridItem(thumb, label="", corner=corner)
+                item = PhotoGridItem(thumb, label="", corner=corner,
+                                     stack=ph.get("group_n", 0))
                 item.setFixedSize(THUMB + 12, THUMB + 12)
                 item.setCursor(Qt.PointingHandCursor)
                 item.set_selected(ph["id"] in self._selected)
-                def _click(_e, _pid=ph["id"], _it=item):
+                def _click(_e, _pid=ph["id"], _it=item,
+                           _gids=ph.get("group_ids")):
                     # 防御: 网格重建后残留的僵尸控件点击直接忽略
                     try:
-                        self._on_item_click(_pid, _it)
+                        self._on_item_click(_pid, _it, _gids)
                     except RuntimeError:
                         pass
                 item.mousePressEvent = _click
@@ -552,7 +586,7 @@ class TimelinePage(QWidget):
             grid.setColumnStretch(cols, 1)
             self.content_lay.addWidget(grid_widget)
         self.content_lay.addStretch(1)
-        self._build_tree(data)
+        self._build_tree(raw)
         self._restore_scroll_after_rebuild()
         self._tl_sig = self._data_sig()
         self._cur_cols = self._wanted_cols()
