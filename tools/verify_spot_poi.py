@@ -45,19 +45,21 @@ def main():
     photo_id = lib.add_photo(str(LIB_DIR / "x.jpg"), "hash1", 1, 1.0, 100, 100, 0)
     photo, _recs = lib.photo_detail(photo_id)
 
-    print("\n[1] 双数据源: 默认MapTiler(作者Key) / 自填高德优先(离线URL断言)")
+    print("\n[1] 单一数据源: 高德POI(内置Key/自填Key优先), 无Key显性报错(离线URL断言)")
     from app.ui import amap_view as av
     sr = PoiSearcher(lib)
     captured = {}
+    fails = []
 
     def fake_get(req):
         captured["url"] = req.url().toString()
 
     sr._nam.get = fake_get
+    sr.failed.connect(lambda m: fails.append(m))
     sr._pending = "奥林匹克"
     sr._do_search()
-    # 2026-10-31起默认=内置高德Web Key(用户指示; 5080机中文POI搜不到
-    # 的根因=无Key回退MapTiler而其中文POI库缺失)
+    # 默认=内置高德Web Key(用户指示); MapTiler回退已删(2026-11-03:
+    # OSM中文POI覆盖差+内置Key后不可达)
     check("restapi.amap.com" in captured.get("url", "")
           and av.DEFAULT_WEB_KEY in captured.get("url", ""),
           f"默认源=内置高德Key ({captured.get('url', '')[:70]}…)")
@@ -67,26 +69,20 @@ def main():
           and "user_web_key_123" in captured.get("url", ""),
           "自填高德Key后优先走自填Key")
     lib.set_setting("amap_key", "")
-    # 内置Key清空(空串会被自填覆盖; 清代码级Key模拟裁包): 走MapTiler降级
+    # 内置Key清空(空串会被自填覆盖; 清代码级Key模拟裁包): 显性报错不请求
     av.DEFAULT_WEB_KEY, _bak = "", av.DEFAULT_WEB_KEY
+    fails.clear()
+    captured.pop("url", None)
     sr._do_search()
-    check("api.maptiler.com" in captured.get("url", ""),
-          "无高德Key时降级MapTiler")
+    check(not captured.get("url") and len(fails) == 1
+          and "地名搜索不可用" in fails[0],
+          f"无高德Key时显性报错且不发请求 ({fails[:1]})")
     av.DEFAULT_WEB_KEY = _bak
-    # MapTiler解析: WGS标记(免纠偏) + addr
-    from PySide6.QtNetwork import QNetworkReply
-    mt_pois = sr._parse_maptiler({
-        "features": [{"geometry": {"coordinates": [121.93, 30.87]},
-                      "properties": {"text": "南汇东滩",
-                                     "place_name": "南汇东滩, 上海市"}}]},
-        QNetworkReply.NetworkError.NoError)
-    check(len(mt_pois) == 1 and mt_pois[0]["wgs"] is True
-          and mt_pois[0]["addr"] == "南汇东滩, 上海市",
-          "MapTiler结果解析(wgs=True+addr)")
     from app.ui.map_page import poi_location_wgs84
-    w = poi_location_wgs84(mt_pois[0])
+    w = poi_location_wgs84({"name": "x", "location": "121.93,30.87",
+                            "wgs": True})
     check(w and abs(w[0] - 30.87) < 1e-9 and abs(w[1] - 121.93) < 1e-9,
-          f"MapTiler坐标WGS84直过不纠偏 ({w})")
+          f"wgs=True标记坐标直过不纠偏 ({w})")
     w2 = poi_location_wgs84({"name": "x", "location": "121.93,30.87",
                              "wgs": False})
     check(w2 and (abs(w2[0] - 30.87) > 1e-4 or abs(w2[1] - 121.93) > 1e-4),

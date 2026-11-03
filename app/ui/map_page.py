@@ -35,18 +35,16 @@ UA = f"BirdTraceWin/{VERSION} (personal photo map)"
 
 # ============================ 高德POI搜索(共享) ============================
 class PoiSearcher(QObject):
-    """地名搜索(带350ms防抖), 双数据源:
+    """地名搜索(带350ms防抖), 数据源=高德「Web服务」POI(GCJ02, 中国POI全)。
 
-    默认=MapTiler Geocoding(原作者团队Key, 与安卓同源, 坐标WGS84直出);
-    用户在设置页自填高德「Web服务」Key后优先走高德(中国POI更全, GCJ02)。
-    统一 poi dict: {name, location:"lon,lat", wgs:bool, addr:str}。
+    内置Key(设置页可覆盖自填)。统一 poi dict:
+    {name, location:"lon,lat", wgs:bool, addr:str}。
 
     results(list)   — poi dicts
-    failed(str)     — 网络失败原因
+    failed(str)     — 网络失败/无Key原因
     """
     results = Signal(list)
     failed = Signal(str)
-    degraded = Signal(str)   # 无高德Key走MapTiler时的能力降级提示(非错误)
 
     def __init__(self, lib, parent=None):
         super().__init__(parent)
@@ -58,7 +56,6 @@ class PoiSearcher(QObject):
         self._debounce.setInterval(350)
         self._debounce.timeout.connect(self._do_search)
         self._pending = ""
-        self._source = "maptiler"   # 当前请求源(maptiler/amap)
 
     def search(self, text: str):
         self._pending = text.strip()
@@ -69,35 +66,25 @@ class PoiSearcher(QObject):
         self._debounce.start()
 
     def _do_search(self):
-        # 数据源优先级: 自填高德Key(中国POI更全) > MapTiler(原作者Key,
-        # 与安卓同源, 开箱可用)。注意高德Key必须是「Web服务」类型——
-        # JS API/Android类型Key服务端不认(平台校验)。
-        from .amap_view import DEFAULT_WEB_KEY, DEFAULT_MAPTILER_KEY
+        # 高德Key必须是「Web服务」类型——JS API/Android类型Key服务端不认
+        # (平台校验)。MapTiler回退已删(2026-11-03): OSM中文POI覆盖极差
+        # ("世纪公园"搜不到=5080机元凶), 且内置Key后该分支本就不可达。
+        from .amap_view import DEFAULT_WEB_KEY
         amap_key = self._lib.get_setting("amap_key", "") or DEFAULT_WEB_KEY
-        if amap_key:
-            self._source = "amap"
-            url = (f"https://restapi.amap.com/v3/place/text?key={amap_key}"
-                   f"&keywords={quote(self._pending)}&offset=8&page=1"
-                   f"&extensions=base")
-        else:
-            self._source = "maptiler"
-            # MapTiler(OSM数据)对中文POI覆盖极差: "世纪公园"只能搜到
-            # 海口的一条路、上海的本尊搜不到——必须显式告诉用户为什么
-            # 搜不准、去哪里配Key(2026-10-31用户5080机反馈调查结论)。
-            self.degraded.emit(t(
-                "未配置高德Key，中文地名搜索受限（可能搜不到/搜不准）。"
-                "可在 设置 → 地图 填写高德「Web服务」Key（免费申请）。",
-                "No Amap key configured; Chinese place search is limited "
-                "(OSM-based fallback). Add a free Amap \"Web Service\" key "
-                "in Settings → Map."))
-            url = (f"https://api.maptiler.com/geocoding/"
-                   f"{quote(self._pending)}.json?key={DEFAULT_MAPTILER_KEY}"
-                   f"&limit=8&language=zh")
+        if not amap_key:
+            self.failed.emit(t(
+                "地名搜索不可用：请在 设置 → 地图 填写高德「Web服务」Key（免费申请）。",
+                "Place search unavailable: add a free Amap \"Web Service\" "
+                "key in Settings → Map."))
+            return
+        url = (f"https://restapi.amap.com/v3/place/text?key={amap_key}"
+               f"&keywords={quote(self._pending)}&offset=8&page=1"
+               f"&extensions=base")
         self._nam.get(QNetworkRequest(QUrl(url)))
 
     def _on_reply(self, reply):
         u = reply.url().toString()
-        if "restapi.amap.com" not in u and "api.maptiler.com" not in u:
+        if "restapi.amap.com" not in u:
             return
         data = bytes(reply.readAll())
         err = reply.error()
@@ -107,11 +94,7 @@ class PoiSearcher(QObject):
             obj = json.loads(data)
         except (ValueError, TypeError):
             obj = {}
-        if self._source == "amap":
-            pois = self._parse_amap(obj, err)
-        else:
-            pois = self._parse_maptiler(obj, err)
-        self.results.emit(pois)
+        self.results.emit(self._parse_amap(obj, err))
 
     def _parse_amap(self, obj: dict, err) -> list:
         if err != QNetworkReply.NetworkError.NoError and not obj.get("pois"):
@@ -137,39 +120,11 @@ class PoiSearcher(QObject):
             return []
         return [dict(p, wgs=False) for p in obj.get("pois", [])]
 
-    def _parse_maptiler(self, obj: dict, err) -> list:
-        if err != QNetworkReply.NetworkError.NoError:
-            self.failed.emit(t("搜索失败：网络错误",
-                               "Search failed: network error"))
-            return []
-        if obj.get("message"):
-            self.failed.emit(t(f"搜索失败：{obj['message']}",
-                               f"Search failed: {obj['message']}"))
-            return []
-        pois = []
-        for f in (obj.get("features") or [])[:8]:
-            try:
-                lon, lat = f["geometry"]["coordinates"][:2]
-            except (KeyError, IndexError, TypeError, ValueError):
-                continue
-            # 名称在feature顶层(text/place_name), 不在properties
-            props = f.get("properties") or {}
-            name = (f.get("text") or props.get("text")
-                    or f.get("place_name") or props.get("place_name")
-                    or props.get("name") or "")
-            if not name:
-                continue
-            pois.append({"name": name, "location": f"{lon},{lat}",
-                         "addr": f.get("place_name") or props.get("place_name")
-                         or name,
-                         "wgs": True})
-        return pois
-
 
 def poi_location_wgs84(p: dict) -> tuple[float, float] | None:
     """poi dict → (lat, lon) WGS84; 解析失败返回None。
 
-    高德结果为GCJ-02需纠偏; MapTiler结果本来就是WGS84, 标wgs=True直过。"""
+    高德结果为GCJ-02需纠偏; wgs=True的poi(如有)直过。"""
     try:
         lon_s, lat_s = p["location"].split(",")
         g_lat, g_lon = float(lat_s), float(lon_s)
@@ -315,7 +270,7 @@ class MapPickDialog(QDialog):
 
         self._searcher = PoiSearcher(lib, self)
         self._searcher.results.connect(self._on_pois)
-        # 搜索失败显性提示(默认源=MapTiler作者Key开箱可用, 自填高德更准)
+        # 搜索失败显性提示(无网络/Key失效等)
         self.search_warn = QLabel()
         self.search_warn.setWordWrap(True)
         self.search_warn.setStyleSheet(

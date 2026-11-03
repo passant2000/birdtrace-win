@@ -24,8 +24,6 @@ from ..core.gcj02 import gcj02_to_wgs84, wgs84_to_gcj02
 # 2026-10-31用户指示: 内置其三个高德Key(Web服务/JS API/安全密钥)但全部
 # 混淆存放(异或+base64, 防对exe明文grep; 非对抗逆向的安全加密), 设置页
 # 不回显。0.5.4包曾误带明文三Key已于2026-10-29移除, 本轮以混淆形式内置。
-# 无Web服务Key时POI回退MapTiler, 其中文POI库缺世纪公园/滨江森林公园
-# (2026-10-31实测, 5080机POI搜不到的根因)。
 
 
 def _dec(s: str) -> str:
@@ -40,13 +38,7 @@ DEFAULT_WEB_KEY = _dec("JwhHAGVLUQdcb1AKGzJ3ehlUVVQAdw1HAWBLAlYHb10=")
 DEFAULT_JS_KEY = _dec("J18UUGIWUQFWZFhYT2h9cUlTB1cEdF9EAmBFWQBVNgs=")
 DEFAULT_JS_SECRET = _dec("ew9AVGZGWFEDM1FYFGJ5KkhRBgUFdAxAVmEQAwBVYFg=")
 
-# 地名搜索(POI)默认走 MapTiler Geocoding, 用原作者团队Key——与安卓
-# 同源(安卓dex里就是这个Key); 用量计在作者账户, 提示用户克制使用。
-# 用户在设置页自填高德「Web服务」Key时优先走高德(中国POI更全)。
-# 注意: MapTiler底图引擎因政治合规已移除, 此Key只用于地名搜索。
-DEFAULT_MAPTILER_KEY = "QMZGF8IiSPfyUQeVTOEQ"
-
-# MapLibre版页面(本地maplibre-gl.js + MapTiler style, 桥接口与高德版同构)
+# MapLibre版页面(本地maplibre-gl.js + 高德免Key栅格瓦片style, 桥接口与高德版同构)
 _HTML_MAPLIBRE = """<!--# i18n:ok: 页面内嵌中文占位文案, 浏览器渲染按数据豁免-->
 <!doctype html>
 <html><head><meta charset="utf-8">
@@ -88,7 +80,7 @@ new QWebChannel(qt.webChannelTransport, function(ch){
   map.on('click',function(e){
     if(pickMode) bridge.picked(e.lngLat.lat, e.lngLat.lng);
   });
-  // 创建即上报(不等'load'——它要等全部初始瓦片, MapTiler国内较慢会拖死ready)
+  // 创建即上报(不等'load'——它要等全部初始瓦片, 网络慢会拖死ready)
   report();
   bridge.mapReady();
   layoutMarkers();

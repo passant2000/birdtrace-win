@@ -2,7 +2,7 @@
 """鸟点挂载对话框。
 
 搜索是"二合一": 上半是匹配的已有鸟点(精确位置), 下半是地名POI(粗略位置,
-默认MapTiler作者Key, 自填高德Key更准)。选中POI直接按其位置建鸟点
+内置高德Key, 设置页可自填更准)。选中POI直接按其位置建鸟点
 (同名复用), 想精修再到地图上选点。
 - SpotPickDialog: 单张照片挂载
 - BatchSpotDialog: 导入完成后整批挂载
@@ -25,7 +25,7 @@ SEP = "__sep__"  # 旧标记常量(未用)
 
 def _poi_coords(poi: dict) -> tuple[float, float] | None:
     """POI数据 → (lat, lon) WGS84。兼容两种形状: 原始poi dict(location字符串,
-    高德GCJ/MapTiler WGS)与SpotSearchList信号载荷(坐标已解析在lat/lon,
+    高德GCJ需纠偏)与SpotSearchList信号载荷(坐标已解析在lat/lon,
     原始dict嵌在"poi"键下)。历史bug: 只认location键, 信号载荷静默丢坐标。"""
     raw = poi.get("poi") if isinstance(poi.get("poi"), dict) else None
     w = poi_location_wgs84(raw if raw is not None else poi)
