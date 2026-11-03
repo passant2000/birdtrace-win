@@ -35,13 +35,18 @@ UA = f"BirdTraceWin/{VERSION} (personal photo map)"
 
 # ============================ 高德POI搜索(共享) ============================
 class PoiSearcher(QObject):
-    """高德 place/text POI搜索(带350ms防抖), 结果坐标为GCJ-02原始dict。
+    """地名搜索(带350ms防抖), 双数据源:
 
-    results(list)   — poi dicts (name/location/pname/cityname/adname)
-    failed(str)     — 未配置Key或网络失败的原因
+    默认=MapTiler Geocoding(原作者团队Key, 与安卓同源, 坐标WGS84直出);
+    用户在设置页自填高德「Web服务」Key后优先走高德(中国POI更全, GCJ02)。
+    统一 poi dict: {name, location:"lon,lat", wgs:bool, addr:str}。
+
+    results(list)   — poi dicts
+    failed(str)     — 网络失败原因
     """
     results = Signal(list)
     failed = Signal(str)
+    degraded = Signal(str)   # 无高德Key走MapTiler时的能力降级提示(非错误)
 
     def __init__(self, lib, parent=None):
         super().__init__(parent)
@@ -53,6 +58,7 @@ class PoiSearcher(QObject):
         self._debounce.setInterval(350)
         self._debounce.timeout.connect(self._do_search)
         self._pending = ""
+        self._source = "maptiler"   # 当前请求源(maptiler/amap)
 
     def search(self, text: str):
         self._pending = text.strip()
@@ -63,52 +69,114 @@ class PoiSearcher(QObject):
         self._debounce.start()
 
     def _do_search(self):
-        # 不再内置Key(个人Key不随开源发布): 需用户在设置页填自己的Web服务Key
-        from .amap_view import DEFAULT_WEB_KEY
-        key = self._lib.get_setting("amap_key", "") or DEFAULT_WEB_KEY
-        if not key:
-            self.failed.emit(t(
-                "未配置高德Key：设置页填自己的Web服务Key后可用地名搜索",
-                "No Amap key: enter your own Web-service key in Settings to "
-                "enable place search"))
-            return
-        url = (f"https://restapi.amap.com/v3/place/text?key={key}"
-               f"&keywords={quote(self._pending)}&offset=8&page=1"
-               f"&extensions=base")
+        # 数据源优先级: 自填高德Key(中国POI更全) > MapTiler(原作者Key,
+        # 与安卓同源, 开箱可用)。注意高德Key必须是「Web服务」类型——
+        # JS API/Android类型Key服务端不认(平台校验)。
+        from .amap_view import DEFAULT_WEB_KEY, DEFAULT_MAPTILER_KEY
+        amap_key = self._lib.get_setting("amap_key", "") or DEFAULT_WEB_KEY
+        if amap_key:
+            self._source = "amap"
+            url = (f"https://restapi.amap.com/v3/place/text?key={amap_key}"
+                   f"&keywords={quote(self._pending)}&offset=8&page=1"
+                   f"&extensions=base")
+        else:
+            self._source = "maptiler"
+            # MapTiler(OSM数据)对中文POI覆盖极差: "世纪公园"只能搜到
+            # 海口的一条路、上海的本尊搜不到——必须显式告诉用户为什么
+            # 搜不准、去哪里配Key(2026-10-31用户5080机反馈调查结论)。
+            self.degraded.emit(t(
+                "未配置高德Key，中文地名搜索受限（可能搜不到/搜不准）。"
+                "可在 设置 → 地图 填写高德「Web服务」Key（免费申请）。",
+                "No Amap key configured; Chinese place search is limited "
+                "(OSM-based fallback). Add a free Amap \"Web Service\" key "
+                "in Settings → Map."))
+            url = (f"https://api.maptiler.com/geocoding/"
+                   f"{quote(self._pending)}.json?key={DEFAULT_MAPTILER_KEY}"
+                   f"&limit=8&language=zh")
         self._nam.get(QNetworkRequest(QUrl(url)))
 
     def _on_reply(self, reply):
-        if "restapi.amap.com" not in reply.url().toString():
+        u = reply.url().toString()
+        if "restapi.amap.com" not in u and "api.maptiler.com" not in u:
             return
-        data = reply.readAll()
+        data = bytes(reply.readAll())
         err = reply.error()
         reply.deleteLater()
         import json
         try:
-            obj = json.loads(bytes(data))
+            obj = json.loads(data)
         except (ValueError, TypeError):
             obj = {}
+        if self._source == "amap":
+            pois = self._parse_amap(obj, err)
+        else:
+            pois = self._parse_maptiler(obj, err)
+        self.results.emit(pois)
+
+    def _parse_amap(self, obj: dict, err) -> list:
         if err != QNetworkReply.NetworkError.NoError and not obj.get("pois"):
             info = obj.get("info", t("网络错误", "Network error"))
             self.failed.emit(t(f"搜索失败：{info}", f"Search failed: {info}"))
-            return
+            return []
         if obj.get("status") != "1":
             msg = obj.get("info", t("搜索失败", "Search failed"))
+            s_code = str(obj.get("infocode", ""))
             if "INVALID_USER_KEY" in str(msg):
                 msg = t("高德Key无效，请在设置页检查",
                         "Invalid Amap key, please check it in Settings")
+            elif "USERKEY_PLAT_NOMATCH" in str(msg) or s_code == "10009":
+                # 最常见误区: 填了JS API/Android类型的Key——地点搜索REST
+                # 接口只认「Web服务」类型Key, 服务端按类型校验不通用
+                msg = t(
+                    "Key类型不匹配：地点搜索需要「Web服务」类型Key"
+                    "（高德控制台→我的应用→添加Key→服务平台选Web服务）",
+                    "Key type mismatch: place search needs a "
+                    "\"Web Service\" type key (Amap console → My apps → "
+                    "Add key → platform: Web Service)")
             self.failed.emit(t(f"搜索失败：{msg}", f"Search failed: {msg}"))
-            return
-        self.results.emit(obj.get("pois", []))
+            return []
+        return [dict(p, wgs=False) for p in obj.get("pois", [])]
+
+    def _parse_maptiler(self, obj: dict, err) -> list:
+        if err != QNetworkReply.NetworkError.NoError:
+            self.failed.emit(t("搜索失败：网络错误",
+                               "Search failed: network error"))
+            return []
+        if obj.get("message"):
+            self.failed.emit(t(f"搜索失败：{obj['message']}",
+                               f"Search failed: {obj['message']}"))
+            return []
+        pois = []
+        for f in (obj.get("features") or [])[:8]:
+            try:
+                lon, lat = f["geometry"]["coordinates"][:2]
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            # 名称在feature顶层(text/place_name), 不在properties
+            props = f.get("properties") or {}
+            name = (f.get("text") or props.get("text")
+                    or f.get("place_name") or props.get("place_name")
+                    or props.get("name") or "")
+            if not name:
+                continue
+            pois.append({"name": name, "location": f"{lon},{lat}",
+                         "addr": f.get("place_name") or props.get("place_name")
+                         or name,
+                         "wgs": True})
+        return pois
 
 
 def poi_location_wgs84(p: dict) -> tuple[float, float] | None:
-    """POI dict → (lat, lon) WGS84; 解析失败返回None。"""
+    """poi dict → (lat, lon) WGS84; 解析失败返回None。
+
+    高德结果为GCJ-02需纠偏; MapTiler结果本来就是WGS84, 标wgs=True直过。"""
     try:
         lon_s, lat_s = p["location"].split(",")
         g_lat, g_lon = float(lat_s), float(lon_s)
     except (KeyError, ValueError):
         return None
+    if p.get("wgs"):
+        return g_lat, g_lon
     return gcj02_to_wgs84(g_lat, g_lon)
 
 
@@ -153,6 +221,12 @@ class SpotEditDialog(QDialog):
         form.addRow(pick_row)
 
         btns = QHBoxLayout()
+        if spot:                      # 编辑态: 删除入口(用户要求随处可删)
+            b_del = QPushButton(t("删除鸟点", "Delete spot"))
+            b_del.setCursor(Qt.PointingHandCursor)
+            b_del.clicked.connect(self._delete)
+            btns.addWidget(b_del)
+        btns.addStretch(1)
         ok = QPushButton(t("保存", "Save"))
         ok.setObjectName("Primary")
         ok.setCursor(Qt.PointingHandCursor)
@@ -160,10 +234,22 @@ class SpotEditDialog(QDialog):
         cancel = QPushButton(t("取消", "Cancel"))
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.clicked.connect(self.reject)
-        btns.addStretch(1)
         btns.addWidget(cancel)
         btns.addWidget(ok)
         form.addRow(btns)
+
+    def _delete(self):
+        if not self.spot:
+            return
+        r = QMessageBox.question(
+            self, t("删除鸟点", "Delete spot"),
+            t(f"删除「{self.spot['name']}」？\n照片不会被删除，只是解除挂载。",
+              f"Delete “{self.spot['name']}”?\nPhotos will not be deleted, "
+              "only unlinked from this spot."))
+        if r == QMessageBox.Yes:
+            self.lib.delete_spot(self.spot["id"])
+            self.accept()
+            self.spot = None          # 供调用方识别"已删除"而非"保存"
 
     def _pick_on_map(self):
         try:
@@ -207,6 +293,7 @@ class MapPickDialog(QDialog):
         self.setWindowTitle(t("在地图上选点", "Pick location on map"))
         self.resize(960, 680)
         self.picked_wgs84: tuple[float, float] | None = None
+        self.picked_name: str | None = None   # 地名上下文(搜过POI则继承其名)
         v = QVBoxLayout(self)
         v.setContentsMargins(14, 14, 14, 14)
         v.setSpacing(8)
@@ -228,7 +315,13 @@ class MapPickDialog(QDialog):
 
         self._searcher = PoiSearcher(lib, self)
         self._searcher.results.connect(self._on_pois)
-        self._searcher.failed.connect(lambda m: self.chip.setText(m) if hasattr(self, "chip") else None)
+        # 搜索失败显性提示(默认源=MapTiler作者Key开箱可用, 自填高德更准)
+        self.search_warn = QLabel()
+        self.search_warn.setWordWrap(True)
+        self.search_warn.setStyleSheet(
+            f"color:{theme.RED};font-size:12px;background:transparent;")
+        self.search_warn.hide()
+        self._searcher.failed.connect(self._on_search_failed)
         self._pois: list[dict] = []
         self.search_edit.textChanged.connect(self._searcher.search)
         self.search_edit.returnPressed.connect(lambda: self._goto_poi(0))
@@ -272,13 +365,19 @@ class MapPickDialog(QDialog):
                 self.amap.fit_wgs84(pts)
         self.amap.set_pick(True)
 
+    def _on_search_failed(self, msg: str):
+        self.search_warn.setText(msg)
+        self.search_warn.show()
+
     def _on_pois(self, pois: list):
+        self.search_warn.hide()
         self._pois = pois
         self.result_combo.blockSignals(True)
         self.result_combo.clear()
         for p in pois:
-            addr = ((p.get("pname") or "") + (p.get("cityname") or "")
-                    + (p.get("adname") or ""))
+            addr = p.get("addr") or ((p.get("pname") or "")
+                                     + (p.get("cityname") or "")
+                                     + (p.get("adname") or ""))
             self.result_combo.addItem(f"{p.get('name')}  ·  {addr}" if addr
                                       else p.get("name", ""))
         self.result_combo.blockSignals(False)
@@ -294,6 +393,9 @@ class MapPickDialog(QDialog):
             return
         self.amap.focus_wgs84(w[0], w[1], 15)
         name = self._pois[idx].get("name")
+        # 记住地名上下文: 之后点的精确位置直接继承POI名作鸟点名
+        # (用户要的是"位置", 名字能自动就自动——搜过POI就不用起名)
+        self.picked_name = name or None
         self.chip.setText(t(
             f"已跳到「{name}」，点按选精确位置",
             f"Jumped to “{name}”, click to pick the exact spot"))
@@ -466,6 +568,12 @@ class SpotDetailDialog(QDialog):
     def _edit(self):
         dlg = SpotEditDialog(self.lib, self.lib.spot_info(self.spot_id), self)
         if dlg.exec():
+            if self.lib.spot_info(self.spot_id) is None:
+                # 编辑对话框里删掉了本鸟点: 详情窗随之关闭
+                self.deleted = True
+                self.win.library_changed.emit()
+                self.reject()
+                return
             self._reload()
             self.win.library_changed.emit()
 
@@ -701,13 +809,36 @@ class MapPage(QWidget):
         coord.setStyleSheet(f"font-size:12px;color:{theme.LABEL_3};background:transparent;")
         v.addWidget(coord)
         card.setCursor(Qt.PointingHandCursor)
+        card.setToolTip(t("单击定位到地图 · 双击重命名", "Click to locate · Double-click to rename"))
         card.mousePressEvent = lambda e, sid=s["id"]: self._locate(sid)
+        card.mouseDoubleClickEvent = lambda e, sid=s["id"], \
+            nm=s["name"]: self._rename_spot(sid, nm)
         return card
+
+    def _rename_spot(self, spot_id: int, old: str):
+        """鸟点列表卡片双击=重命名(2026-10-31用户要求: 名字得可以直接编辑)。"""
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, t("重命名鸟点", "Rename spot"),
+            t(f"鸟点名称（原：{old}）：", f"Spot name (was: {old}): "),
+            text=old)
+        if not (ok and name.strip() and name.strip() != old):
+            return
+        self.lib.update_spot(spot_id, name=name.strip())
+        self.refresh()
+        self.win.library_changed.emit()
 
     # ---- 定位/弹卡 ----
     def _locate(self, spot_id: int):
         s = self._spots.get(spot_id)
-        if not s or s["lat"] is None:
+        if not s:
+            return
+        if s["lat"] is None:
+            # 无坐标鸟点静默无反应曾是迷惑源: 直接带去编辑框补选位置
+            dlg = SpotEditDialog(self.lib, self.lib.spot_info(spot_id), self)
+            if dlg.exec():
+                self.refresh()
+                self.win.library_changed.emit()
             return
         self.amap.focus_wgs84(s["lat"], s["lon"], 15)
         self._show_popup(spot_id)
@@ -722,25 +853,27 @@ class MapPage(QWidget):
         if not s:
             return
         self._popup_spot_id = spot_id
-        # 复用已有布局并清空内容(旧写法while layout():在清空后takeAt(0)
-        # 返回None直接AttributeError, 弹卡停留在半清空状态→空白卡片遮挡)
-        lay = self.popup.layout()
-        if lay is None:
-            lay = QVBoxLayout(self.popup)
-        else:
-            while lay.count():
-                it = lay.takeAt(0)
-                w = it.widget()
-                if w:
-                    w.hide()
-                    w.setParent(None)   # 立即从弹卡摘除, 不等延迟删除
-                    w.deleteLater()
+        # 每次重建全新弹卡(旧路=清空复用布局): takeAt清空后布局sizeHint
+        # 会永久塌缩到只剩边距(~26px), 第二个鸟点起弹卡缩成细条=左下角
+        # "不显示"; invalidate/activate/行改QWidget容器均救不回(Qt布局
+        # 脏标记在已可见控件上的怪癖), 重建=每次都走首次显示的稳定路径。
+        if self.popup is not None:
+            self.popup.hide()
+            self.popup.setParent(None)
+            self.popup.deleteLater()
+        self.popup = QFrame(self.map_holder)
+        self.popup.setObjectName("Card")
+        self.popup.setFixedWidth(300)
+        lay = QVBoxLayout(self.popup)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(6)
         name_lab = QLabel(s["name"])
         name_lab.setStyleSheet(f"font-size:15px;font-weight:700;color:{theme.LABEL};"
                                "background:transparent;")
         name_lab.setWordWrap(True)
+        name_lab.setToolTip(t("双击重命名", "Double-click to rename"))
+        name_lab.mouseDoubleClickEvent = lambda e, sid=spot_id, \
+            nm=s["name"]: self._rename_spot(sid, nm)
         lay.addWidget(name_lab)
         bits = [t(f"{s['n_photos']} 张照片", f"{s['n_photos']} photos"),
                 t(f"{s['n_species']} 种鸟", f"{s['n_species']} species")]
@@ -781,6 +914,10 @@ class MapPage(QWidget):
         b_edit.setCursor(Qt.PointingHandCursor)
         b_edit.clicked.connect(lambda: self._edit_spot(spot_id))
         btns.addWidget(b_edit)
+        b_del = QPushButton(t("删除", "Delete"))
+        b_del.setCursor(Qt.PointingHandCursor)
+        b_del.clicked.connect(lambda: self._delete_spot_quick(spot_id))
+        btns.addWidget(b_del)
         b_close = QPushButton("×")
         b_close.setFixedWidth(28)
         b_close.setCursor(Qt.PointingHandCursor)
@@ -795,6 +932,23 @@ class MapPage(QWidget):
     def _hide_popup(self):
         self._popup_spot_id = None
         self.popup.setVisible(False)
+
+    def _delete_spot_quick(self, spot_id: int):
+        """弹卡直删(用户要求: 鸟点要能删除)。照片只解除挂载, 绝不删除。"""
+        sp = self.lib.spot_info(spot_id)
+        if not sp:
+            return
+        from PySide6.QtWidgets import QMessageBox
+        r = QMessageBox.question(
+            self, t("删除鸟点", "Delete spot"),
+            t(f"删除「{sp['name']}」？\n照片不会被删除，只是解除挂载。",
+              f"Delete “{sp['name']}”?\nPhotos will not be deleted, "
+              "only unlinked from this spot."))
+        if r == QMessageBox.Yes:
+            self.lib.delete_spot(spot_id)
+            self._hide_popup()
+            self.refresh()
+            self.win.library_changed.emit()
 
     def _hash_of(self, photo_id: int) -> str:
         row = self.lib.conn.execute(

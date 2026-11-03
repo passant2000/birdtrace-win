@@ -139,6 +139,14 @@ class ReviewPage(QWidget):
         ok.clicked.connect(lambda _=False, it=item, cb=combo: self._confirm(it, cb))
         h.addWidget(ok)
 
+        notbird = QPushButton(t("不是鸟", "Not a bird"))
+        notbird.setCursor(Qt.PointingHandCursor)
+        notbird.setToolTip(t("这张里没有鸟（如蛇/其他动物误检）——移到「未识别」",
+                             "No bird in this photo (e.g. a snake or other "
+                             "animal) — move it to \"Unidentified\""))
+        notbird.clicked.connect(lambda _=False, it=item: self._not_bird(it))
+        h.addWidget(notbird)
+
         view = QPushButton(t("查看", "View"))
         view.setCursor(Qt.PointingHandCursor)
         view.clicked.connect(lambda _=False, it=item: self._view(it))
@@ -149,6 +157,20 @@ class ReviewPage(QWidget):
         code = combo.currentData()
         if code:
             self.lib.set_confirmed(item["record_id"], code)
+            self.refresh()
+            self.win.library_changed.emit()
+
+    def _not_bird(self, item: dict):
+        from PySide6.QtWidgets import QMessageBox
+        r = QMessageBox.question(
+            self, t("移到「未识别」", "Move to Unidentified"),
+            t("确认这张照片里没有鸟？\n它会从「待复核」移到「未识别」，"
+              "以后仍可重新识别或手工标注。",
+              "No bird in this photo?\nIt will move from \"Pending review\" "
+              "to \"Unidentified\"; you can still re-identify or annotate "
+              "it later."))
+        if r == QMessageBox.StandardButton.Yes:
+            self.lib.mark_not_bird(item["photo_id"])
             self.refresh()
             self.win.library_changed.emit()
 

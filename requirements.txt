@@ -5,3 +5,4 @@ pillow
 pillow-heif
 pypinyin
 babel
+rawpy>=0.27

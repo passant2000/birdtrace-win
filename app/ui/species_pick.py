@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QPushButton,
                                QVBoxLayout)
@@ -33,12 +33,18 @@ class SpeciesPickDialog(QDialog):
             "中文名 / 拼音 / 拼音首字母(ysq) / 学名 / 英文名…",
             "Chinese / pinyin / initials (ysq) / scientific / English…"))
         self.search.textChanged.connect(lambda _t: self._filter())
+        # 键盘流(2026-10-31用户要求): 输入框内↑↓滚列表、回车确认——
+        # 焦点在搜索框时列表收不到方向键, 必须在输入框侧接管转发。
+        self.search.installEventFilter(self)
         v.addWidget(self.search)
 
         self.listw = QListWidget()
         self.listw.setUniformItemSizes(True)
         self.listw.itemDoubleClicked.connect(lambda _it: self._ok())
         self.listw.itemActivated.connect(lambda _it: self._ok())
+        # 选中变化同步确定键——旧版_sync_ok无任何调用点, 确定键永远禁用,
+        # "只能双击"的根因之一
+        self.listw.itemSelectionChanged.connect(self._sync_ok)
         v.addWidget(self.listw, 1)
 
         self.hint = QLabel("")
@@ -65,6 +71,28 @@ class SpeciesPickDialog(QDialog):
         self._load_all()
         self.search.setFocus()
 
+    # ---- 键盘流 ----
+    def eventFilter(self, obj, ev):
+        """搜索框内: ↑↓(及PgUp/PgDn)滚动候选, 回车=确认当前选中。"""
+        if obj is self.search and ev.type() == QEvent.KeyPress:
+            k = ev.key()
+            n = self.listw.count()
+            if k in (Qt.Key_Down, Qt.Key_Up, Qt.Key_PageDown, Qt.Key_PageUp):
+                if n == 0:
+                    return True
+                row = self.listw.currentRow()
+                step = 1 if k in (Qt.Key_Down, Qt.Key_Up) else 10
+                if k in (Qt.Key_Down, Qt.Key_PageDown):
+                    row = min(n - 1, row + step)
+                else:
+                    row = max(0, row - step)
+                self.listw.setCurrentRow(row)
+                return True
+            if k in (Qt.Key_Return, Qt.Key_Enter):
+                self._ok()
+                return True
+        return super().eventFilter(obj, ev)
+
     # ---- 数据 ----
     def _load_all(self):
         self._all: list[tuple[str, str]] = []   # (展示文本, code)
@@ -83,9 +111,9 @@ class SpeciesPickDialog(QDialog):
                             r["family_cn"] or ""]).lower()
             self._all.append((text, r["code"], key))
         self._render([(t, c) for t, c, _k in self._all])
-        self.hint.setText(t(f"全库 {len(self._all)} 种 · 输入即过滤，双击直接选定",
+        self.hint.setText(t(f"全库 {len(self._all)} 种 · 输入即过滤 · ↑↓选择 · 回车/确定 选定",
                             f"{len(self._all)} species · type to filter, "
-                            "double-click to select"))
+                            "↑↓ pick, Enter/OK confirm"))
 
     def _render(self, items):
         self.listw.clear()
@@ -95,15 +123,16 @@ class SpeciesPickDialog(QDialog):
             self.listw.addItem(it)
         if items:
             self.listw.setCurrentRow(0)
+        self._sync_ok()
 
     def _filter(self):
         q = self.search.text().strip().lower()
         if not q:
             self._render([(t, c) for t, c, _k in self._all])
             self.hint.setText(t(
-                f"全库 {len(self._all)} 种 · 输入即过滤，双击直接选定",
+                f"全库 {len(self._all)} 种 · 输入即过滤 · ↑↓选择 · 回车/确定 选定",
                 f"{len(self._all)} species · type to filter, "
-                "double-click to select"))
+                "↑↓ pick, Enter/OK confirm"))
             return
         hits = [(t, c) for t, c, k in self._all if q in k]
         cap = 300

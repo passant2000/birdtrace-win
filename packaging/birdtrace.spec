@@ -13,6 +13,7 @@ def _data(rel):
 datas = []
 binaries = collect_dynamic_libs("pillow_heif")
 hiddenimports = collect_submodules("pypinyin")
+hiddenimports += ["rawpy"]  # RAW解码(函数内懒import, 显式声明防漏收)
 
 a = Analysis(
     [os.path.join(ROOT, "app_main.py")],

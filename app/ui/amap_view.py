@@ -21,18 +21,34 @@ from PySide6.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 
 from ..core.gcj02 import gcj02_to_wgs84, wgs84_to_gcj02
 
-# 高德官方JS引擎与Web服务(POI搜索)的Key不再内置(个人Key不随开源发布):
-# 需要高德官方引擎/地名搜索的用户在设置页填自己的Key;
-# 默认引擎maplibre_free(免Key高德底图)与maptiler(团队Key)不受影响。
-DEFAULT_JS_KEY = ""
-DEFAULT_JS_SECRET = ""
-DEFAULT_WEB_KEY = ""
-# MapTiler Key: 与birdtrace安卓版同款(开源MapLibre引擎+MapTiler矢量底图,
-# WGS84坐标无GCJ纠偏; 模型作者团队的Key, 用户可在设置页换自己的免费Key)
+# 2026-10-31用户指示: 内置其三个高德Key(Web服务/JS API/安全密钥)但全部
+# 混淆存放(异或+base64, 防对exe明文grep; 非对抗逆向的安全加密), 设置页
+# 不回显。0.5.4包曾误带明文三Key已于2026-10-29移除, 本轮以混淆形式内置。
+# 无Web服务Key时POI回退MapTiler, 其中文POI库缺世纪公园/滨江森林公园
+# (2026-10-31实测, 5080机POI搜不到的根因)。
+
+
+def _dec(s: str) -> str:
+    import base64
+    obf = base64.b64decode(s)
+    mask = b"BirdTraceWin-POI-2026"
+    return bytes(a ^ mask[i % len(mask)]
+                 for i, a in enumerate(obf)).decode("ascii")
+
+
+DEFAULT_WEB_KEY = _dec("JwhHAGVLUQdcb1AKGzJ3ehlUVVQAdw1HAWBLAlYHb10=")
+DEFAULT_JS_KEY = _dec("J18UUGIWUQFWZFhYT2h9cUlTB1cEdF9EAmBFWQBVNgs=")
+DEFAULT_JS_SECRET = _dec("ew9AVGZGWFEDM1FYFGJ5KkhRBgUFdAxAVmEQAwBVYFg=")
+
+# 地名搜索(POI)默认走 MapTiler Geocoding, 用原作者团队Key——与安卓
+# 同源(安卓dex里就是这个Key); 用量计在作者账户, 提示用户克制使用。
+# 用户在设置页自填高德「Web服务」Key时优先走高德(中国POI更全)。
+# 注意: MapTiler底图引擎因政治合规已移除, 此Key只用于地名搜索。
 DEFAULT_MAPTILER_KEY = "QMZGF8IiSPfyUQeVTOEQ"
 
 # MapLibre版页面(本地maplibre-gl.js + MapTiler style, 桥接口与高德版同构)
-_HTML_MAPLIBRE = """<!doctype html>  # i18n:ok
+_HTML_MAPLIBRE = """<!--# i18n:ok: 页面内嵌中文占位文案, 浏览器渲染按数据豁免-->
+<!doctype html>
 <html><head><meta charset="utf-8">
 <link rel="stylesheet" href="maplibre-gl.css">
 <style>
@@ -147,7 +163,8 @@ function apiSetPick(on){ pickMode=on;
 """
 
 
-_HTML = """<!doctype html>  # i18n:ok
+_HTML = """<!--# i18n:ok: 页面内嵌中文占位文案, 浏览器渲染按数据豁免-->
+<!doctype html>
 <html><head><meta charset="utf-8">
 <style>
   html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;
@@ -345,22 +362,19 @@ class AmapView(QWidget):
             self.js(f"apiSetSpots({payload},true)")
 
     # ---- 页面装载 ----
-    # 引擎枚举: maplibre_free(默认, 高德栅格瓦片零Key) / maptiler(全球矢量,
-    # 团队Key) / amap(高德官方JS, 用户Key); 旧值 maplibre 兼容映射为 maptiler
+    # 引擎枚举: maplibre_free(默认, 高德栅格瓦片零Key) / amap(高德官方JS,
+    # 用户Key)。旧值 maplibre/maptiler(已移除的MapTiler引擎, 政治合规)
+    # 兼容映射为 maplibre_free
     def _effective_conf(self) -> tuple[str, str, str]:
         """(engine, key, secret) —— 引擎与Key的生效配置(含内置缺省)。"""
         engine = self.lib.get_setting("map_engine", "maplibre_free")
-        if engine == "maplibre":
-            engine = "maptiler"
-        if engine not in ("maplibre_free", "maptiler", "amap"):
+        if engine not in ("maplibre_free", "amap"):
             engine = "maplibre_free"
         if engine == "maplibre_free":
             return engine, "", ""      # 高德瓦片不需要Key
-        if engine == "maptiler":
-            key = self.lib.get_setting("maptiler_key", "") or DEFAULT_MAPTILER_KEY
-            return engine, key, ""
-        key = self.lib.get_setting("map_js_key", "")
-        secret = self.lib.get_setting("map_js_secret", "")
+        # 自填优先, 缺省=内置Key(2026-10-31用户提供JS Key+安全密钥内置)
+        key = self.lib.get_setting("map_js_key", "") or DEFAULT_JS_KEY
+        secret = self.lib.get_setting("map_js_secret", "") or DEFAULT_JS_SECRET
         return engine, key, secret
 
     # MapLibre style: 高德栅格瓦片(免Key, GCJ-02坐标系, 中文标注, 国内快)
@@ -390,22 +404,17 @@ class AmapView(QWidget):
             self.stack.setCurrentWidget(self.placeholder)
             return
         qc = _qwebchannel_js()
-        if self._engine in ("maplibre_free", "maptiler"):
+        if self._engine == "maplibre_free":
             from ..paths import assets_dir
             map_js = (assets_dir() / "map" / "maplibre-gl.js").as_uri()
             map_css = (assets_dir() / "map" / "maplibre-gl.css").as_uri()
-            if self._engine == "maplibre_free":
-                style_js = self._AMAP_TILES_STYLE  # i18n:ok
-            else:
-                style_js = (f"'https://api.maptiler.com/maps/streets-v2/style.json"
-                            f"?key={self._key}&language=zh'")
+            style_js = self._AMAP_TILES_STYLE  # i18n:ok
             html = (_HTML_MAPLIBRE.replace("__STYLE__", style_js)
                      .replace("__QWEBCHANNEL__", qc)
                      .replace("href=\"maplibre-gl.css\"", f"href=\"{map_css}\"")
                      .replace("src=\"maplibre-gl.js\"", f"src=\"{map_js}\""))
             html_path = self.lib.root / "maplibre.html"
-            label = t("开源地图（免Key高德底图）", "Open map (keyless Amap tiles)") \
-                if self._engine == "maplibre_free" else "MapTiler"
+            label = t("开源地图（免Key高德底图）", "Open map (keyless Amap tiles)")
             self.placeholder.setText(
                 t(f"地图加载中…（{label}，需联网）",
                   f"Loading map… ({label}, internet required)"))
@@ -470,11 +479,11 @@ class AmapView(QWidget):
         return self._engine in ("amap", "maplibre_free")
 
     def _to_map(self, lat: float, lon: float) -> tuple[float, float]:
-        """WGS84 → 引擎世界坐标(高德系=GCJ02纠偏; MapTiler=WGS84直传)。"""
-        return wgs84_to_gcj02(lat, lon) if self._is_gcj else (lat, lon)
+        """WGS84 → 引擎世界坐标(两个引擎都是高德系=GCJ02纠偏)。"""
+        return wgs84_to_gcj02(lat, lon)
 
     def _from_map(self, lat: float, lon: float) -> tuple[float, float]:
-        return gcj02_to_wgs84(lat, lon) if self._is_gcj else (lat, lon)
+        return gcj02_to_wgs84(lat, lon)
 
     def set_spots(self, spots: list[dict], fit: bool = False):
         """spots: [{id,name,lat,lon,thumb(dataURL|None)}], 坐标WGS84。"""

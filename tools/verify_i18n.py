@@ -157,6 +157,7 @@ def main():
     lib.conn.commit()
     sid = lib.create_spot("奥林匹克森林公园", 40.002, 116.39, "测试")
     lib.set_photo_spot(1, sid)
+    lib.set_setting("default_region", "CN-BJ")   # 图鉴页当月/罕见度徽章+热力表pin行需要
     print(f"测试库就绪: 10张/3种/1鸟点")
 
     lib_data = data_strings(lib)
@@ -194,6 +195,31 @@ def main():
         check(not bad, "页面[species详情] " + ("无中文残留" if not bad
                                               else f"残留: {bad[:4]}"))
         win.pages["species"].grab().save(str(shots / f"i18n_{lang}_species_detail.png"))
+
+        # 图鉴标签页(全年分布热力表/最美照片/徽章): 正文属数据内容不翻译,
+        # 把该种图鉴字段按渲染变换(- → •, \n → <br>)计入豁免后整页扫
+        from app.core.birddex import get_dex
+        from app.ui.species_page import DEX_FIELDS
+        d = get_dex().detail(lib.species_info(code)["sci"])
+        dex_data = []
+        if d:
+            for key, _zl, _el in DEX_FIELDS:
+                zh = d[key]["zh"]
+                if not zh:
+                    continue
+                text = zh.replace("\n- ", "\n• ").replace("- ", "• ", 1) \
+                    if zh.startswith("- ") else zh.replace("\n- ", "\n• ")
+                dex_data.append(text.replace("\n", "<br>"))
+        win.pages["species"]._tab_changed(1)
+        app.processEvents()
+        texts = collect_texts(win.pages["species"])
+        bad = zh_residue(texts, lib_data + dex_data) if lang == "en" else []
+        residues[f"{lang}:species_dex"] = bad
+        check(not bad, "页面[species图鉴] " + ("无中文残留" if not bad
+                                              else f"残留: {bad[:4]}"))
+        win.pages["species"].grab().save(str(shots / f"i18n_{lang}_species_dex.png"))
+        win.pages["species"]._tab_changed(0)   # 还原概览, 不影响后续流程
+        app.processEvents()
 
         # 地图页(WebEngine stub, 避免拉起真实引擎)
         import app.ui.amap_view as amv
@@ -273,6 +299,48 @@ def main():
                 dlgs.append(("speciespick", SpeciesPickDialog(lib)))
             except Exception as e:
                 check(False, f"选鸟种对话框可构造 ({e})")
+            try:
+                from app.ui.distribution_map import DistributionMapDialog
+                # 只构造+扫Qt侧文案(标题/说明), WebEngine内容不参与扫描
+                dlgs.append(("distributionmap",
+                             DistributionMapDialog(lib, win, code)))
+            except Exception as e:
+                check(False, f"分布地图对话框可构造 ({e})")
+            try:
+                from PySide6.QtCore import QThread, Signal
+                from app.ui import migration_view as mv
+                # 惰性worker桩: 构造即下载(目录2.7MB+包96MB)且离线会误报,
+                # i18n只扫Qt侧文案, 用不启动的桩替换
+                class _StubWorker(QThread):
+                    progress = Signal(str, int, int)
+                    decoded = Signal(dict, dict)
+                    failed = Signal(object)
+
+                    def __init__(self, *a, **kw):
+                        super().__init__()
+
+                    def start(self, *a):
+                        pass
+                real_worker = mv._DownloadWorker
+                mv._DownloadWorker = _StubWorker
+                try:
+                    dlgs.append(("migrationmap",
+                                 mv.MigrationMapDialog(lib, win, code)))
+                finally:
+                    mv._DownloadWorker = real_worker
+            except Exception as e:
+                check(False, f"迁徙地图对话框可构造 ({e})")
+            try:
+                # 临时识别: 构造不拉起worker(懒加载), 直接构造
+                from app.ui.temp_id_dialog import TempIdDialog
+
+                class _W:            # win桩(只取assets, 非QWidget不传父)
+                    assets = __import__("pathlib").Path(
+                        __import__("app.paths", fromlist=["assets_dir"])
+                        .assets_dir())
+                dlgs.append(("tempid", TempIdDialog(lib, _W())))
+            except Exception as e:
+                check(False, f"临时识别对话框可构造 ({e})")
             for name, d in dlgs:
                 d.resize(900, 640)
                 d.show()

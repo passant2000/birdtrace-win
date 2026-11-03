@@ -146,10 +146,13 @@ class ReboxDialog(QDialog):
             return
         recs = res.get("records") or []
         if not recs:
-            self._show_status(t("这个框里没认出鸟（可能框偏了或框到背景）。\n"
-                                "请重新框一次。",
+            self._show_status(t("这个框里没认出鸟（可能框偏了/框到背景，"
+                                "或这个地区的名录里没有该鸟种）。\n"
+                                "请把框对准鸟身再试一次。",
                                 "No bird recognized in this box (it may be off "
-                                "target or on background).\nPlease try again."))
+                                "target, on background, or the species is not "
+                                "on the regional list).\nTry framing the bird "
+                                "more tightly."))
             self._enter_draw()
             return
         self._last_rec = recs[0]

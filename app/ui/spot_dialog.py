@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """鸟点挂载对话框。
 
-搜索是"二合一": 上半是匹配的已有鸟点(精确位置), 下半是高德POI(粗略位置)。
-选中POI直接按其位置建鸟点(同名复用), 想精修再到地图上选点。
+搜索是"二合一": 上半是匹配的已有鸟点(精确位置), 下半是地名POI(粗略位置,
+默认MapTiler作者Key, 自填高德Key更准)。选中POI直接按其位置建鸟点
+(同名复用), 想精修再到地图上选点。
 - SpotPickDialog: 单张照片挂载
 - BatchSpotDialog: 导入完成后整批挂载
 回车/双击=应用当前项; 单击只选中(不会误跳地图)。
@@ -22,13 +23,31 @@ from .map_page import PoiSearcher, MapPickDialog, poi_location_wgs84
 SEP = "__sep__"  # 旧标记常量(未用)
 
 
+def _poi_coords(poi: dict) -> tuple[float, float] | None:
+    """POI数据 → (lat, lon) WGS84。兼容两种形状: 原始poi dict(location字符串,
+    高德GCJ/MapTiler WGS)与SpotSearchList信号载荷(坐标已解析在lat/lon,
+    原始dict嵌在"poi"键下)。历史bug: 只认location键, 信号载荷静默丢坐标。"""
+    raw = poi.get("poi") if isinstance(poi.get("poi"), dict) else None
+    w = poi_location_wgs84(raw if raw is not None else poi)
+    if w is None and poi.get("lat") is not None and poi.get("lon") is not None:
+        try:
+            w = (float(poi["lat"]), float(poi["lon"]))
+        except (TypeError, ValueError):
+            w = None
+    return w
+
+
 def find_or_create_spot_by_poi(lib, poi: dict) -> tuple[int, str, bool]:
-    """按POI建鸟点(粗略位置); 同名鸟点已存在则复用。返回(id, 名称, 是否新建)。"""
+    """按POI建鸟点(粗略位置); 同名鸟点已存在则复用——旧点无坐标而本次
+    有坐标时自动补上(修复历史无坐标点)。返回(id, 名称, 是否新建)。"""
     name = (poi.get("name") or "").strip() or t("未命名鸟点", "Unnamed spot")
-    row = lib.conn.execute("SELECT id, name FROM spots WHERE name=?", (name,)).fetchone()
+    row = lib.conn.execute("SELECT id, name, lat FROM spots WHERE name=?",
+                           (name,)).fetchone()
+    w = _poi_coords(poi)
     if row:
+        if w and row["lat"] is None:
+            lib.update_spot(row["id"], lat=w[0], lon=w[1])
         return row["id"], row["name"], False
-    w = poi_location_wgs84(poi)
     if w:
         sid = lib.create_spot(name, w[0], w[1])
     else:
@@ -37,10 +56,10 @@ def find_or_create_spot_by_poi(lib, poi: dict) -> tuple[int, str, bool]:
 
 
 class SpotSearchList(QWidget):
-    """鸟点+高德POI 二合一搜索列表。
+    """鸟点+地名POI 二合一搜索列表。
 
     spot_chosen(id, name) — 选中已有鸟点
-    poi_chosen({name,lat,lon,poi}) — 选中高德地点(WGS84)
+    poi_chosen({name,lat,lon,poi}) — 选中地名(WGS84)
     """
     spot_chosen = Signal(int, str)
     poi_chosen = Signal(dict)
@@ -118,8 +137,8 @@ class SpotSearchList(QWidget):
             return
         if n == 0:
             tip = QListWidgetItem(t(
-                "没有匹配的鸟点，正在搜高德地点…",
-                "No matching spots; searching AMap places…"))
+                "没有匹配的鸟点，正在搜地名…",
+                "No matching spots; searching places…"))
             tip.setFlags(Qt.NoItemFlags)
             self.listw.addItem(tip)
         self._searcher.search(self.search.text().strip())
@@ -143,14 +162,15 @@ class SpotSearchList(QWidget):
                 break
         if pois:
             sep = QListWidgetItem(t(
-                "── 高德地点（粗略位置，选中即建鸟点）──",
-                "── AMap places (approximate; selecting creates a spot) ──"))
+                "── 搜到的地点（粗略位置，选中即建鸟点）──",
+                "── Places (approximate; selecting creates a spot) ──"))
             sep.setFlags(Qt.NoItemFlags)
             sep.setData(Qt.UserRole, {"kind": "sep"})
             self.listw.addItem(sep)
             for p in pois:
-                addr = ((p.get("pname") or "") + (p.get("cityname") or "")
-                        + (p.get("adname") or ""))
+                addr = p.get("addr") or ((p.get("pname") or "")
+                                         + (p.get("cityname") or "")
+                                         + (p.get("adname") or ""))
                 label = f"🔎 {p.get('name')}  ·  {addr}" if addr \
                     else f"🔎 {p.get('name')}"
                 it = QListWidgetItem(label)
@@ -181,18 +201,22 @@ class SpotSearchList(QWidget):
 
 
 def _create_spot_via_map(lib, parent) -> int | None:
-    """地图选点 → 输入名称 → 建点; 返回新鸟点id或None。"""
+    """地图选点 → 零输入建点: 名字优先用选点前搜到的POI名(点了公园的
+    角落=叫公园名), 完全没搜过才退回坐标名; 同名点已存在则复用。
+    返回鸟点id或None。"""
     dlg = MapPickDialog(lib, None, None, parent)
     if not (dlg.exec() and dlg.picked_wgs84):
         return None
     lat, lon = dlg.picked_wgs84
-    name, ok = QInputDialog.getText(
-        parent, t("新建鸟点", "New spot"),
-        t(f"鸟点名称（GPS {lat:.4f}, {lon:.4f}）：",
-          f"Spot name (GPS {lat:.4f}, {lon:.4f}): "))
-    if not (ok and name.strip()):
-        return None
-    return lib.create_spot(name.strip(), lat, lon)
+    name = dlg.picked_name or t(f"鸟点 {lat:.4f}, {lon:.4f}",
+                                f"Spot {lat:.4f}, {lon:.4f}")
+    row = lib.conn.execute("SELECT id, lat FROM spots WHERE name=?",
+                           (name,)).fetchone()
+    if row:
+        if row["lat"] is None:   # 复用同名旧点: 顺带补上缺失的坐标
+            lib.update_spot(row["id"], lat=lat, lon=lon)
+        return row["id"]
+    return lib.create_spot(name, lat, lon)
 
 
 class SpotPickDialog(QDialog):

@@ -231,6 +231,113 @@ def main():
     finally:
         amv.AmapView = real_amap
 
+    # ============ bug3: 返回列表恢复滚动位置 ============
+    print("\n[bug3] 鸟种库 · 返回列表恢复滚动位置")
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QScrollArea
+    # 39个新鸟种挂到既有照片 → 列表40卡(CARD_COLS=5, 8行)可滚动
+    extra = [r["code"] for r in lib.conn.execute(
+        "SELECT code FROM species WHERE code != 'mallar3' LIMIT 39")]
+    pid0 = lib.conn.execute("SELECT id FROM photos LIMIT 1").fetchone()[0]
+    for c in extra:
+        lib.add_records(pid0, [{"species_code": c, "confidence": 0.9,
+                                "source": "verify"}])
+    overview = lib.species_overview()
+    check(len(overview) == 1 + len(extra),
+          f"列表 {len(overview)} 种(1+{len(extra)})")
+    page2 = SpeciesPage(lib, win)
+    page2.resize(1200, 800)
+    page2.show()
+    page2.refresh()              # 真实应用=切页时refresh, 直建页面需手动刷
+    app.processEvents()
+    page2.resize(1201, 800)      # offscreen顶层widget不吃LayoutRequest(真实
+    app.processEvents()          # GUI子页面正常), 微调尺寸强制QScrollArea重算
+    bar = page2.scroll.verticalScrollBar()
+    check(bar.maximum() > 0, f"列表可滚动(max={bar.maximum()}px)")
+    target = min(400, bar.maximum())
+    bar.setValue(target)
+    page2._open_detail(overview[0]["code"])
+    app.processEvents()
+    check(page2.current_code == overview[0]["code"] and page2.back_btn.isVisible(),
+          "进入详情")
+    page2._back()
+    loop = QEventLoop()          # 恢复走singleShot(0), 等事件循环转一拍
+    QTimer.singleShot(50, loop.quit)
+    loop.exec()
+    app.processEvents()
+    check(bar.value() == min(target, bar.maximum()),
+          f"返回后滚动位置恢复在原处 ({bar.value()}px, 期望{target}px)")
+    page2._open_detail(overview[1]["code"])
+    app.processEvents()
+    page2._back()
+    loop2 = QEventLoop()
+    QTimer.singleShot(50, loop2.quit)
+    loop2.exec()
+    app.processEvents()
+    check(bar.value() == min(target, bar.maximum()),
+          f"再次进出详情仍恢复同一位置 ({bar.value()}px)")
+
+    # 列表态refresh(切页回来/识别完成刷新场景)保持位置
+    bar.setValue(200)
+    page2.refresh()
+    loop3 = QEventLoop()
+    QTimer.singleShot(50, loop3.quit)
+    loop3.exec()
+    app.processEvents()
+    check(bar.value() == 200, f"列表态refresh后位置保持 ({bar.value()}px)")
+
+    # 搜索词变更=新列表, 回到顶部(预期行为, 不恢复旧位置)
+    page2.search.setText("鸭")     # 匹配绿头鸭( Mallard ), 其余39种不匹配
+    app.processEvents()
+    loop4 = QEventLoop()
+    QTimer.singleShot(50, loop4.quit)
+    loop4.exec()
+    check("1" in page2.title.text() or bar.value() == 0,
+          f"搜索后列表过滤 ({page2.title.text()})")
+    check(bar.value() == 0, "新搜索词列表从头看(不恢复旧位置)")
+    page2.search.clear()
+    loop5 = QEventLoop()
+    QTimer.singleShot(50, loop5.quit)
+    loop5.exec()
+
+    # 详情内tab切换恢复(概览→图鉴→概览)
+    code0 = max(overview, key=lambda s: s["n"])["code"]   # 60张图的鸭: 内容超屏
+    page2._open_detail(code0)
+    app.processEvents()
+    page2.resize(1202, 800)        # offscreen range重算quirk, 同列表场景
+    app.processEvents()
+    dbar = page2.scroll.verticalScrollBar()
+    dmax = dbar.maximum()
+    check(dmax > 0, f"详情概览可滚动(max={dmax}px)")
+    d_target = min(500, dmax)
+    dbar.setValue(d_target)
+    page2._tab_changed(1)          # → 图鉴
+    page2.resize(1203, 800)
+    loop6 = QEventLoop()
+    QTimer.singleShot(50, loop6.quit)
+    loop6.exec()
+    app.processEvents()
+    page2._tab_changed(0)          # → 概览(恢复)
+    page2.resize(1204, 800)
+    loop7 = QEventLoop()
+    QTimer.singleShot(50, loop7.quit)
+    loop7.exec()
+    app.processEvents()
+    check(page2.detail_tab == 0 and dbar.value() == d_target,
+          f"tab切换回概览位置恢复 ({dbar.value()}px, 期望{d_target}px)")
+
+    # 详情内refresh(查看器关闭/库刷新场景)保持位置
+    dbar.setValue(min(300, dbar.maximum()))
+    d_target2 = dbar.value()
+    page2.refresh()
+    page2.resize(1205, 800)
+    loop8 = QEventLoop()
+    QTimer.singleShot(50, loop8.quit)
+    loop8.exec()
+    app.processEvents()
+    check(page2.current_code == code0 and dbar.value() == d_target2,
+          f"详情refresh后位置保持 ({dbar.value()}px, 期望{d_target2}px)")
+
     print()
     if FAILED["v"]:
         print("FAILED")

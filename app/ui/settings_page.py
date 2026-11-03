@@ -137,6 +137,18 @@ class SettingsPage(QWidget):
               "Applies to newly imported photos."))
         hint.setObjectName("Hint")
         form2.addWidget(hint)
+        # 识别引擎说明(2026-10-31定版: 彻底移植SuperPicky为唯一引擎, 不设切换;
+        # 0.6引擎代码保留在app/ai/pipeline.py, 仅作开发对照不进UI)
+        eng_hint = QLabel(
+            t("识别引擎：SuperPicky 同款（bbox方形裁剪＋eBird地区名录硬过滤）。"
+              "识别不了的照片不写鸟名，进鸟种库「未识别」不计鸟种数。",
+              "Engine: identical to SuperPicky (bbox square crop + hard eBird "
+              "regional filtering). Photos it cannot identify keep no species "
+              "name and appear under \"Unidentified\" in the species library, "
+              "not counted as species."))
+        eng_hint.setObjectName("Hint")
+        eng_hint.setWordWrap(True)
+        form2.addWidget(eng_hint)
         lay.addWidget(card2)
 
         card3, form3 = make_card(t("照片库", "Library"))
@@ -189,13 +201,12 @@ class SettingsPage(QWidget):
         eng_lab = QLabel(t("地图引擎", "Map engine"))
         eng_lab.setObjectName("RowLabel")
         self.engine_seg = SegmentedControl(
-            [t("免Key高德底图", "Keyless Amap tiles"),
-             t("全球矢量", "Global vector"), t("高德官方", "Amap official")])
+            [t("免Key高德底图", "Keyless Amap tiles"), t("高德官方", "Amap official")])
         eng_saved = self.lib.get_setting("map_engine", "maplibre_free")
-        if eng_saved == "maplibre":
-            eng_saved = "maptiler"
-        self.engine_seg.setCurrent(
-            {"maplibre_free": 0, "maptiler": 1, "amap": 2}.get(eng_saved, 0))
+        # 旧值 maplibre/maptiler(MapTiler引擎已移除, 政治合规)→默认引擎
+        if eng_saved in ("maplibre", "maptiler"):
+            eng_saved = "maplibre_free"
+        self.engine_seg.setCurrent({"maplibre_free": 0, "amap": 1}.get(eng_saved, 0))
         self.engine_seg.changed.connect(self._save_engine)
         eng_row.addWidget(eng_lab)
         eng_row.addWidget(self.engine_seg, 1)
@@ -205,38 +216,38 @@ class SettingsPage(QWidget):
         lab5 = QLabel(t("高德 Key（地点搜索用，Web服务）",
                         "Amap key (place search, Web service)"))
         lab5.setObjectName("RowLabel")
-        self.key_edit = QLineEdit(self.lib.get_setting("amap_key", ""))
-        self.key_edit.setPlaceholderText(
-            t("填自己的高德Web服务Key后可用地名搜索",
-              "Enter your own Amap Web-service key to enable search"))
+        # 不回填已存值(用户要求"设置界面不显式显示"): 控件始终为空,
+        # 占位文案说明状态; 留空=保持现状, 输入新值=覆盖, 也不用明文/掩码
+        # 形式把Key带进界面
+        stored = self.lib.get_setting("amap_key", "")
+        self.key_edit = QLineEdit("")
+        self.key_edit.setEchoMode(QLineEdit.Password)
+        if stored:
+            self.key_edit.setPlaceholderText(
+                t("已保存自填Key（不显示）——留空保持，输入新值替换",
+                  "A custom key is saved (hidden) — leave blank to keep, "
+                  "type to replace"))
+        else:
+            self.key_edit.setPlaceholderText(
+                t("已内置免费Key（隐藏），开箱可搜；可填自己的替换",
+                  "A free built-in key (hidden) works out of the box; "
+                  "optionally enter your own"))
         self.key_edit.editingFinished.connect(self._save_amap_key)
         row5.addWidget(lab5)
         row5.addWidget(self.key_edit, 1)
         form5.addLayout(row5)
 
-        row_mt = QHBoxLayout()
-        lab_mt = QLabel(t("MapTiler Key（开源地图底图）",
-                          "MapTiler key (open-source basemap)"))
-        lab_mt.setObjectName("RowLabel")
-        from .amap_view import DEFAULT_MAPTILER_KEY
-        self.mtkey_edit = QLineEdit(self.lib.get_setting("maptiler_key", ""))
-        self.mtkey_edit.setPlaceholderText(
-            t(f"留空用内置团队Key（{DEFAULT_MAPTILER_KEY[:8]}…，与安卓版同源）",
-              f"Empty = built-in team key ({DEFAULT_MAPTILER_KEY[:8]}…, "
-              "shared with the Android app)"))
-        self.mtkey_edit.editingFinished.connect(self._save_mt_key)
-        row_mt.addWidget(lab_mt)
-        row_mt.addWidget(self.mtkey_edit, 1)
-        form5.addLayout(row_mt)
-
         row6 = QHBoxLayout()
         lab6 = QLabel(t("高德 Key（地图渲染用，JS API）",
                         "Amap key (map rendering, JS API)"))
         lab6.setObjectName("RowLabel")
-        self.jskey_edit = QLineEdit(self.lib.get_setting("map_js_key", ""))
+        # 同Web Key: 不回填已存值(用户要求不显式显示), 留空=保持现状
+        self.jskey_edit = QLineEdit("")
+        self.jskey_edit.setEchoMode(QLineEdit.Password)   # Key不明文回显
         self.jskey_edit.setPlaceholderText(
-            t("仅「高德官方」引擎需要，填自己的Key",
-              "Only for the Amap-official engine; enter your own key"))
+            t("已内置（隐藏），开箱可用；留空保持，输入新值替换",
+              "Built-in key (hidden) works out of the box; leave blank "
+              "to keep, type to replace"))
         self.jskey_edit.editingFinished.connect(self._save_js_key)
         row6.addWidget(lab6)
         row6.addWidget(self.jskey_edit, 1)
@@ -245,10 +256,12 @@ class SettingsPage(QWidget):
         row7 = QHBoxLayout()
         lab7 = QLabel(t("安全密钥（securityJsCode）", "Security code (securityJsCode)"))
         lab7.setObjectName("RowLabel")
-        self.jssec_edit = QLineEdit(self.lib.get_setting("map_js_secret", ""))
-        self.jssec_edit.setPlaceholderText(
-            t("与高德JS Key成对使用", "Paired with the Amap JS key"))
+        self.jssec_edit = QLineEdit("")
         self.jssec_edit.setEchoMode(QLineEdit.Password)
+        self.jssec_edit.setPlaceholderText(
+            t("已内置（隐藏）；与高德JS Key成对使用，留空保持",
+              "Built-in (hidden); paired with the Amap JS key, leave "
+              "blank to keep"))
         self.jssec_edit.editingFinished.connect(self._save_js_key)
         row7.addWidget(lab7)
         row7.addWidget(self.jssec_edit, 1)
@@ -256,21 +269,40 @@ class SettingsPage(QWidget):
 
         key_hint = QLabel(
             t("「免Key高德底图」（默认）= 开源MapLibre引擎 + 高德栅格瓦片，"
-              "不需要任何Key，国内速度最快；\n「全球矢量」= MapTiler（海外数据完整，"
-              "内置团队Key，可换成自己的）；「高德官方」= 高德JS交互地图"
-              "（需填自己的Key）。\n地名搜索走高德Web服务，请填自己的Key。"
+              "不需要任何Key，国内速度最快；\n「高德官方」= 高德JS交互地图"
+              "（需填自己的Key）。地名搜索走高德Web服务，请填自己的Key。\n"
               "换引擎或改Key后重开地图页生效。",
               "\"Keyless Amap tiles\" (default) = open-source MapLibre + Amap "
               "raster tiles, no key needed, fastest in China;\n"
-              "\"Global vector\" = MapTiler (complete worldwide data, built-in "
-              "team key, replaceable with your own);\n\"Amap official\" = the "
-              "official Amap JS map (your own key required).\nPlace search uses "
-              "the Amap Web service — enter your own key. Reopen the map page "
-              "to apply engine/key changes."))
+              "\"Amap official\" = the official Amap JS map (your own key "
+              "required). Place search uses the Amap Web service — enter "
+              "your own key.\nReopen the map page to apply engine/key changes."))
         key_hint.setObjectName("Hint")
         key_hint.setWordWrap(True)
         form5.addWidget(key_hint)
         lay.addWidget(card5)
+
+        # 迁徙数据缓存(与安卓 Clear Downloaded Migration Data 同款)
+        card_m, form_m = make_card(t("迁徙数据", "Migration data"))
+        mrow = QHBoxLayout()
+        self.mig_label = QLabel()
+        self.mig_label.setObjectName("RowLabel")
+        mrow.addWidget(self.mig_label, 1)
+        mig_btn = QPushButton(t("清除迁徙缓存", "Clear migration cache"))
+        mig_btn.clicked.connect(self._clear_migration)
+        mrow.addWidget(mig_btn)
+        form_m.addLayout(mrow)
+        mig_hint = QLabel(t(
+            "迁徙地图按需下载的鸟种数据缓存在照片库 migration 文件夹，"
+            "清除后再次打开会重新下载。",
+            "Species data downloaded by the migration map is cached in the "
+            "library's migration folder; clearing it re-downloads on next "
+            "open."))
+        mig_hint.setObjectName("Hint")
+        mig_hint.setWordWrap(True)
+        form_m.addWidget(mig_hint)
+        lay.addWidget(card_m)
+        self._refresh_mig_size()
 
         card4, form4 = make_card(t("关于", "About"))
         from ..version import VERSION
@@ -359,7 +391,7 @@ class SettingsPage(QWidget):
         self.lib.set_setting("detect_conf", conf)
 
     def _save_engine(self, idx: int):
-        engine = {0: "maplibre_free", 1: "maptiler", 2: "amap"}[idx]
+        engine = {0: "maplibre_free", 1: "amap"}[idx]
         if engine != self.lib.get_setting("map_engine", "maplibre_free"):
             self.lib.set_setting("map_engine", engine)
             from PySide6.QtWidgets import QMessageBox
@@ -369,15 +401,54 @@ class SettingsPage(QWidget):
                   "Engine switched. Reopen the map page (or restart BirdTrace) "
                   "to apply."))
 
-    def _save_mt_key(self):
-        self.lib.set_setting("maptiler_key", self.mtkey_edit.text().strip())
-
     def _save_amap_key(self):
-        self.lib.set_setting("amap_key", self.key_edit.text().strip())
+        txt = self.key_edit.text().strip()
+        if not txt:
+            return          # 留空=保持现状(内置或已存Key), 不清空
+        self.lib.set_setting("amap_key", txt)
+        self.key_edit.clear()
+        self.key_edit.setPlaceholderText(
+            t("已保存自填Key（不显示）——留空保持，输入新值替换",
+              "A custom key is saved (hidden) — leave blank to keep, "
+              "type to replace"))
+
+    # ---- 迁徙缓存 ----
+    def _refresh_mig_size(self):
+        root = self.lib.root / "migration"
+        total = 0
+        if root.is_dir():
+            for f in root.rglob("*"):
+                try:
+                    if f.is_file():
+                        total += f.stat().st_size
+                except OSError:
+                    pass
+        mb = total / 1048576
+        self.mig_label.setText(
+            t(f"已缓存 {mb:.0f} MB", f"{mb:.0f} MB cached"))
+
+    def _clear_migration(self):
+        from PySide6.QtWidgets import QMessageBox
+        import shutil
+        if QMessageBox.question(
+                self, t("清除迁徙缓存", "Clear migration cache"),
+                t("清除迁徙地图已下载的全部鸟种数据？",
+                  "Delete all species data downloaded by the migration map?"),
+                ) != QMessageBox.Yes:
+            return
+        shutil.rmtree(self.lib.root / "migration", ignore_errors=True)
+        self._refresh_mig_size()
 
     def _save_js_key(self):
-        self.lib.set_setting("map_js_key", self.jskey_edit.text().strip())
-        self.lib.set_setting("map_js_secret", self.jssec_edit.text().strip())
+        k = self.jskey_edit.text().strip()
+        s = self.jssec_edit.text().strip()
+        if k:
+            self.lib.set_setting("map_js_key", k)
+        if s:
+            self.lib.set_setting("map_js_secret", s)
+        # 留空=保持现状(内置或已存), 不清空; 保存后清输入框
+        self.jskey_edit.clear()
+        self.jssec_edit.clear()
 
     def _backup_now(self):
         dst = self.lib.maybe_backup(force=True)

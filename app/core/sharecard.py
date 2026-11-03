@@ -1,29 +1,37 @@
 # -*- coding: utf-8 -*-
-"""分享卡渲染 v2 —— 参照观鸟社区卡片风格。
+"""分享卡渲染 v3 —— 参照观鸟社区卡片风格。
 
 布局(宽1600, 整卡圆角, 照片满 bleed 占上部):
-  ┌────────────────────┐
-  │        照片         │
-  ├────────────────────┤
-  │ huáng yāo tài yáng… │            ┌ Life # 1 ┐
-  │ 黄 腰 太 阳 鸟       │
-  │ Crimson Sunbird     │
-  │ ─────────────────   │
-  │ 2024 · 05 · 12      │
-  │ 上海市              │      (小鸟logo)
-  │ zhaopaul            │
-  └────────────────────┘
+  ┌────────────────────────────┐
+  │          照片               │
+  ├────────────────────────────┤
+  │ huáng yāo tài yáng… │  ┌ Life # 1 ┐
+  │ 黄 腰 太 阳 鸟       │                │
+  │ Crimson Sunbird     │      [稀有]     │ ← 罕见度与英文名同行(Life下方)
+  │ ─────────────────── │                │
+  │ 2024 · 05 · 12      │      NIKON Z 8  │ ← 右列: 机身(与日期同行)
+  │ 上海市               │  RF100-500mm…   │          镜头(与地点同行)
+  │ zhaopaul            │  500mm · f/6.3… │          参数(与拍摄者同行)
+  │        produced by BirdTrace (logo)  │ ← 底行: 品牌落款+logo
+  └────────────────────────────┘
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QBuffer, QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QFont, QPainter, QPainterPath, QPen, QPixmap)
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter,
+                           QPainterPath, QPen, QPixmap)
 
 from ..i18n import t, sname
 
 CARD_W = 1600
 PAD = 112
 RADIUS = 60
+
+# 文字区总高(v3): 左列日期/地点/拍摄者三行 + 底部品牌行(produced by+logo)
+TEXT_ZONE_H = 1000
+# 右列(机身/镜头/参数)单行高与最大宽(超宽省略号截断; 上限给足——
+# 左列日期/地点/拍摄者实际字宽远小于此)
+EXIF_COL_W = 880
 
 THEMES = {
     "light": {
@@ -56,6 +64,18 @@ def _font(size: int, weight: int = 400, italic: bool = False) -> QFont:
         f.setWeight(QFont.Weight.Bold)
     f.setItalic(italic)
     return f
+
+
+def _fit(fm: QFontMetrics, text: str, mode, width: int) -> str:
+    """省略号守卫: advance 不超上限直接返回原文, 真超才走 elidedText。
+
+    Windows 显示缩放 ≥125% 时 elidedText 内部按浮点宽度比较,
+    取整 advance 恰好等于上限的串(如右列最宽的参数行)会被误判
+    "装不下"而截断(用户实测 ISO 400 → "ISO 4…", 2026-11-02 本机
+    QT_SCALE_FACTOR=1.25/1.5/1.75 100%复现)。守卫使结果与DPI无关。
+    """
+    return text if fm.horizontalAdvance(text) <= width \
+        else fm.elidedText(text, mode, width)
 
 
 def _card_path(w: float, h: float, r: float) -> QPainterPath:
@@ -126,12 +146,18 @@ def _logo_pixmap() -> QPixmap:
 
 
 def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixmap:
-    """info: {cn, pinyin, en, sci, lifer_no|None, photographer, date, place|None}
+    """info: {cn, pinyin, en, sci, lifer_no|None, photographer, date, place|None,
+    exif|None: {"body","lens","shot"} 拍摄参数(勾选后; 三段有什么显示什么)}
 
     date: "2024-05-12 08:31:00" 或 "2024-05-12"
     """
     tc = THEMES.get(theme_name, THEMES["light"])
     W = CARD_W
+    exif = info.get("exif") or {}
+    body = str(exif.get("body") or "").strip()
+    lens = str(exif.get("lens") or "").strip()
+    shot = str(exif.get("shot") or "").strip()
+    right_col = [s for s in (body, lens, shot) if s]
 
     src = QPixmap(photo_path)
     if src.isNull():
@@ -140,7 +166,7 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
 
     ratio = src.height() / max(1, src.width())
     ph = int(W * min(1.28, max(0.70, ratio)))       # 照片区高: 裁切填充
-    th = 840                                        # 文字区高
+    th = TEXT_ZONE_H
     H = ph + th
 
     card = QPixmap(W, H)
@@ -214,27 +240,9 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
                    Qt.AlignCenter, ch)
         x += uw + gap
 
-    # ---- 英文名(斜体) ----
-    p.setPen(QColor(tc["en"]))
-    p.setFont(_font(56, 500, italic=True))
-    p.drawText(QRectF(PAD, y + 320, W - PAD * 2, 80),
-               Qt.AlignLeft | Qt.AlignVCenter, info.get("en", ""))
-
-    # ---- 分隔线 ----
-    p.setPen(QColor(tc["line"]))
-    p.drawLine(PAD, y + 428, W - PAD, y + 428)
-
-    # ---- 日期 / 罕见度胶囊 / 地点 / 拍摄者 ----
-    date_raw = (info.get("date") or "")[:10]
-    bits = date_raw.split("-")
-    date_txt = " · ".join(bits) if len(bits) == 3 else date_raw
-    p.setPen(QColor(tc["title"]))
-    p.setFont(_font(68, 800))
-    p.drawText(QRectF(PAD, y + 462, W - PAD * 2, 100),
-               Qt.AlignLeft | Qt.AlignVCenter, date_txt)
-
-    # 罕见度胶囊(日期行右侧; 稀有/罕见醒目红橙, 不常见橙, 常见系灰)
+    # ---- 英文名(斜体) + 罕见度胶囊(同行右侧, Life#正下方) ----
     rarity = info.get("rarity")
+    p.setFont(_font(56, 500, italic=True))
     if rarity:
         if rarity in ("稀有", "罕见"):  # i18n:ok
             bg, fg = "#E5484D", "white"
@@ -245,31 +253,99 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         rarity_txt = t(rarity, RARITY_EN.get(rarity, rarity))  # i18n:ok
         p.setFont(_font(38, 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
-        pw, ph = tw + 56, 62
-        px, py = W - PAD - pw, y + 481
+        pw, rph = tw + 56, 62
+        px, rpy = W - PAD - pw, y + 329
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(bg))
-        p.drawRoundedRect(QRectF(px, py, pw, ph), ph / 2, ph / 2)
+        p.drawRoundedRect(QRectF(px, rpy, pw, rph), rph / 2, rph / 2)
         p.setPen(QColor(fg))
-        p.drawText(QRectF(px, py, pw, ph), Qt.AlignCenter, rarity_txt)
+        p.drawText(QRectF(px, rpy, pw, rph), Qt.AlignCenter, rarity_txt)
+    p.setPen(QColor(tc["en"]))
+    p.setFont(_font(56, 500, italic=True))
+    en_w = (W - PAD * 2) - ((pw + 36) if rarity else 0)
+    p.drawText(QRectF(PAD, y + 320, en_w, 80),
+               Qt.AlignLeft | Qt.AlignVCenter, info.get("en", ""))
+
+    # ---- 分隔线 ----
+    p.setPen(QColor(tc["line"]))
+    p.drawLine(PAD, y + 428, W - PAD, y + 428)
+
+    # ---- 日期 / 地点 / 拍摄者 (左列) + 机身/镜头/参数 (右列同行对齐) ----
+    date_raw = (info.get("date") or "")[:10]
+    bits = date_raw.split("-")
+    date_txt = " · ".join(bits) if len(bits) == 3 else date_raw
+    p.setFont(_font(40, 500))
+    fm_ex = p.fontMetrics()
+    col_w = 0
+    for s in right_col:
+        col_w = max(col_w, fm_ex.horizontalAdvance(s))
+    col_w = min(col_w, EXIF_COL_W)
+    left_w = (W - PAD * 2 - col_w - 48) if right_col else (W - PAD * 2)
+
+    p.setPen(QColor(tc["title"]))
+    p.setFont(_font(68, 800))
+    fm68 = p.fontMetrics()
+    date_disp = _fit(fm68, date_txt, Qt.ElideRight, left_w) \
+        if right_col else date_txt
+    p.drawText(QRectF(PAD, y + 462, left_w, 100),
+               Qt.AlignLeft | Qt.AlignVCenter, date_disp)
+    if body:
+        p.setPen(QColor(tc["meta"]))
+        p.setFont(_font(40, 500))
+        p.drawText(QRectF(W - PAD - col_w, y + 482, col_w, 62),
+                   Qt.AlignRight | Qt.AlignVCenter,
+                   _fit(fm_ex, body, Qt.ElideMiddle, col_w))
 
     p.setPen(QColor(tc["meta"]))
     p.setFont(_font(54, 500))
-    p.drawText(QRectF(PAD, y + 580, W - PAD * 2, 84),
-               Qt.AlignLeft | Qt.AlignVCenter, info.get("place") or "")
-    p.drawText(QRectF(PAD, y + 676, W - PAD * 2 - 190, 84),
-               Qt.AlignLeft | Qt.AlignVCenter, info.get("photographer") or "")
+    fm54 = p.fontMetrics()
+    place_disp = _fit(fm54, info.get("place") or "", Qt.ElideRight,
+                      left_w) \
+        if right_col else (info.get("place") or "")
+    p.drawText(QRectF(PAD, y + 580, left_w, 84),
+               Qt.AlignLeft | Qt.AlignVCenter, place_disp)
+    if lens:
+        p.setFont(_font(40, 500))
+        p.drawText(QRectF(W - PAD - col_w, y + 594, col_w, 60),
+                   Qt.AlignRight | Qt.AlignVCenter,
+                   _fit(fm_ex, lens, Qt.ElideMiddle, col_w))
 
-    # ---- 右下角品牌logo(新logo图; 缺失时退回矢量小鸟) ----
+    p.setFont(_font(54, 500))
+    photog_disp = _fit(fm54, info.get("photographer") or "",
+                       Qt.ElideRight, left_w) \
+        if right_col else (info.get("photographer") or "")
+    p.drawText(QRectF(PAD, y + 676, left_w, 84),
+               Qt.AlignLeft | Qt.AlignVCenter, photog_disp)
+    if shot:
+        p.setPen(QColor(tc["meta"]))
+        # 参数行兜底: 真超宽先缩字号(40→28), 配合_fit守卫(见_fit docstring,
+        # DPI≥125%时elidedText等宽边界陷阱——2026-11-02实测缩字号挡不住
+        # 边界情形, 必须由守卫直接画原文)。2026-11-01缩字号, 2026-11-02守卫。
+        size = 40
+        p.setFont(_font(size, 500))
+        while p.fontMetrics().horizontalAdvance(shot) > col_w and size > 28:
+            size -= 2
+            p.setFont(_font(size, 500))
+        p.drawText(QRectF(W - PAD - col_w, y + 690, col_w, 60),
+                   Qt.AlignRight | Qt.AlignVCenter,
+                   _fit(p.fontMetrics(), shot, Qt.ElideRight, col_w))
+
+    # ---- 品牌落款行: produced by BirdTrace(与左列对齐) + 右下角logo ----
     logo = _logo_pixmap()
+    LOGO_H = 150
+    lw = int(logo.width() * LOGO_H / logo.height()) if not logo.isNull() else 108
+    logo_top = y + 790
+    p.setPen(QColor(tc["meta"]))
+    p.setFont(_font(34, 500, italic=True))
+    p.drawText(QRectF(PAD, logo_top + (LOGO_H - 48) // 2,
+                      W - PAD * 2 - lw, 48),
+               Qt.AlignLeft | Qt.AlignVCenter, "produced by BirdTrace")
     if not logo.isNull():
-        lh = 150
-        lw = int(logo.width() * lh / logo.height())
-        p.drawPixmap(int(W - PAD - lw + 8), int(H - PAD + 22 - lh + 30),
-                     logo.scaled(lw, lh, Qt.KeepAspectRatio,
+        p.drawPixmap(int(W - PAD - lw + 8), int(logo_top),
+                     logo.scaled(lw, LOGO_H, Qt.KeepAspectRatio,
                                  Qt.SmoothTransformation))
     else:
-        _draw_bird_logo(p, W - PAD + 8, H - PAD + 22, 108)
+        _draw_bird_logo(p, W - PAD + 8, logo_top + LOGO_H - 10, 108)
 
     p.end()
     return card

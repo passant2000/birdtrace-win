@@ -43,7 +43,11 @@ class GeoPrior:
             "SELECT 1 FROM regions WHERE region_id=?", (region_id,)).fetchone() is not None
 
     def vector(self, region_id: str, month: int) -> np.ndarray | None:
-        """返回10480维先验(log空间), 无数据时返回None(中性)。"""
+        """返回某月10480维先验(log空间), 无数据时返回None(中性)。
+
+        注意: 自2026-10起识别重排不再使用本方法(月度维度失真, 见region_vector);
+        保留是为了数据核查与未来数据修复后恢复月度重排。
+        """
         if region_id in (None, "", "GLOBAL"):
             return None
         key = (region_id, month)
@@ -62,15 +66,42 @@ class GeoPrior:
                 self._cache[key] = v
         return self._cache[key]
 
-    def rerank(self, logits: np.ndarray, region_id: str | None, month: int
+    def region_vector(self, region_id: str) -> np.ndarray | None:
+        """区域先验(与月份无关): 12个月逐元素最大值。
+
+        月度维度失真(CN各行的月度值是常值铺flat+个别月跳变, 家燕1月在北京
+        顶格+3.72超clamp; 经作者确认"删掉月份"), 且安卓识别同样按月消费此表
+        ——双方一致去掉月份维度, 保留区域维度(哪些物种在该地区常见)。
+        取12月max = "该物种在该地区的最常见程度", 数据修复后可恢复月度。
+        """
+        if region_id in (None, "", "GLOBAL"):
+            return None
+        key = ("R", region_id)
+        if key not in self._cache:
+            mats = [self.vector(region_id, m) for m in range(1, 13)]
+            if all(v is None for v in mats):
+                self._cache[key] = None
+            else:
+                stack = np.stack([v if v is not None
+                                  else np.full(N_CLASSES, -4.0, dtype=np.float32)
+                                  for v in mats])
+                self._cache[key] = stack.max(axis=0)
+        return self._cache[key]
+
+    def region_parents(self) -> dict[str, str | None]:
+        """{region_id: 父区域id(国家级为None)} — 分布表选行时取所在国用。"""
+        return {r["id"]: r["parent"] for r in self.regions()}
+
+    def rerank(self, logits: np.ndarray, region_id: str | None, month: int = 0
                ) -> tuple[np.ndarray, np.ndarray]:
         """返回 (log_probs, rerank_scores)。
 
-        final = log_softmax(logits) + strength * prior[region][month]
+        final = log_softmax(logits) + strength * prior[region]
+        month参数已废弃(保留兼容调用方签名), 先验与月份无关, 见region_vector。
         """
         m = logits.max()
         log_probs = logits - m - np.log(np.exp(logits - m).sum())
-        prior = self.vector(region_id or "GLOBAL", month)
+        prior = self.region_vector(region_id or "GLOBAL")
         if prior is None:
             return log_probs, log_probs
         return log_probs, log_probs + self.strength * prior

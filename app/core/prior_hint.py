@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
-"""基于地理先验的当月活性提示与罕见度5档。
+"""基于地理先验的区域提示与罕见度5档。
 
 先验值是log空间[-4,+2]的清单频率代理:
-  当月档位: ≥1 常见 / ≥0 可见 / ≥-1 偶见 / <-1 罕见
+  区域档位: ≥1 常见 / ≥0 可见 / ≥-1 偶见 / <-1 罕见
   罕见度  : 对所选区域取每物种12个月最大值, 在全部物种中按分位5档
            (前20%常见 … 后20%罕见; 全年无数据的记"数据不足")
+
+月份维度已去掉(2026-10, 作者确认"删掉月份"): CN各行的月度值是常值铺
+flat+个别月跳变(家燕1月在北京顶格, 原始字节超clamp), 安卓识别同样按月
+消费此表——两端一致只保留区域维度(12个月逐元素最大值, 见
+geo_prior.GeoPrior.region_vector)。数据修复后可恢复月度。
 """
 from __future__ import annotations
 
@@ -25,6 +30,15 @@ TIER_EN = {"常见": "Common", "可见": "Seen", "偶见": "Occasional",  # i18n
 def tier_display(tier: str) -> str:
     from ..i18n import t
     return t(tier, TIER_EN.get(tier, tier))
+
+
+def value_tier(v: float) -> str:
+    """区域先验值 -> 档位内部码(中文, 显示经tier_display)。"""
+    for floor, name in MONTH_TIERS:  # i18n:ok
+        if v >= floor:
+            return name
+    return "罕见"  # i18n:ok
+
 RARITY_TIERS = ["常见", "较常见", "不常见", "稀有", "罕见"]  # i18n:ok
 
 
@@ -36,20 +50,17 @@ class PriorHint:
         labels = json.loads((data_dir / "labels.json").read_text(encoding="utf-8"))
         self.code_idx = {l["code"]: l["i"] for l in labels}
         self._rarity_cache: dict[str, dict[int, str]] = {}
+        self._peaks_cache: dict[str, dict[str, float]] = {}
 
-    def monthly_tier(self, code: str, region_id: str | None, month: int) -> str | None:
-        """当月活性档位; 区域/物种无数据返回 None。"""
-        vec = self.gp.vector(region_id or "GLOBAL", month)
+    def region_tier(self, code: str, region_id: str | None) -> str | None:
+        """该物种在所选区域的档位(区域先验=12月最大值, 与月份无关)。"""
+        vec = self.gp.region_vector(region_id or "GLOBAL")
         if vec is None:
             return None
         idx = self.code_idx.get(code)
         if idx is None:
             return None
-        v = float(vec[idx])
-        for floor, name in MONTH_TIERS:  # i18n:ok
-            if v >= floor:
-                return name
-        return None
+        return value_tier(float(vec[idx]))
 
     def _rarity_for_region(self, region_id: str) -> dict[int, str]:
         tiers = self._rarity_cache.get(region_id)
@@ -77,6 +88,37 @@ class PriorHint:
         if idx is None or not region_id or region_id == "GLOBAL":
             return None
         return self._rarity_for_region(region_id).get(idx)
+
+    def region_peaks(self, code: str) -> dict[str, float]:
+        """该物种全球各区域的峰值先验 {region_id: max(12个月)}。
+
+        首次调用做一次全表扫描(~0.15s), 之后会话级缓存; 仅供图鉴页
+        地区分布表使用。物种不在先验库时返回空dict。
+        """
+        got = self._peaks_cache.get(code)
+        if got is None:
+            idx = self.code_idx.get(code)
+            got = {}
+            if idx is not None:
+                rows = self.gp.conn.execute(
+                    "SELECT region_id, month, vector FROM priors").fetchall()
+                if rows:
+                    import numpy as np
+                    from ..ai.geo_prior import N_CLASSES, SCALE
+                    buf = np.frombuffer(b"".join(r[2] for r in rows),
+                                        dtype=np.uint8).reshape(len(rows), N_CLASSES)
+                    raw = buf[:, idx]
+                    col = (128.0 - raw.astype(np.float32)) * SCALE
+                    col[raw == 0] = -4.0
+                    np.clip(col, -4.0, 2.0, out=col)
+                    acc: dict[str, float] = {}
+                    for i, (rid, _m, _blob) in enumerate(rows):
+                        v = float(col[i])
+                        if v > acc.get(rid, -4.1):
+                            acc[rid] = v
+                    got = acc
+            self._peaks_cache[code] = got
+        return got
 
     def close(self):
         self.gp.close()

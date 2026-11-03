@@ -57,6 +57,11 @@ def _build_tree_impl(en: bool) -> dict:
                            else names.get("zh-Hans", "全球"))  # i18n:ok
             continue
         if r["administrativeLevel"] == "country":
+            # 政治合规: 上游数据(eBird系)把TW/HK/MO也列为country级, 但本表
+            # 已有对应CN省级行(CN-TW/CN-HK/CN-MO) —— 国家列表里必须只以
+            # 中国省级行政区出现, 这里过滤country行。
+            if rid in ("TW", "HK", "MO"):
+                continue
             cn_name = names.get("zh-Hans") or zh.get(rid) or r["sourceName"]
             countries[rid] = {"id": rid,
                               "name": (r["sourceName"] or cn_name) if en else cn_name,

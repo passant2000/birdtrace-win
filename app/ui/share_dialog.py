@@ -61,6 +61,7 @@ class ShareDialog(QDialog):
         name_row.addWidget(QLabel(t("拍摄者", "Photographer")))
         self.name_edit = QLineEdit(self.lib.get_setting("photographer_name", ""))
         self.name_edit.setPlaceholderText(t("你的名字", "Your name"))
+        self.name_edit.setClearButtonEnabled(True)
         self.name_edit.textChanged.connect(lambda _t: self._update())
         name_row.addWidget(self.name_edit, 1)
         opt.addLayout(name_row)
@@ -73,6 +74,20 @@ class ShareDialog(QDialog):
         self.place_edit.textChanged.connect(lambda _t: self._update())
         place_row.addWidget(self.place_edit, 1)
         opt.addLayout(place_row)
+
+        # 拍摄参数(EXIF: 机身/镜头/焦距/光圈/快门/ISO, 有什么显示什么)
+        exif_row = QHBoxLayout()
+        exif_row.addWidget(QLabel(t("拍摄参数", "Camera data")))
+        self.exif_toggle = ToggleSwitch(True)
+        self.exif_toggle.toggled.connect(self._on_exif_toggle)
+        exif_row.addStretch(1)
+        exif_row.addWidget(self.exif_toggle)
+        opt.addLayout(exif_row)
+        self.exif_hint = QLabel()
+        self.exif_hint.setObjectName("Hint")
+        self.exif_hint.setWordWrap(True)
+        self.exif_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        opt.addWidget(self.exif_hint)
         lay.addWidget(opt_card)
 
         # 预览
@@ -99,16 +114,12 @@ class ShareDialog(QDialog):
         self._build_info()
 
     def _default_place(self) -> str:
-        """从照片批次地区取短名(省级取省名, 国家取国名)。"""
+        """从照片批次地区取显示名: 国别·省级(如 中国·上海)——用户要求
+        分享卡带国别, region_display 本身就是 country·sub 格式。"""
         photo, _recs = self.lib.photo_detail(self.photo_id)
         rid = (photo or {}).get("region_id")
         if not rid or rid == "GLOBAL":
             return ""
-        if "-" in rid:  # admin1, 如 CN-31
-            for c in regions.build_tree()["countries"]:
-                for s in c["subs"]:
-                    if s["id"] == rid:
-                        return s["name"]
         return regions.region_display(rid)
 
     def _build_info(self):
@@ -122,6 +133,44 @@ class ShareDialog(QDialog):
         self.photographer = photo.get("artist") or self.lib.get_setting("photographer_name", "")
         if self.photographer and not self.name_edit.text():
             self.name_edit.setText(self.photographer)
+        # 拍摄参数摘要(取自库内EXIF字段, 照片文件丢失也能显示)
+        parts = self._exif_parts(respect_toggle=False)
+        summary = " · ".join(v for v in parts.values() if v)
+        self.exif_hint.setText(summary if summary else
+                               t("照片未检测到拍摄参数",
+                                 "No camera data in this photo"))
+        self.exif_hint.setEnabled(self.exif_toggle.isChecked())
+
+    def _on_exif_toggle(self, on: bool):
+        self.exif_hint.setEnabled(on)
+        self._update()
+
+    def _exif_parts(self, respect_toggle: bool = True) -> dict:
+        """拍摄参数三段: 机身/镜头/焦·孔·快·ISO; 库里有什么显示什么。"""
+        if respect_toggle and not self.exif_toggle.isChecked():
+            return {}
+        p = self.photo or {}
+        make = (p.get("make") or "").strip()
+        model = (p.get("model") or "").strip()
+        body = model if model and make and model.startswith(make) \
+            else " ".join(x for x in (make, model) if x)
+        shot: list[str] = []
+        if p.get("focal_len"):
+            try:
+                shot.append(f"{float(p['focal_len']):g}mm")
+            except (TypeError, ValueError):
+                pass
+        if p.get("fnum"):
+            try:
+                shot.append(f"f/{float(p['fnum']):g}")
+            except (TypeError, ValueError):
+                pass
+        if p.get("exposure"):
+            shot.append(f"{str(p['exposure']).strip()}s")
+        if p.get("iso"):
+            shot.append(f"ISO {p['iso']}")
+        return {"body": body, "lens": str(p.get("lens") or "").strip(),
+                "shot": " · ".join(shot)}
 
     def _card_info(self) -> dict:
         species = self.species
@@ -154,6 +203,7 @@ class ShareDialog(QDialog):
             "photographer": self.name_edit.text().strip(),
             "date": self.taken,
             "place": self.place_edit.text().strip(),
+            "exif": self._exif_parts(),
         }
 
     def _update(self):

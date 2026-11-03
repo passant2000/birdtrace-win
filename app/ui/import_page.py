@@ -171,6 +171,15 @@ class ImportPage(QWidget):
         self.go_btn.setEnabled(False)
         self.go_btn.clicked.connect(self._start_import)
         row.addWidget(self.go_btn)
+        # 临时识别: 截图/任选图片直接识别, 不入库
+        self.tempid_btn = QPushButton(t("🔍 临时识别…", "🔍 Quick ID…"))
+        self.tempid_btn.setCursor(Qt.PointingHandCursor)
+        self.tempid_btn.setToolTip(t(
+            "对剪贴板截图或任选图片直接识别鸟种，不保存到照片库",
+            "Recognize a pasted screenshot or any image without saving it "
+            "to the library"))
+        self.tempid_btn.clicked.connect(self._open_temp_id)
+        row.addWidget(self.tempid_btn)
 
         self.recursive = ToggleSwitch(True)
         row.addStretch(1)
@@ -371,6 +380,17 @@ class ImportPage(QWidget):
         return cid
 
     # ---------- 来源选择 ----------
+    def _open_temp_id(self):
+        # 局部import: 识别子进程QProcess在对话框内自管, 非模态(可边导入边用)
+        from .temp_id_dialog import TempIdDialog
+        if getattr(self, "_tempid", None) is not None \
+                and self._tempid.isVisible():
+            self._tempid.raise_()
+            self._tempid.activateWindow()
+            return
+        self._tempid = TempIdDialog(self.lib, self.win, parent=self.win)
+        self._tempid.show()
+
     def _pick_files(self):
         exts = " ".join(f"*{e}" for e in
                         [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tif"])

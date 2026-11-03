@@ -12,6 +12,17 @@ import onnxruntime as ort
 
 INPUT_SIZE = 640
 
+# 运行时检测模型(2026-10-31换YOLO11l-seg分割: 掩码外接框贴鸟身, 排除栖枝/
+# 空茎——SuperPicky作者路线, 24例基准19/24 vs m检测框15/24, 见PROGRESS)。
+# m保留在包内(旧包回退+对照); nano保留备用(DETECTOR_MODEL_CPU)。
+DETECTOR_MODEL = "BirdTraceBirdDetector_YOLO11lSeg.onnx"
+DETECTOR_MODEL_CPU = "BirdTraceBirdDetector_FP32.onnx"   # 保留包内备用(诊断/回退)
+
+
+def default_detector_model(use_gpu: bool = True) -> str:
+    """诊断(gpu_probe)用: 默认检测模型文件名。GPU=l-seg分割, CPU=nano轻量。"""
+    return DETECTOR_MODEL if use_gpu else DETECTOR_MODEL_CPU
+
 
 def make_session(model_path: str, use_gpu: bool = True,
                  intra_op: int = 0) -> ort.InferenceSession:
@@ -24,6 +35,11 @@ def make_session(model_path: str, use_gpu: bool = True,
                  else ["CPUExecutionProvider"])
     so = ort.SessionOptions()
     so.log_severity_level = 3   # 屏蔽DML回退告警刷屏
+    if use_gpu:
+        # DML EP官方约束: 必须SEQUENTIAL执行模式 + 关闭mem pattern,
+        # 否则可能出现非稳定输出(NVIDIA DML路径实测踩到, AMD未复现)
+        so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        so.enable_mem_pattern = False
     if intra_op > 0:
         so.intra_op_num_threads = intra_op
         so.inter_op_num_threads = 1
@@ -88,6 +104,9 @@ def nms(boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> list[int]:
 
 
 class BirdDetector:
+    # 分块召回门槛: 长边低于此值的图分块≈全图, 白付成本
+    TILE_GATE = 2048
+
     def __init__(self, model_path: str, conf_thr: float = 0.25, iou_thr: float = 0.45,
                  use_gpu: bool = True):
         self.session = make_session(model_path, use_gpu)
@@ -96,7 +115,16 @@ class BirdDetector:
         self.iou_thr = iou_thr
 
     def detect(self, img_rgb: np.ndarray) -> list[dict]:
-        """返回 [{'box': [x1,y1,x2,y2]原图坐标, 'conf': float}, ...] 按分数降序。"""
+        """返回 [{'box': [x1,y1,x2,y2]原图坐标, 'conf': float}, ...] 按分数降序。
+
+        两阶段: 全图检测; 0检出且图够大时追加3×3分块召回(见_detect_tiled)。
+        有检出的照片行为与历史版本完全一致, 结果永不减少只会从无到有。"""
+        boxes = self._detect_pass(img_rgb)
+        if not boxes:
+            boxes = self._detect_tiled(img_rgb)
+        return boxes
+
+    def _detect_pass(self, img_rgb: np.ndarray) -> list[dict]:
         orig_h, orig_w = img_rgb.shape[:2]
         tensor, scale, px, py = letterbox(img_rgb)
         out = self.session.run(None, {self.input_name: tensor})[0]  # [1,5,8400]
@@ -130,3 +158,33 @@ class BirdDetector:
                             "conf": float(scores[i])})
         results.sort(key=lambda r: -r["conf"])
         return results
+
+    def _detect_tiled(self, img_rgb: np.ndarray) -> list[dict]:
+        """分块召回(全图0检出时的兜底, 用户授权的Win端增强, 2026-10-29)。
+
+        YOLO11n对"鸟只占画面小部分"的构图会整体漏检——Z8全画幅飞鸟实测
+        任意尺寸/低至0.10阈值都0检出, 而鸟区裁剪同一模型0.88~0.95稳检。
+        3×3重叠块(60%窗口/20%步进, 保证≤60%画幅的目标完整落在某块内),
+        块内检出映射回全图坐标后跨块NMS。成本仅由无检出的大图承担
+        (~1.2s/DML); 与APK的偏差已获用户授权, 结果只会从无到有。"""
+        h, w = img_rgb.shape[:2]
+        if max(h, w) < self.TILE_GATE:
+            return []
+        allbox: list[list[float]] = []
+        allsc: list[float] = []
+        for iy in range(3):
+            for ix in range(3):
+                x0, y0 = int(w * 0.2) * ix, int(h * 0.2) * iy
+                x1, y1 = min(w, x0 + int(w * 0.6)), min(h, y0 + int(h * 0.6))
+                if x1 - x0 < 4 or y1 - y0 < 4:
+                    continue
+                for b in self._detect_pass(img_rgb[y0:y1, x0:x1]):
+                    allbox.append([b["box"][0] + x0, b["box"][1] + y0,
+                                   b["box"][2] + x0, b["box"][3] + y0])
+                    allsc.append(b["conf"])
+        if not allbox:
+            return []
+        keep = nms(np.asarray(allbox, np.float32),
+                   np.asarray(allsc, np.float32), self.iou_thr)
+        return [{"box": [float(v) for v in allbox[i]],
+                 "conf": float(allsc[i])} for i in keep]

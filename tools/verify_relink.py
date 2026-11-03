@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """重新链接功能验证: 导入→搬走源→缺失检测→重链→识别(结果写文件)。"""
 import sys
+import time
 from pathlib import Path
 
 PROJ = Path(__file__).resolve().parent.parent

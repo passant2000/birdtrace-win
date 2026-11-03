@@ -19,8 +19,10 @@ COPY_FILES = [
     "assets/data/labels.json",
     "assets/data/species_catalog.json",
     "assets/data/regions.json",
+    "assets/data/sp_regions.json",
     "assets/data/country_zh.json",
     "assets/data/iucn_status.json",
+    "assets/data/cn_name_overrides.json",
     "assets/data/model_manifest.properties",
     "assets/data/details_v2.btd",
     "assets/data/details_index_v2.bin",
@@ -28,6 +30,7 @@ COPY_FILES = [
     "assets/brand/logo.png",
     "assets/map/maplibre-gl.js",
     "assets/map/maplibre-gl.css",
+    "assets/map/china_provinces.json",
 ]
 
 
@@ -91,9 +94,16 @@ def main():
     (DIST / "assets" / "data").mkdir(parents=True, exist_ok=True)
     # 白名单只拷运行时实际加载的模型: glob会把assets/models/里
     # 混入的实验模型(DML排查的_dml/_sim变体, 各~214MB)全量带上, 体积翻倍
-    for m in ("BirdTraceBirdDetector_FP32.onnx",
+    # 正式版0.6.0: 检测带l-seg分割(运行时)+nano(诊断/回退); m(80MB)为
+    # test7-9时代回退件, 源码与旧测试包里有, 正式包不再携带
+    for m in ("BirdTraceBirdDetector_YOLO11lSeg.onnx",
+              "BirdTraceBirdDetector_FP32.onnx",
               "BirdTraceRecognitionModel.onnx",
-              "AestheticTOPIQ_fp16.onnx"):
+              "AestheticTOPIQ_fp16.onnx",
+              # 眼点模型(SuperPicky同款, 贴茎构图眼锚定取景用; .data是其
+              # 外置权重, PyInstaller导出ONNX时>2GB限制外置, 两个文件必须一起)
+              "cub200_keypoint.onnx",
+              "cub200_keypoint.onnx.data"):
         shutil.copy2(PROJ / "assets" / "models" / m,
                      DIST / "assets" / "models" / m)
         print("copy", m)

@@ -190,7 +190,7 @@ item 语义（中英成对）：
 > - ⚠️ **UI重建同一tick截图的坑**：页面内容重建（takeAt+deleteLater）后立即`grab()`会拍到旧控件残留或空布局——deleteLater要等事件循环、QScrollArea重排版也要一拍。`spots_page._clear`已用hide+setParent(None)立即消隐；ui_shots对详情页grab前延时300ms。交互使用不受影响。
 > - ⚠️ **QGraphicsView截图的坑（B4实测）**：合成截图（win.grab/祖先render）时QGraphicsView视口可能复用空backing store——整块纯背景色，与场景内容无关。解法：grab前`viewport().repaint()`强制同步重绘，用`viewport().grab()`贴回窗口位置；TileMap加了showEvent重assert中心（QStackedWidget切回同样受益）。PySide6四连坑：reply不回传request attribute（改从URL QUrlQuery解析）、`bool(NetworkError.NoError)==True`（必须显式`!= NoError`比较）、QUrl.queryItemValue已移除、QUrlQuery在QtCore。
 > - ⚠️ **QWebChannel桥的方向坑（B4.1实测，排查半天）**：JS侧拿到的QObject里，**signal在JS是`{connect,disconnect}`对象，不是函数**——`bridge.someSignal()`静默无效（typeof='object'）。JS回调Python必须暴露**@Slot方法**，方法内部再emit Qt信号。另：`runJavaScript`的result回调只可靠回传原始类型（对象/数组返回空串），探测脚本要用`String(...)`包一层。地图容器0×0时（页面未显示）AMap的setBounds会算出错误缩放——AmapView.showEvent首次可见时重发一次带fit的setSpots。QWebEngineView内容widget.grab()拍不到（独立进程合成），截图必须PIL ImageGrab真实屏幕（物理像素=逻辑×devicePixelRatioF）。`mapReady`别等AMap 'complete'（要等全部瓦片，>15s），QWebChannel回调建图后立即上报。
-> - ⚠️ **待向安卓作者求证**：CN 各省级行的先验向量存在超出 clamp[-4,+2] 的噪声值（字节<64，如 Demoiselle Crane 在 CN 全国行=+3.97），我们已按文档 clamp 截断处理；若安卓/iOS版本同样存在该现象，建议他们检查构建管线对 CN 数据源的处理。
+> - ✅ **已向作者求证并闭环（2026-10-28）**：CN各行问题比clamp更深——月度维度整体失真（顶格物种占7.5~9.1% vs 国际0.9~2.9%，家燕CN-BJ 1月原始字节=9超上限）。作者回复"找月份的数据表或者干脆删掉月份"；调查确认APK内月份表=migration产品线（服务端eBird S&T，redistribution受限不能用），安卓识别同样按月消费此表。**处置：全局去月份维度**（GeoPrior.region_vector=12月max，rerank忽略month），详见PROGRESS 2026-10-28晚条目；读取时clamp截断保留。作者若发v2数据可恢复月度。
 
 | 批次 | 内容 | 前置 | 预估 |
 |---|---|---|---|

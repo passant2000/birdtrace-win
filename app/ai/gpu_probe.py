@@ -142,7 +142,10 @@ def run_probe(assets: Path) -> None:
         out.write(f"显卡: {json.dumps(_gpu_names(), ensure_ascii=False)}\n")
         out.write("=" * 50)
 
-        det = assets / "models" / "BirdTraceBirdDetector_FP32.onnx"
+        from .detector import (DETECTOR_MODEL, DETECTOR_MODEL_CPU,
+                               default_detector_model)
+        det = assets / "models" / default_detector_model(True)
+        det_nano = assets / "models" / DETECTOR_MODEL_CPU
         cls = assets / "models" / "BirdTraceRecognitionModel.onnx"
         if not cls.exists():
             out.write(f"\n!! 找不到模型: {cls}\n")
@@ -151,7 +154,9 @@ def run_probe(assets: Path) -> None:
         dml = ["DmlExecutionProvider", "CPUExecutionProvider"]
         cpu = ["CPUExecutionProvider"]
         summary = []
-        for name, path in (("检测器10MB", det), ("分类器214MB", cls)):
+        for name, path in ((f"检测{det.name[:24]}(GPU默认)", det),
+                           ("检测nano(CPU回退)", det_nano),
+                           ("分类器214MB", cls)):
             out.write(f"\n\n========== 模型: {name} ==========")
             cfgs = [
                 ("DML默认", dml, {}),

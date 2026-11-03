@@ -98,7 +98,8 @@ def main():
           "带box行 -> rebox记录")
     r2 = ask(f"2\t{img_path}\tCN\t5")
     check(r2 and r2["ok"] and len(r2["records"]) >= 1 and
-          r2["records"][0]["source"] == "detect", "无box行 -> 原检测路径(兼容)")
+          r2["records"][0]["source"] in ("detect", "sp"),
+          "无box行 -> 原检测路径(兼容; SP引擎source=sp)")
     # 一次发多行(滑动窗口协议): 两条都应有序返回
     p.stdin.write(f"3\t{img_path}\tCN\t5\n4\t{img_path}\tCN\t5\n")
     p.stdin.flush()

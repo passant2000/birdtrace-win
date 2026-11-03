@@ -33,16 +33,11 @@ class RecognizeWorker(QThread):
     def _ensure_pipeline(self):
         if self.pipe is not None:
             return
-        from ..ai.pipeline import RecognitionPipeline
+        from ..ai.engine import build_recognizer, engine_setting
         conf = float(self.lib.get_setting("detect_conf", "0.25"))
-        self.pipe = RecognitionPipeline(
-            detector_path=str(self.assets / "models" / "BirdTraceBirdDetector_FP32.onnx"),
-            classifier_path=str(self.assets / "models" / "BirdTraceRecognitionModel.onnx"),
-            labels_path=str(self.assets / "data" / "labels.json"),
-            geo_prior_path=str(self.assets / "data" / "geo_prior.sqlite"),
-            use_gpu=self.use_gpu,
-            conf_thr=conf,
-        )
+        self.pipe = build_recognizer(
+            self.assets, engine_setting(self.lib.get_setting),
+            use_gpu=self.use_gpu, conf=conf)
 
     def run(self):
         """识别在独立子进程中逐张执行(multiprocessing), 与UI线程GIL完全隔离——
@@ -61,6 +56,7 @@ class RecognizeWorker(QThread):
         import sys as _sys
 
         from ..ai.recognize_sub import build_worker_cmd
+        from ..ai.engine import engine_setting
 
         assets = str(self.assets)
         conf = self.lib.get_setting("detect_conf", "0.25")
@@ -122,7 +118,9 @@ class RecognizeWorker(QThread):
                     if proc is None:
                         # 冻结态=复用主exe自身, 源码态=python -m
                         # (cmd构造细节与"冻结态不能用-m"的原因见build_worker_cmd)
-                        cmd, cwd = build_worker_cmd(assets, conf)
+                        cmd, cwd = build_worker_cmd(
+                            assets, conf,
+                            engine=engine_setting(self.lib.get_setting))
                         proc = subprocess.Popen(
                             cmd, cwd=cwd,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,

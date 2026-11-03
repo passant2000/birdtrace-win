@@ -140,6 +140,13 @@ class MainWindow(QMainWindow):
 
     # ---------- 行为 ----------
     def switch_to(self, key: str):
+        # 离开当前页的清理钩子(如鸟种页停掉后台缩略图任务, 释放线程池
+        # 与磁盘给即将到来的重页——2026-10-31地图首切卡顿治理的一环)
+        old = self.stack.currentWidget()
+        if old is not None and old is not self.pages.get(key):
+            hook = getattr(old, "on_page_hidden", None)
+            if callable(hook):
+                hook()
         if key == "map" and self.pages["map"] is None:
             self.pages["map"] = map_page.MapPage(self.lib, self)
             self.stack.addWidget(self.pages["map"])

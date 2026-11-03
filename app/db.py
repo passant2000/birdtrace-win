@@ -18,6 +18,10 @@ from .paths import assets_dir
 
 ASSETS = assets_dir()
 
+# 鸟种资产版本: species_catalog/overrides/labels/iucn 变更时递增,
+# 启动时发现不一致就重刷 species 表(旧库也能吃到中文名等修正)。
+SPECIES_DATA_VERSION = "2026-11-03a"
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -117,7 +121,8 @@ class Library:
         self.conn.commit()
 
     def _migrate(self):
-        """旧库升级: photos.spot_id (鸟点挂载, B3); photos.aesthetic (美学评分)。"""
+        """旧库升级: photos.spot_id (鸟点挂载, B3); photos.aesthetic (美学评分);
+        photos.cand_json (未识别候选Top3, 2026-11-02一键采纳)。"""
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(photos)")}
         if "spot_id" not in cols:
             self.conn.execute(
@@ -128,6 +133,8 @@ class Library:
             self.conn.execute("ALTER TABLE photos ADD COLUMN aesthetic REAL")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_photos_aesthetic ON photos(aesthetic)")
+        if "cand_json" not in cols:
+            self.conn.execute("ALTER TABLE photos ADD COLUMN cand_json TEXT")
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -154,21 +161,32 @@ class Library:
     def species_filled(self) -> bool:
         n = self.conn.execute("SELECT COUNT(*) FROM species").fetchone()[0]
         return n > 0
-
     def fill_species(self):
-        """从资产填充图鉴(11171种) + 拼音搜索字段 + IUCN。"""
+        """从资产填充图鉴(11171种) + 拼音搜索字段 + IUCN。
+        cn_name_overrides.json(可选)覆盖个别中文名——默认名取自APK
+        catalog_v2.bin, 与国内标准名录不一致的在此修正(2026-11-02:
+        brrmin1 褐背山椒鸟→小灰山椒鸟, 与SuperPicky/IOC一致)。"""
         from pypinyin import Style, lazy_pinyin
         catalog = json.loads((ASSETS / "data" / "species_catalog.json").read_text(encoding="utf-8"))
         labels = json.loads((ASSETS / "data" / "labels.json").read_text(encoding="utf-8"))
         classifier_codes = {l["code"] for l in labels}
         iucn = json.loads((ASSETS / "data" / "iucn_status.json").read_text(encoding="utf-8"))
+        overrides_path = ASSETS / "data" / "cn_name_overrides.json"
+        overrides = {}
+        if overrides_path.exists():
+            try:
+                overrides = {k: v for k, v in json.loads(
+                    overrides_path.read_text(encoding="utf-8")).items()
+                    if not k.startswith("_")}
+            except ValueError:
+                overrides = {}
         rows = []
         for s in catalog:
-            cn = s["cn"] or s["en"]
+            cn = overrides.get(s["code"]) or s["cn"] or s["en"]
             py = lazy_pinyin(cn, style=Style.NORMAL)
             initials = lazy_pinyin(cn, style=Style.FIRST_LETTER)
             rows.append((
-                s["code"], s["cn"], s["en"], s["sci"],
+                s["code"], cn, s["en"], s["sci"],
                 s["order"][1] or "", s["family"][1] or "", s["genus"][0] or "",
                 iucn.get(s["code"], ""), 1 if s["code"] in classifier_codes else 0,
                 "".join(py).lower(), "".join(initials).lower(),
@@ -247,6 +265,9 @@ class Library:
                 (photo_id, r["species_code"], i, r.get("confidence", 0),
                  r.get("source", "detect"), json.dumps(r.get("box")),
                  json.dumps(top5, ensure_ascii=False)))
+        if recs:
+            self.conn.execute("UPDATE photos SET cand_json=NULL WHERE id=?",
+                              (photo_id,))
         self.conn.commit()
 
     def pending_photo_ids(self) -> list[int]:
@@ -262,17 +283,32 @@ class Library:
         self.conn.commit()
 
     def mark_no_bird(self, photo_id: int):
-        """识别完成但画面中无鸟(全部框被判非鸟): 不再自动重试,
-        照片保留在时间线, 可在查看器手工标注。"""
-        self.conn.execute("UPDATE photos SET rec_fail=3 WHERE id=?",
-                          (photo_id,))
+        """识别完成但没写出鸟种(raw<写名下限/名录落空/无检测/非鸟):
+        不再自动重试, 照片保留在时间线, 可在查看器手工标注。
+        cand_json清空(0.2~0.5的低置信已改为写名进待复核, 2026-11-02傍晚,
+        旧库残留的候选不再展示)。"""
+        self.conn.execute(
+            "UPDATE photos SET rec_fail=3, cand_json=NULL WHERE id=?",
+            (photo_id,))
+        self.conn.commit()
+
+    def mark_not_bird(self, photo_id: int):
+        """待复核「不是鸟」: 撤回该照片的识别记录并标为无鸟(未识别)。
+        用于检测器把蛇/其他动物误检成鸟的情况(2026-11-02用户语义:
+        没鸟的进未识别)。照片仍在时间线, 可随时重新识别/手工标注。"""
+        self.conn.execute("DELETE FROM records WHERE photo_id=?", (photo_id,))
+        self.conn.execute(
+            "UPDATE photos SET rec_fail=3, cand_json=NULL WHERE id=?",
+            (photo_id,))
         self.conn.commit()
 
     def reset_recognition(self, photo_ids: list[int]):
         """批量重新识别: 清空识别记录并复位失败计数(人工确认一并清除)。"""
         for pid in photo_ids:
             self.conn.execute("DELETE FROM records WHERE photo_id=?", (pid,))
-            self.conn.execute("UPDATE photos SET rec_fail=0 WHERE id=?", (pid,))
+            self.conn.execute(
+                "UPDATE photos SET rec_fail=0, cand_json=NULL WHERE id=?",
+                (pid,))
         self.conn.commit()
 
     def set_confirmed(self, record_id: int, code: str | None):
@@ -341,6 +377,8 @@ class Library:
             "INSERT INTO records(photo_id,species_code,rank,confidence,source,"
             "reviewed,confirmed_code) VALUES(?,?,1,1.0,'manual',1,?)",
             (photo_id, code, code))
+        self.conn.execute("UPDATE photos SET cand_json=NULL WHERE id=?",
+                          (photo_id,))
         self.conn.commit()
         return cur.lastrowid
 
@@ -419,6 +457,33 @@ class Library:
             f"   ORDER BY p2.aesthetic DESC, v2.taken_at ASC LIMIT 1) AS cover_photo_id "
             f"FROM v_records v JOIN species s ON s.code=v.eff_code "
             f"{where} GROUP BY s.code ORDER BY first_at ASC", args).fetchall()
+        return [dict(r) for r in rows]
+
+    UNIDENTIFIED_CODE = "__unid__"   # 鸟种库「未识别」伪种code(不进species表)
+
+    def unidentified_overview(self) -> dict:
+        """未识别桶概览(2026-10-31 bug4): 识别完成但没写出鸟种的照片
+        (无records且rec_fail>=3, 区别于待识别)。鸟种库展示、不计入鸟种数。"""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM photos p WHERE p.rec_fail>=3 AND NOT EXISTS"
+            "(SELECT 1 FROM records r WHERE r.photo_id=p.id)").fetchone()
+        cover = self.conn.execute(
+            "SELECT p.id AS cover_photo_id FROM photos p WHERE p.rec_fail>=3 "
+            "AND NOT EXISTS(SELECT 1 FROM records r WHERE r.photo_id=p.id) "
+            "ORDER BY p.aesthetic DESC, p.added_at ASC LIMIT 1").fetchone()
+        return {"n": row["n"] if row else 0,
+                "cover_photo_id": cover["cover_photo_id"] if cover else None}
+
+    def unidentified_photos(self) -> list[dict]:
+        """未识别桶照片流(最美优先), 供「未识别」伪种详情页。
+        语义(2026-11-02傍晚): 只装没写出鸟种的照片——raw<写名下限/
+        名录落空/无检测/非鸟; 低置信(0.2~0.5)已改为写名进待复核。"""
+        rows = self.conn.execute(
+            "SELECT p.id AS photo_id, p.path, p.added_at AS taken_at, "
+            "p.aesthetic FROM photos p "
+            "WHERE p.rec_fail>=3 AND NOT EXISTS"
+            "(SELECT 1 FROM records r WHERE r.photo_id=p.id) "
+            "ORDER BY p.aesthetic DESC, p.added_at DESC").fetchall()
         return [dict(r) for r in rows]
 
     def photos_of_species(self, code: str) -> list[dict]:
@@ -646,7 +711,15 @@ class Library:
         if not rows:
             return 0, 0
         from datetime import date, timedelta
-        days = [date.fromisoformat(d) for d in rows]
+        # 防御: 非ISO日期(EXIF冒号未规范化/脏数据)跳过, 不让统计页崩
+        days = []
+        for d in rows:
+            try:
+                days.append(date.fromisoformat(d))
+            except ValueError:
+                continue
+        if not days:
+            return 0, 0
         longest = cur = 1
         for a, b in zip(days, days[1:]):
             cur = cur + 1 if (b - a).days == 1 else 1

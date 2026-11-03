@@ -2,7 +2,7 @@
 """鸟种库: 卡片流(首见时间排序) + 搜索 + 鸟种详情(概览/图鉴/文化标签页)。"""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QScrollArea,
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
 from ..core import regions
 from ..core.birddex import get_dex
 from ..core.culture import get_culture
-from ..core.prior_hint import get_hint, tier_display
+from ..core.prior_hint import get_hint, tier_display, value_tier
 from ..i18n import t, sname
 from ..media import cached_thumbnail, ensure_thumbnail
 from .. import theme
@@ -25,6 +25,9 @@ IUCN_EN = {"LC": "Least Concern", "NT": "Near Threatened", "VU": "Vulnerable",
            "NE": "Not Evaluated"}
 COVER_W, COVER_H = 168, 126
 CARD_COLS = 5
+# 罕见度徽章配色(与分享卡胶囊一致): 稀有/罕见醒目红, 不常见橙, 常见系灰
+RARITY_PILL = {("稀有", "罕见"): ("#E5484D", "white"),  # i18n:ok
+               ("不常见",): ("#F5A623", "white")}  # i18n:ok
 
 DEX_FIELDS = [
     ("summary", "概述", "Overview"), ("id_points", "识别要点", "ID points"),
@@ -50,6 +53,164 @@ def _info_row(label: str, value_html: str) -> QWidget:
     h.addWidget(lab)
     h.addWidget(val, 1)
     return w
+
+
+def _pill(text: str, bg: str, fg: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setStyleSheet(f"font-size:12px;font-weight:700;color:{fg};"
+                      f"background:{bg};border-radius:11px;padding:5px 12px;")
+    return lab
+
+
+_HEAT_LO = (0xED, 0xF2, 0xDF)   # 浅橄榄(丰度低)
+_HEAT_HI = (0x55, 0x63, 0x1F)   # 深橄榄(丰度顶格, 与强调色#8A9455同系)
+
+
+def _heat_css(v: float) -> str:
+    """区域先验值 → 单元格背景色; ≤-1.49(缺席/rescue地板)用主题占位灰。"""
+    if v <= -1.49:
+        return theme.FILL
+    frac = max(0.0, min(1.0, (v + 1.5) / 3.5))
+    rgb = tuple(round(lo + (hi - lo) * frac) for lo, hi in zip(_HEAT_LO, _HEAT_HI))
+    return "#{:02X}{:02X}{:02X}".format(*rgb)
+
+
+def _cell_tip(rid: str, v: float) -> str:
+    reg = regions.region_display(rid)
+    if v <= -1.49:
+        return t(f"{reg}：无记录", f"{reg}: no records")
+    tier = tier_display(value_tier(v))
+    return t(f"{reg}：{tier} ({v:+.1f})", f"{reg}: {tier} ({v:+.1f})")
+
+
+def _heat_rows(peaks: dict[str, float], parents: dict,
+               region_id: str | None) -> tuple[list[str], int]:
+    """热力表选行: 默认地区与其所在国置顶, 该国省级行次之(≤PROV_MAX),
+    其余按峰值降序补齐到ROWS_MAX; 返回(行, 未展示地区数)。"""
+    rows: list[str] = []
+    if region_id and region_id != "GLOBAL" and region_id in peaks:
+        rows.append(region_id)
+        parent = parents.get(region_id)
+        if parent and parent in peaks:
+            rows.append(parent)
+            provs = sorted((p for p, par in parents.items()
+                            if par == parent and p in peaks and p not in rows),
+                           key=lambda p: (-peaks[p], p))
+            rows += provs[: _HeatTable.PROV_MAX]
+    rest = sorted((p for p in peaks if p not in rows),
+                  key=lambda p: (-peaks[p], p))
+    rows += rest[: max(0, _HeatTable.ROWS_MAX - len(rows))]
+    return rows, len(peaks) - len(rows)
+
+
+class _HeatTable(QFrame):
+    """地区分布表: 行=地区, 色块=该地区峰值丰度(与月份无关)。
+
+    数据=geo_prior priors表12个月最大值(log先验[-4,+2], 清单频率代理);
+    值≤-1.49(缺席/rescue地板-1.5/-2.0)按"无记录"处理。月份维度已按
+    作者指示去掉(CN各行月度值失真, 详见prior_hint模块docstring)。
+    """
+    ROWS_MAX = 14   # 最多展示行数
+    PROV_MAX = 6    # 默认地区所在国的省级行数上限
+    NAME_W = 168
+    CELL_H = 18
+
+    def __init__(self, rows: list[str], peaks: dict, hidden: int,
+                 region_id: str | None, on_open_map, on_open_migration):
+        super().__init__()
+        self._on_open_map = on_open_map
+        self._on_open_migration = on_open_migration
+        self.setObjectName("Card")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 14)
+        v.setSpacing(8)
+        head = QHBoxLayout()
+        title = QLabel(t("地区分布", "Regional abundance"))
+        title.setStyleSheet(f"font-size:15px;font-weight:700;color:{theme.LABEL};"
+                            "background:transparent;")
+        head.addWidget(title)
+        head.addStretch(1)
+
+        def _chip(text_pair):
+            btn = QPushButton(t(*text_pair))
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(
+                f"font-size:12px;font-weight:600;color:{theme.BLUE};"
+                f"background:{theme.CHIP_BG};border:none;border-radius:10px;"
+                "padding:5px 12px;")
+            return btn
+
+        mig_btn = _chip(("🌍 迁徙地图…", "🌍 Migration map…"))
+        mig_btn.clicked.connect(self._on_open_migration)
+        head.addWidget(mig_btn)
+        map_btn = _chip(("🗺️ 分布地图…", "🗺️ Distribution map…"))
+        map_btn.clicked.connect(self._on_open_map)
+        head.addWidget(map_btn)
+        v.addLayout(head)
+        sub = QLabel(t("行=地区 · 色块越深=越常见（按清单频率估算）",
+                       "Rows = regions · darker = more common "
+                       "(from checklist frequency)"))
+        sub.setStyleSheet(f"font-size:12px;color:{theme.LABEL_3};"
+                          "background:transparent;")
+        v.addWidget(sub)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 2, 0, 0)
+        grid.setSpacing(4)
+        for r, rid in enumerate(rows):
+            val = peaks[rid]
+            disp = regions.region_display(rid)
+            if rid == region_id:
+                disp = "📍 " + disp
+            name_lab = QLabel(disp)
+            name_lab.setObjectName("HeatName")
+            name_lab.setFixedWidth(self.NAME_W)
+            name_lab.setToolTip(disp)
+            name_lab.setStyleSheet(f"color:{theme.LABEL_2};font-size:12px;"
+                                   "background:transparent;")
+            fm = name_lab.fontMetrics()
+            name_lab.setText(fm.elidedText(disp, Qt.ElideRight, self.NAME_W - 8))
+            grid.addWidget(name_lab, r, 0)
+            cell = QLabel()
+            cell.setObjectName("HeatCell")
+            cell.setFixedSize(120, self.CELL_H)
+            cell.setStyleSheet(f"background:{_heat_css(val)};"
+                               "border-radius:4px;")
+            cell.setToolTip(_cell_tip(rid, val))
+            grid.addWidget(cell, r, 1)
+            tier_lab = QLabel(tier_display(value_tier(val)))
+            tier_lab.setStyleSheet(f"color:{theme.LABEL_2};font-size:11px;"
+                                   "background:transparent;")
+            grid.addWidget(tier_lab, r, 2)
+        grid.setColumnStretch(3, 1)
+        v.addLayout(grid)
+
+        leg = QHBoxLayout()
+        leg.setSpacing(8)
+        lo = QLabel(t("少", "Less"))
+        lo.setStyleSheet(f"color:{theme.LABEL_3};font-size:11px;background:transparent;")
+        grad = QLabel()
+        grad.setFixedSize(120, 10)
+        grad.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                           "stop:0 #EDF2DF, stop:1 #55631F);border-radius:5px;")
+        hi = QLabel(t("多", "More"))
+        hi.setStyleSheet(f"color:{theme.LABEL_3};font-size:11px;background:transparent;")
+        note = QLabel(t("浅色 = 无记录", "Pale = no records"))
+        note.setStyleSheet(f"color:{theme.LABEL_3};font-size:11px;background:transparent;")
+        leg.addWidget(lo)
+        leg.addWidget(grad)
+        leg.addWidget(hi)
+        leg.addSpacing(14)
+        leg.addWidget(note)
+        if hidden > 0:
+            more = QLabel(t(f"另有 {hidden} 个地区有记录",
+                            f"+ {hidden} more regions with records"))
+            more.setStyleSheet(f"color:{theme.LABEL_3};font-size:11px;"
+                               "background:transparent;")
+            leg.addSpacing(14)
+            leg.addWidget(more)
+        leg.addStretch(1)
+        v.addLayout(leg)
 
 
 class _ThumbSignals(QObject):
@@ -88,6 +249,12 @@ class SpeciesPage(QWidget):
         self.win = win
         self.current_code = None
         self.detail_tab = 0
+        self._mode = "list"            # 当前视图(list/detail): 恢复滚动用
+        self._list_scroll = 0          # 列表滚动位置(进详情前记住, 返回恢复)
+        self._list_filter: str | None = None   # 上次列表构建的搜索词
+        self._detail_scroll: dict[int, int] = {}   # 详情各tab的滚动位置
+        self._pending_scroll = 0       # 待恢复的滚动位置(布局就绪后落位)
+        self._list_sig = None          # 上次列表构建的数据签名(无变化跳过重建)
         self._thumb_gen = 0            # 代际号: 详情页重建即+1, 旧回传作废
         self._thumb_stop: dict = {}    # 当前任务的中断标记
         self._thumb_items: dict[str, object] = {}   # file_hash -> 网格项
@@ -130,15 +297,40 @@ class SpeciesPage(QWidget):
         lay.addWidget(self.scroll, 1)
 
     # ---------- 列表 ----------
+    def on_page_hidden(self):
+        """被切走时(main_window.switch_to钩子)停掉后台缩略图任务:
+        释放线程池与磁盘IO——地图等重页首开时不再与缩略图解码抢资源。
+        回到本页时refresh按数据签名决定是否重建, 缺的缩略图会重新排队。"""
+        self._cancel_thumb_job()
+
     def _cancel_thumb_job(self):
         self._thumb_gen += 1
         self._thumb_stop["stop"] = True   # 原地标记, 在跑的任务读到即退出
         self._thumb_items = {}
 
+    def _data_sig(self):
+        """库内容廉价签名(照片/鸟点/记录的计数与内容摘要), 判断要不要重建。"""
+        c = self.lib.conn
+        n_ph = c.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+        n_sp = c.execute("SELECT COUNT(*) FROM spots").fetchone()[0]
+        r = c.execute("SELECT COUNT(*), IFNULL(MAX(id),0), "
+                      "CAST(IFNULL(SUM(CAST(confidence*1000 AS INT)),0) AS INT), "
+                      "COUNT(DISTINCT species_code) FROM records").fetchone()
+        return (n_ph, n_sp, r[0], r[1], r[2], r[3])
+
     def refresh(self):
         if self.current_code:
-            self._show_detail(self.current_code)
+            if self._mode == "detail":
+                # 同一详情重建(查看器关闭/库刷新): 记住当前tab位置再重建
+                self._detail_scroll[self.detail_tab] = \
+                    self.scroll.verticalScrollBar().value()
+            self._show_detail(self.current_code, restore=True)
         else:
+            # 数据无变化的切页回来: 不重建(秒开, 位置/状态天然保持)
+            if (self._mode == "list"
+                    and self.search.text().strip() == self._list_filter
+                    and self._list_sig == self._data_sig()):
+                return
             self._show_list()
 
     def _back(self):
@@ -147,8 +339,44 @@ class SpeciesPage(QWidget):
         self.search.setVisible(True)
         self._show_list()
 
+    def _on_range_for_restore(self, _mn: int, _mx: int):
+        self._restore_pending_scroll()
+
+    def _restore_pending_scroll(self):
+        pos = self._pending_scroll
+        if pos <= 0:
+            return
+        bar = self.scroll.verticalScrollBar()
+        if bar.maximum() <= 0:
+            return   # 布局未就绪, 留着位置等rangeChanged再试
+        try:
+            bar.rangeChanged.disconnect(self._on_range_for_restore)
+        except RuntimeError:
+            pass
+        self._pending_scroll = 0
+        bar.setValue(min(pos, bar.maximum()))
+
+    def _schedule_restore(self, pos: int):
+        """重建后恢复滚动位置: singleShot(0)走常规路径, rangeChanged兜底
+        (大列表重建时范围可能晚一轮才就绪, 早恢复会被钳回0)。"""
+        if pos <= 0:
+            return
+        self._pending_scroll = pos
+        self.scroll.verticalScrollBar().rangeChanged.connect(
+            self._on_range_for_restore)
+        QTimer.singleShot(0, self._restore_pending_scroll)
+
     def _show_list(self):
         self._cancel_thumb_job()
+        search = self.search.text().strip()
+        same_filter = (search == self._list_filter)
+        if self._mode == "list" and same_filter:
+            # 列表仍在前台的重建(切页回来/识别完成刷新): 保持滚动位置
+            self._list_scroll = self.scroll.verticalScrollBar().value()
+        elif not same_filter:
+            self._list_scroll = 0   # 换了搜索词=新列表, 从头看
+        self._mode = "list"
+        self._list_filter = search
         while self.content_lay.count():
             it = self.content_lay.takeAt(0)
             if it.widget():
@@ -172,25 +400,80 @@ class SpeciesPage(QWidget):
                               f"background:{theme.CHIP_BG};border-radius:10px;"
                               "padding:8px 14px;")
             self.content_lay.addWidget(tip)
-        if not items:
+        unid_n = self.lib.unidentified_overview()["n"]
+        if not items and not unid_n:
             empty = QLabel(t("还没有识别记录 · 先去「导入」页添加照片",
                              "No sightings yet · add photos on the Import page first"))
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet(f"color:{theme.LABEL_2};font-size:15px;padding:60px;")
             self.content_lay.addWidget(empty)
+            self._pending_scroll = 0
             return
         grid_widget = QWidget()
         grid = QGridLayout(grid_widget)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(12)
+        cell = 0
+        # 「未识别」伪种卡(2026-10-31 bug4: 识别完成但没写出鸟种的照片;
+        # 展示在鸟种库但不计入种数——标题的"· N 种"来自species_overview,
+        # 不含此项)。搜索鸟名时不显示。
+        if not search:
+            unid = self.lib.unidentified_overview()
+            if unid["n"] > 0:
+                grid.addWidget(self._unidentified_card(unid), 0, 0)
+                cell = 1
         for i, sp in enumerate(items):
             grid.addWidget(self._species_card(sp, lifer.get(sp["code"]),
                                               sp["code"] in year_codes),
-                           i // CARD_COLS, i % CARD_COLS)
+                           (cell + i) // CARD_COLS, (cell + i) % CARD_COLS)
         for c in range(CARD_COLS):
             grid.setColumnStretch(c, 1)
         self.content_lay.addWidget(grid_widget)
         self.content_lay.addStretch(1)
+        self._schedule_restore(self._list_scroll)
+        self._list_sig = self._data_sig()
+
+    def _unidentified_card(self, unid: dict) -> QFrame:
+        """「未识别」卡片: 封面灰底问号 + 张数; 点击进照片流(可逐张标注)。"""
+        from ..db import Library
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setFixedWidth(190)
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 10, 10, 12)
+        v.setSpacing(4)
+        cover = QLabel("?")
+        cover.setFixedSize(COVER_W, COVER_H)
+        cover.setAlignment(Qt.AlignCenter)
+        cover.setStyleSheet(f"background:{theme.FILL};border-radius:10px;"
+                            f"color:{theme.LABEL_3};font-size:64px;font-weight:800;")
+        if unid["cover_photo_id"]:
+            row = self.lib.conn.execute(
+                "SELECT path, file_hash FROM photos WHERE id=?",
+                (unid["cover_photo_id"],)).fetchone()
+            if row:
+                tp = ensure_thumbnail(self.lib.root, row["path"],
+                                      row["file_hash"], COVER_W * 2)
+                if tp:
+                    pm = QPixmap(str(tp))
+                    cover.setPixmap(pm.scaled(COVER_W, COVER_H,
+                                              Qt.KeepAspectRatioByExpanding,
+                                              Qt.SmoothTransformation))
+                    cover.setText("")
+        v.addWidget(cover)
+        name = QLabel(t("未识别", "Unidentified"))
+        name.setStyleSheet(f"font-size:15px;font-weight:700;color:{theme.LABEL};"
+                           "background:transparent;")
+        v.addWidget(name)
+        meta = QLabel(t(f"{unid['n']} 张 · 不计入鸟种数",
+                        f"{unid['n']} photos · not counted as species"))
+        meta.setStyleSheet(f"font-size:12px;color:{theme.LABEL_2};background:transparent;")
+        meta.setWordWrap(True)
+        v.addWidget(meta)
+        card.setCursor(Qt.PointingHandCursor)
+        code = getattr(Library, "UNIDENTIFIED_CODE", "__unid__")
+        card.mousePressEvent = lambda e: self._open_detail(code)
+        return card
 
     def _species_card(self, sp: dict, li: dict | None, is_year: bool) -> QFrame:
         card = QFrame()
@@ -246,13 +529,87 @@ class SpeciesPage(QWidget):
         return card
 
     def _open_detail(self, code: str):
+        if self._mode == "list":
+            # 正在列表: 记住位置(时间线/地图跳转进来时列表不在前台, 不覆盖)
+            self._list_scroll = self.scroll.verticalScrollBar().value()
         self.current_code = code
         self.back_btn.setVisible(True)
         self.search.setVisible(False)
         self._show_detail(code)
 
+    def _show_unidentified_detail(self):
+        """「未识别」详情: 照片流 + 说明(打开查看器可手工标注鸟种)。"""
+        while self.content_lay.count():
+            it = self.content_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        photos = self.lib.unidentified_photos()
+        head = QFrame()
+        head.setObjectName("Card")
+        hv = QVBoxLayout(head)
+        hv.setContentsMargins(20, 16, 20, 16)
+        hv.setSpacing(6)
+        t1 = QLabel(t("未识别", "Unidentified"))
+        t1.setStyleSheet(f"font-size:22px;font-weight:800;color:{theme.LABEL};"
+                         "background:transparent;")
+        hv.addWidget(t1)
+        t2 = QLabel(t(f"{len(photos)} 张 · 没有识别出鸟种的照片（没检测到鸟、"
+                      "或置信度过低不写名，不计入鸟种统计）。低置信但给出了"
+                      "鸟名的在「待复核」页把关；这里可点开照片手工标注。",
+                      f"{len(photos)} photos · no bird could be named "
+                      "(none detected, or confidence below the naming "
+                      "threshold; not counted as species). Low-confidence "
+                      "names are handled in \"Pending review\"; you can "
+                      "open a photo here and annotate it manually."))
+        t2.setWordWrap(True)
+        t2.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};background:transparent;")
+        hv.addWidget(t2)
+        self.content_lay.addWidget(head)
+        if not photos:
+            empty = QLabel(t("没有未识别的照片", "No unidentified photos"))
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet(f"color:{theme.LABEL_2};font-size:15px;padding:40px;")
+            self.content_lay.addWidget(empty)
+            self.content_lay.addStretch(1)
+            return
+        from ..theme.widgets import PhotoGridItem
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 12)
+        grid.setSpacing(10)
+        cols = max(4, (self.width() - 80) // 140)
+        ids = [p["photo_id"] for p in photos]
+        for i, ph in enumerate(photos):
+            row = self.lib.conn.execute(
+                "SELECT path, file_hash FROM photos WHERE id=?",
+                (ph["photo_id"],)).fetchone()
+            pm = None
+            if row:
+                tp = cached_thumbnail(self.lib.root, row["file_hash"], 256) \
+                    or (ensure_thumbnail(self.lib.root, row["path"],
+                                         row["file_hash"], 256)
+                        if row["path"] else None)
+                if tp:
+                    pm = QPixmap(str(tp))
+            item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10])
+            item.setFixedSize(132, 150)
+            item.setCursor(Qt.PointingHandCursor)
+            item.mousePressEvent = lambda e, pid=ph["photo_id"], i2=list(ids): \
+                self._open(pid, i2)
+            grid.addWidget(item, i // cols, i % cols)
+        grid.setColumnStretch(cols, 1)
+        self.content_lay.addWidget(grid_widget)
+        self.content_lay.addStretch(1)
+
     # ---------- 详情 ----------
-    def _show_detail(self, code: str):
+    def _show_detail(self, code: str, restore: bool = False):
+        self._mode = "detail"
+        if not restore:
+            self._pending_scroll = 0   # 新进的详情从顶部看
+        from ..db import Library
+        if code == getattr(Library, "UNIDENTIFIED_CODE", "__unid__"):
+            self._show_unidentified_detail()
+            return
         self._cancel_thumb_job()
         while self.content_lay.count():
             it = self.content_lay.takeAt(0)
@@ -309,6 +666,8 @@ class SpeciesPage(QWidget):
             self._render_culture(code)
         else:
             self._render_overview(code, li)
+        if restore:
+            self._schedule_restore(self._detail_scroll.get(self.detail_tab, 0))
 
     def _render_overview(self, code: str, li):
         photos = self.lib.photos_of_species(code)
@@ -387,28 +746,32 @@ class SpeciesPage(QWidget):
         v.setContentsMargins(20, 16, 20, 18)
         v.setSpacing(12)
 
-        # 当月出现提示 + 罕见度
         region_id = self.lib.get_setting("default_region", "GLOBAL")
-        month = __import__('datetime').date.today().month
         hint = get_hint()
-        chips = []
-        if region_id not in ("GLOBAL", ""):
-            mt = hint.monthly_tier(code, region_id, month)
-            if mt:
-                chips.append(t(f"📍 本月·{regions.region_display(region_id)}：{mt}",
-                               f"📍 This month · {regions.region_display(region_id)}: {mt}"))
-            rt = hint.rarity_tier(code, region_id)
-            if rt:
-                chips.append(t(f"🎯 罕见度：{rt}", f"🎯 Rarity: {rt}"))
-        if not sp_info["in_classifier"]:
-            chips.append(t("ℹ️ 该物种不在AI识别范围(图鉴-only)",
-                           "ℹ️ Not covered by AI recognition (field-guide only)"))
-        if chips:
-            chip_row = QLabel("    ".join(chips))
-            chip_row.setWordWrap(True)
-            chip_row.setStyleSheet("color:#8A9455;font-size:13px;font-weight:600;"
-                                   "background:transparent;")
-            v.addWidget(chip_row)
+
+        # 顶部: 我的最美照片 + 地区/罕见度徽章
+        photos = self.lib.photos_of_species(code)
+        top = QHBoxLayout()
+        top.setSpacing(18)
+        if photos:
+            top.addWidget(self._best_photo_widget(photos))
+        badges = self._dex_badges(hint, code, region_id,
+                                  sp_info["in_classifier"])
+        if badges:
+            bl = QHBoxLayout()
+            bl.setSpacing(8)
+            for b in badges:
+                bl.addWidget(b)
+            bl.addStretch(1)
+            bl.setAlignment(Qt.AlignTop)
+            top.addLayout(bl, 1)
+        if top.count():
+            v.addLayout(top)
+
+        # 地区分布表
+        heat = self._heat_card(hint, code, region_id)
+        if heat is not None:
+            v.addWidget(heat)
 
         if dex:
             for key, zh_label, en_label in DEX_FIELDS:
@@ -425,6 +788,105 @@ class SpeciesPage(QWidget):
             v.addWidget(none_tip)
         self.content_lay.addWidget(card)
         self.content_lay.addStretch(1)
+
+    def _best_photo_widget(self, photos: list[dict]) -> QWidget:
+        """图鉴页顶部「我的最美照片」: 美学评分最高一张, 点击进查看器。"""
+        from ..theme.widgets import PhotoGridItem
+        box = QWidget()
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(6)
+        cap = QLabel(t("我的最美照片", "My best photo"))
+        cap.setStyleSheet(f"color:{theme.LABEL_2};font-size:12px;font-weight:700;"
+                          "background:transparent;")
+        bv.addWidget(cap)
+        best = photos[0]   # photos_of_species已按美学评分降序
+        ids = [p["photo_id"] for p in photos]
+        row = self.lib.conn.execute(
+            "SELECT path, file_hash FROM photos WHERE id=?",
+            (best["photo_id"],)).fetchone()
+        pm = None
+        if row:
+            tp = cached_thumbnail(self.lib.root, row["file_hash"], 256)
+            if not tp:
+                # 导入只生成512px缓存, 256未命中时从更大缓存降采样一张(毫秒级)
+                tp = ensure_thumbnail(self.lib.root, row["path"],
+                                      row["file_hash"], 256)
+            if tp:
+                pm = QPixmap(str(tp))
+        item = PhotoGridItem(pm, label=(best["taken_at"] or "")[:10],
+                             corner=t("★最美", "★ Best"))
+        item.setCursor(Qt.PointingHandCursor)
+        item.mousePressEvent = lambda e, pid=best["photo_id"], i2=list(ids): \
+            self._open(pid, i2)
+        bv.addWidget(item)
+        return box
+
+    def _dex_badges(self, hint, code: str, region_id: str,
+                    in_classifier) -> list[QLabel]:
+        pills = []
+        if region_id not in ("GLOBAL", ""):
+            mt = hint.region_tier(code, region_id)
+            if mt:
+                reg = regions.region_display(region_id)
+                tier = tier_display(mt)
+                pills.append(_pill(
+                    t(f"📍 {reg}：{tier}", f"📍 {reg}: {tier}"),
+                    theme.FILL, theme.LABEL_2))
+            rt = hint.rarity_tier(code, region_id)
+            if rt:
+                shown = tier_display(rt)
+                bg, fg = theme.FILL, theme.LABEL_2
+                for tiers, colors in RARITY_PILL.items():
+                    if rt in tiers:  # i18n:ok
+                        bg, fg = colors
+                pills.append(_pill(
+                    t(f"🎯 罕见度·{shown}", f"🎯 Rarity · {shown}"), bg, fg))
+        if not in_classifier:
+            pills.append(_pill(
+                t("ℹ️ 该物种不在AI识别范围(图鉴-only)",
+                  "ℹ️ Not covered by AI recognition (field-guide only)"),
+                theme.FILL, theme.LABEL_2))
+        return pills
+
+    def _heat_card(self, hint, code: str, region_id: str | None):
+        """地区分布卡片; 物种无任何分布数据时返回None。"""
+        try:
+            peaks = {rid: v for rid, v in hint.region_peaks(code).items()
+                     if v > -1.49}
+        except Exception:
+            return None
+        if not peaks:
+            return None
+        parents = hint.gp.region_parents()
+        rows, hidden = _heat_rows(peaks, parents, region_id)
+        return _HeatTable(rows, peaks, hidden, region_id,
+                          self._open_distribution_map,
+                          self._open_migration_map)
+
+    def _open_migration_map(self):
+        # 局部import: WebEngine(194MB DLL)只在用户点击迁徙地图后才拉起
+        from PySide6.QtWidgets import QMessageBox
+        from .migration_view import MigrationMapDialog
+        try:
+            dlg = MigrationMapDialog(self.lib, self.win, self.current_code,
+                                     parent=self)
+        except FileNotFoundError as e:   # git源码库缺maplibre等资产
+            QMessageBox.warning(self, t("迁徙地图", "Migration map"), str(e))
+            return
+        dlg.exec()
+
+    def _open_distribution_map(self):
+        # 局部import: WebEngine(194MB DLL)只在用户点击分布地图后才拉起
+        from PySide6.QtWidgets import QMessageBox
+        from .distribution_map import DistributionMapDialog
+        try:
+            dlg = DistributionMapDialog(self.lib, self.win, self.current_code,
+                                        parent=self)
+        except FileNotFoundError as e:   # git源码库缺省界GeoJSON等资产
+            QMessageBox.warning(self, t("分布地图", "Distribution map"), str(e))
+            return
+        dlg.exec()
 
     def _render_culture(self, code: str):
         stories = get_culture().stories_for(code)
@@ -494,9 +956,13 @@ class SpeciesPage(QWidget):
         self.content_lay.addStretch(1)
 
     def _tab_changed(self, idx: int):
+        if self._mode == "detail" and self.current_code:
+            # 离开当前tab前记住其滚动位置, 切回来时恢复
+            self._detail_scroll[self.detail_tab] = \
+                self.scroll.verticalScrollBar().value()
         self.detail_tab = idx
         if self.current_code:
-            self._show_detail(self.current_code)
+            self._show_detail(self.current_code, restore=True)
 
     def _open(self, photo_id: int, ids: list[int]):
         dlg = PhotoViewer(self.lib, self.win, photo_id, ids)

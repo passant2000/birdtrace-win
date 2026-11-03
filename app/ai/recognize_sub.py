@@ -38,16 +38,17 @@ def _force_utf8_stdio():
 
 
 def build_worker_cmd(assets: str, conf: str,
-                     use_gpu: bool = True) -> tuple[list[str], str | None]:
+                     use_gpu: bool = True, engine: str = "sp") -> tuple[list[str], str | None]:
     """构造识别worker子进程命令(源码态python -m / 冻结态exe自我复用)。
 
     ⚠️冻结态绝不能用-m: sys.executable是exe, 会把主程序再开一遍
     (用户撞过的"无限开窗死循环")。返回(cmd, cwd)。
     use_gpu=False: 查看器单张重识别用CPU(够快, 且避免与批量识别的
     GPU子进程同机并存时个别环境DML初始化不稳)。
+    engine: 识别引擎(sp=SuperPicky移植 / v06=0.6引擎), worker按此构造。
     """
     import sys
-    tail = ["--conf", conf] + ([] if use_gpu else ["--cpu"])
+    tail = ["--conf", conf, "--engine", engine] + ([] if use_gpu else ["--cpu"])
     if getattr(sys, "frozen", False):
         return [sys.executable, "--recognize-worker",
                 "--assets", assets] + tail, None
@@ -61,11 +62,13 @@ def _proj_root():
     return Path(__file__).resolve().parent.parent.parent
 
 
-def run_worker(assets, conf: str = "0.25", use_gpu: bool = True):
+def run_worker(assets, conf: str = "0.25", use_gpu: bool = True,
+               engine: str = "sp"):
     """识别worker主循环(main.py --recognize-worker 与 -m 入口共用)。
 
     顺序一问一答(经验证稳定; 曾试过reader线程+解码线程池的流水线并行,
     个别环境下子进程在import管线时死锁, 已回退——批量提速靠GPU推理本身)。
+    engine: sp=SuperPicky引擎 / v06=0.6引擎(app.ai.engine工厂)。
     """
     _force_utf8_stdio()
     pipe = None
@@ -75,7 +78,9 @@ def run_worker(assets, conf: str = "0.25", use_gpu: bool = True):
         sys.stdout.flush()
 
     for line in sys.stdin:
-        line = line.strip()
+        # 只去行尾换行, 不用strip(): 协议行可能以\t结尾(空尾列, 如无month
+        # 的临时识别), strip会把空尾列吃掉导致IndexError
+        line = line.rstrip("\r\n").strip("\ufeff")
         if not line:
             continue
         try:
@@ -95,15 +100,9 @@ def run_worker(assets, conf: str = "0.25", use_gpu: bool = True):
             continue
         try:
             if pipe is None:
-                from app.ai.pipeline import RecognitionPipeline
-                pipe = RecognitionPipeline(
-                    detector_path=str(Path(assets) / "models" / "BirdTraceBirdDetector_FP32.onnx"),
-                    classifier_path=str(Path(assets) / "models" / "BirdTraceRecognitionModel.onnx"),
-                    labels_path=str(Path(assets) / "data" / "labels.json"),
-                    geo_prior_path=str(Path(assets) / "data" / "geo_prior.sqlite"),
-                    use_gpu=use_gpu,
-                    conf_thr=float(conf),
-                )
+                from app.ai.engine import build_recognizer
+                pipe = build_recognizer(assets, engine, use_gpu=use_gpu,
+                                        conf=float(conf))
             from app.ai.pipeline import load_rgb
             img = load_rgb(path)
             if box is not None:
@@ -121,9 +120,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--assets", required=True)
     ap.add_argument("--conf", default="0.25")
+    ap.add_argument("--engine", default="sp", choices=["sp", "v06"])
     ap.add_argument("--cpu", action="store_true", help="CPU推理(单张重识别)")  # i18n:ok
     args, _ = ap.parse_known_args()
-    run_worker(args.assets, args.conf, use_gpu=not args.cpu)
+    run_worker(args.assets, args.conf, use_gpu=not args.cpu, engine=args.engine)
 
 
 if __name__ == "__main__":
