@@ -65,6 +65,39 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QGuiApplication
         QGuiApplication.instance().aboutToQuit.connect(self._stop_bg_workers)
 
+    def eventFilter(self, obj, ev):
+        # 侧边栏导航按钮拖动重排: 按住拖过相邻项即交换位置, 松手存顺序
+        from PySide6.QtCore import QEvent, QPoint
+        if ev.type() == QEvent.MouseButtonPress \
+                and obj in self._nav_buttons.values():
+            self._nav_drag_start = ev.position().toPoint()
+        elif ev.type() == QEvent.MouseMove \
+                and obj in self._nav_buttons.values() \
+                and getattr(self, "_nav_drag_start", None) is not None:
+            b = obj
+            dy = ev.position().toPoint().y() - self._nav_drag_start.y()
+            if abs(dy) > 18:
+                lay = self._nav_lay
+                idx = lay.indexOf(b)
+                new_idx = idx + (1 if dy > 0 else -1)
+                if 0 <= new_idx < lay.count():
+                    w = lay.itemAt(new_idx).widget()
+                    if w is not None and w in self._nav_buttons.values():
+                        lay.removeWidget(b)
+                        lay.insertWidget(new_idx, b)
+                        self._nav_drag_start = ev.position().toPoint()
+                        self._save_nav_order()
+        elif ev.type() == QEvent.MouseButtonRelease \
+                and obj in self._nav_buttons.values():
+            self._nav_drag_start = None
+        return super().eventFilter(obj, ev)
+
+    def _save_nav_order(self):
+        keys = [k for k, b in self._nav_buttons.items()
+                if self._nav_lay.indexOf(b) >= 0]
+        keys.sort(key=lambda k: self._nav_lay.indexOf(self._nav_buttons[k]))
+        self.lib.set_setting("nav_order", ",".join(keys))
+
     def _stop_bg_workers(self):
         """退出前让后台QThread有机会收尾, 避免线程销毁告警。"""
         if self.aes_worker and self.aes_worker.isRunning():
@@ -133,7 +166,15 @@ class MainWindow(QMainWindow):
         lay.addSpacing(18)
 
         self._nav_buttons: dict[str, QPushButton] = {}
-        for key, label in _nav():
+        self._nav_lay = lay
+        # 拖动重排(2026-11-04用户): 记住上次顺序(nav_order设置)
+        order_raw = self.lib.get_setting("nav_order", "")
+        nav_items = _nav()
+        if order_raw:
+            keys = [k for k in order_raw.split(",") if k in dict(nav_items)]
+            keys += [k for k, _l in nav_items if k not in keys]
+            nav_items = [(k, dict(nav_items)[k]) for k in keys]
+        for key, label in nav_items:
             b = QPushButton(label)
             b.setObjectName("NavItem")
             b.setCheckable(True)
@@ -141,6 +182,7 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self.switch_to(k))
             lay.addWidget(b)
             self._nav_buttons[key] = b
+            b.installEventFilter(self)
         self._nav_buttons["about"].setChecked(True)
 
         lay.addStretch()
