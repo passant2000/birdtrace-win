@@ -35,6 +35,8 @@ class TimelinePage(QWidget):
         self.win = win
         self._offline_ids: set[int] = set()
         self._missing_ids: set[int] = set()
+        self._group_level = "month"   # 内容区分组级别: month(默认)/day
+        self._group_day = None        # day级别下聚焦的日期(YYYY-MM-DD)
         self._thumb_cache: dict[int, QPixmap] = {}
         self._select_mode = False
         self._selected: set[int] = set()
@@ -537,63 +539,34 @@ class TimelinePage(QWidget):
             # 函数末尾的_build_tree。
             self._build_tree({})
             return
+        import collections
         for ym, photos in data.items():
             year, month = (ym.split("-") + [""])[:2]
             n_ym = counts.get(ym, len(photos))
             head_txt = (t(f"{year}年{int(month)}月 · {n_ym} 张",
                           f"{year}-{int(month):02d} · {n_ym} photos")
                         if month else ym)
-            head = QLabel(head_txt)
-            head.setStyleSheet(f"font-size:17px;font-weight:700;color:{theme.LABEL_2};"
-                               "background:transparent;padding:8px 2px 2px 2px;")
-            self.content_lay.addWidget(head)
-            self._ym_head[ym] = head   # 时间树跳转锚点
+            # day级别: 只渲染聚焦日期所在月, 且月内按日再分小节
+            day_mode = getattr(self, "_group_level", "month") == "day"
+            if day_mode:
+                focus = getattr(self, "_group_day", None)
+                ym_of_focus = (focus or "")[:7]
+                if focus and ym != ym_of_focus:
+                    continue
+                by_day = collections.OrderedDict()
+                for ph in photos:
+                    iso = self._iso_date(ph.get("taken_at")) or ""
+                    by_day.setdefault(iso or "?", []).append(ph)
+                if focus:
+                    by_day = collections.OrderedDict(
+                        (d, v) for d, v in by_day.items() if d == focus)
+                for d, v in by_day.items():
+                    self._render_month_block(ym, v, counts, lifer_ids,
+                                             year_ids, day_label=d)
+                continue
+            self._render_month_block(ym, photos, counts, lifer_ids,
+                                     year_ids, head_txt=head_txt)
 
-            grid_widget = QWidget()
-            grid = QGridLayout(grid_widget)
-            grid.setContentsMargins(0, 0, 0, 12)
-            grid.setSpacing(10)
-            # 列数统一走_wanted_cols(视口宽)——此处曾另有一套页宽公式,
-            # 比视口多算~2列, 网格永远横向溢出(2026-11-02用户实测回归)
-            cols = self._wanted_cols()
-            for i, ph in enumerate(photos):
-                if ph["id"] in lifer_ids:
-                    corner = t("首见", "First sighting")
-                elif ph["id"] in year_ids:
-                    corner = t("年鸟", "Year bird")
-                else:
-                    corner = None
-                thumb = self._thumb(ph)
-                if ph["id"] in self._offline_ids:
-                    corner = t("原图离线", "Offline")       # 卷未接入, 插回即恢复
-                elif ph["id"] in self._missing_ids:
-                    corner = t("文件丢失", "File missing")   # 不在原位置
-                item = PhotoGridItem(thumb, label="", corner=corner,
-                                     stack=ph.get("group_n", 0))
-                item.setFixedSize(THUMB + 12, THUMB + 12)
-                item.setCursor(Qt.PointingHandCursor)
-                item.set_selected(ph["id"] in self._selected)
-                def _click(_e, _pid=ph["id"], _it=item,
-                           _gids=ph.get("group_ids")):
-                    # 防御: 网格重建后残留的僵尸控件点击直接忽略
-                    try:
-                        self._on_item_click(_pid, _it, _gids)
-                    except RuntimeError:
-                        pass
-                item.mousePressEvent = _click
-                self._grid_items[ph["id"]] = item
-                self._order_ids.append(ph["id"])
-                iso = self._iso_date(ph.get("taken_at"))
-                if iso:
-                    self._iso_dates[ph["id"]] = iso
-                day = self._day_key(ph.get("taken_at"))
-                if day:
-                    dk = f"{ym}|{day}"
-                    if dk not in self._day_item:   # 当日首个网格项=跳转锚点
-                        self._day_item[dk] = item
-                grid.addWidget(item, i // cols, i % cols)
-            grid.setColumnStretch(cols, 1)
-            self.content_lay.addWidget(grid_widget)
         self.content_lay.addStretch(1)
         self._build_tree(raw)
         self._restore_scroll_after_rebuild()
@@ -602,6 +575,74 @@ class TimelinePage(QWidget):
         # 初次打开时页面尚未布局, 列数按陈旧宽度算(曾固定4列)——布局
         # 稳定后再校正一次(列数没变则直接返回, 无开销)
         QTimer.singleShot(0, self._on_relayout)
+
+    def _render_month_block(self, ym: str, photos: list, counts: dict,
+                            lifer_ids: set, year_ids: set,
+                            day_label: str | None = None,
+                            head_txt: str | None = None):
+        """渲染一个月的标题+网格; day_label给定→插日小标题(按日分组)。"""
+        year, month = (ym.split("-") + [""])[:2]
+        n_ym = counts.get(ym, len(photos))
+        if head_txt is None:
+            head_txt = (t(f"{year}年{int(month)}月 · {n_ym} 张",
+                          f"{year}-{int(month):02d} · {n_ym} photos")
+                        if month else ym)
+        head = QLabel(head_txt)
+        head.setStyleSheet(f"font-size:17px;font-weight:700;color:{theme.LABEL_2};"
+                           "background:transparent;padding:8px 2px 2px 2px;")
+        self.content_lay.addWidget(head)
+        self._ym_head[ym] = head   # 时间树跳转锚点
+        if day_label:
+            n_d = len(photos)
+            dl = QLabel(t(f"{int(day_label[8:10])}日 · {n_d} 张",
+                          f"Day {int(day_label[8:10])} · {n_d} photos"))
+            dl.setStyleSheet(f"font-size:14px;font-weight:600;color:{theme.LABEL_3};"
+                             "background:transparent;padding:2px 2px 0 2px;")
+            self.content_lay.addWidget(dl)
+
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 12)
+        grid.setSpacing(10)
+        cols = self._wanted_cols()
+        for i, ph in enumerate(photos):
+            if ph["id"] in lifer_ids:
+                corner = t("首见", "First sighting")
+            elif ph["id"] in year_ids:
+                corner = t("年鸟", "Year bird")
+            else:
+                corner = None
+            thumb = self._thumb(ph)
+            if ph["id"] in self._offline_ids:
+                corner = t("原图离线", "Offline")       # 卷未接入, 插回即恢复
+            elif ph["id"] in self._missing_ids:
+                corner = t("文件丢失", "File missing")   # 不在原位置
+            item = PhotoGridItem(thumb, label="", corner=corner,
+                                 stack=ph.get("group_n", 0))
+            item.setFixedSize(THUMB + 12, THUMB + 12)
+            item.setCursor(Qt.PointingHandCursor)
+            item.set_selected(ph["id"] in self._selected)
+            def _click(_e, _pid=ph["id"], _it=item,
+                       _gids=ph.get("group_ids")):
+                # 防御: 网格重建后残留的僵尸控件点击直接忽略
+                try:
+                    self._on_item_click(_pid, _it, _gids)
+                except RuntimeError:
+                    pass
+            item.mousePressEvent = _click
+            self._grid_items[ph["id"]] = item
+            self._order_ids.append(ph["id"])
+            iso = self._iso_date(ph.get("taken_at"))
+            if iso:
+                self._iso_dates[ph["id"]] = iso
+            day = self._day_key(ph.get("taken_at"))
+            if day:
+                dk = f"{ym}|{day}"
+                if dk not in self._day_item:   # 当日首个网格项=跳转锚点
+                    self._day_item[dk] = item
+            grid.addWidget(item, i // cols, i % cols)
+        grid.setColumnStretch(cols, 1)
+        self.content_lay.addWidget(grid_widget)
 
     def _wanted_cols(self) -> int:
         """当前布局下时间线应有的列数(用视口实际宽度——初次打开时
@@ -686,9 +727,26 @@ class TimelinePage(QWidget):
             it += 1
 
     def _on_tree_click(self, item: QTreeWidgetItem, _col: int) -> None:
-        """点击树节点→滚动到对应月份标题/当日首图。"""
+        """点击树节点→滚动到对应月份标题/当日首图。
+
+        点具体日期=内容区改按**日**分组(各日小标题, 2026-11-04用户);
+        点年/月=按月分组(默认)。级别变化时重建内容区。"""
         key = item.data(0, Qt.UserRole)
         target = None
+        if key and "|" in key:
+            day = key.split("|", 1)[1]
+            if getattr(self, "_group_level", "month") != "day" or                     getattr(self, "_group_day", None) != day:
+                # 级别切换: 按日分组并重建(重建后走下方滚动定位)
+                self._group_level = "day"
+                self._group_day = day
+                self.refresh(force=True)
+                self._retarget_tree_item(key)
+        elif key:
+            if getattr(self, "_group_level", "month") != "month":
+                self._group_level = "month"
+                self._group_day = None
+                self.refresh(force=True)
+                self._retarget_tree_item(key)
         if key and "|" in key:
             target = self._day_item.get(key)
         elif key:
@@ -705,6 +763,24 @@ class TimelinePage(QWidget):
         except RuntimeError:
             return                    # 刷新竞态: 控件已删, 忽略本次点击
         self.scroll.verticalScrollBar().setValue(max(0, y - 12))
+
+    def _retarget_tree_item(self, key: str) -> None:
+        """refresh重建树后, 按key在新树里找回对应节点并选中(旧item已被
+        deleteLater——直接setSelected会崩, 0.8按日分组时实测)。"""
+        def walk(it):
+            for i in range(it.childCount()):
+                ch = it.child(i)
+                if ch.data(0, Qt.UserRole) == key:
+                    return ch
+                got = walk(ch)
+                if got is not None:
+                    return got
+            return None
+        for top in range(self.tree_nav.topLevelItemCount()):
+            node = walk(self.tree_nav.topLevelItem(top))
+            if node is not None:
+                self.tree_nav.setCurrentItem(node)
+                return
 
     def _sync_tree_current(self) -> None:
         """滚动位置→高亮树中当前区块(视口顶部所在月/日)。"""

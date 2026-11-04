@@ -337,6 +337,8 @@ class SpeciesPage(QWidget):
         self.current_code = None
         self.back_btn.setVisible(False)
         self.search.setVisible(True)
+        # 返回列表恢复进详情前的位置(2026-11-04用户: 每次都得从头拉)
+        self._pending_scroll = self._list_scroll
         self._show_list()
 
     def _on_range_for_restore(self, _mn: int, _mx: int):

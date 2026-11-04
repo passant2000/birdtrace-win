@@ -42,9 +42,13 @@ def settle(ms=300):
 
 page.refresh(force=True)
 settle(800)
+# 连拍折叠(0.8-③)后浏览视图是折叠集; 日期/范围选择都在多选模式(展开集)下
+# 执行——统计时点必须在 toggle_select 之后(2026-11-04正式库出现连拍后暴露)
+page._toggle_select()
+settle(600)
 order = list(page._order_ids)
 dates = dict(page._iso_dates)
-print("照片数:", len(order), "| 日期种类:", len(set(dates.values())))
+print("照片数(展开):", len(order), "| 日期种类:", len(set(dates.values())))
 assert len(order) > 20
 tree_before = page.tree_nav.topLevelItemCount()
 print("树顶层(年)数:", tree_before)
@@ -52,7 +56,6 @@ print("树顶层(年)数:", tree_before)
 # ---- 1) 按日期选择 ----
 day = sorted(set(dates.values()))[3]
 expect = sum(1 for d in dates.values() if d == day)
-page._toggle_select()
 page._select_date_range(day, day, append=False)
 print(f"日期选择 {day}: 选中{len(page._selected)} 预期{expect}")
 assert len(page._selected) == expect and expect > 0

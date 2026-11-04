@@ -423,6 +423,14 @@ class PhotoViewer(QDialog):
             title = QLabel(f"{sname(rec['cn'], rec['en'])}  "
                            f"<span style='color:#AEAEB2'>{conf_pct}</span>")
             title.setTextFormat(Qt.RichText)
+            # 点鸟种名 → 候选菜单(top5含概率, 直接改; 2026-11-04用户,
+            # 同待复核页体验); "其他鸟种…"走完整选鸟器
+            title.setCursor(Qt.PointingHandCursor)
+            title.setToolTip(t("点击改鸟种（候选含各概率）",
+                               "Click to change species (candidates with "
+                               "probabilities)"))
+            title.mousePressEvent = lambda _e, rid=rec["record_id"], r=dict(rec): \
+                self._species_menu(title, rid, r)
             head.addWidget(title, 1)
             fix = QPushButton(t("改鸟种…", "Change species…"))
             fix.setCursor(Qt.PointingHandCursor)
@@ -535,6 +543,28 @@ class PhotoViewer(QDialog):
         self.recs = recs
         self._render_records()
         self.win.library_changed.emit()
+
+    def _species_menu(self, anchor, record_id: int, rec: dict):
+        """鸟种名点击菜单: top5候选(概率)+其他鸟种…。"""
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        try:
+            top5 = json.loads(rec.get("top5_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            top5 = []
+        eff = rec.get("eff_code")
+        for cand in top5:
+            si = self.lib.species_info(cand["code"])
+            nm = sname(si["cn"], si["en"]) if si else cand["code"]
+            act = menu.addAction(f"{'✓ ' if cand['code'] == eff else ''}"
+                                 f"{nm}  {float(cand.get('prob', 0))*100:.0f}%")
+            act.setEnabled(cand["code"] != eff)
+            act.triggered.connect(
+                lambda _=False, c=cand["code"]: self._confirm(record_id, c))
+        menu.addSeparator()
+        menu.addAction(t("其他鸟种…", "Other species…")).triggered.connect(
+            lambda: self._pick_species(record_id))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
     def _pick_species(self, record_id: int):
         from .species_pick import SpeciesPickDialog
