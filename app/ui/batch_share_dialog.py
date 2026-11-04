@@ -98,6 +98,12 @@ class BatchShareDialog(QDialog):
 
         srow = QHBoxLayout()
         srow.addWidget(QLabel(t("鸟种", "Species")))
+        # 每种张数(2026-11-04用户: 可选多张, 不足几张出几张)
+        self.per_combo = QComboBox()
+        for n in (1, 2, 3, 4):
+            self.per_combo.addItem(t(f"每种 {n} 张", f"{n} per species"), n)
+        self.per_combo.currentIndexChanged.connect(lambda _i: self._update_count())
+        srow.addWidget(self.per_combo)
         self.species_combo = QLineEdit()
         self.species_combo.setReadOnly(True)
         srow.addWidget(self.species_combo, 1)
@@ -255,13 +261,16 @@ class BatchShareDialog(QDialog):
         d1 = self.from_date.date().toString("yyyy-MM-dd")
         d2 = self.to_date.date().toString("yyyy-MM-dd")
         try:
-            n = len(self.lib.best_share_cards(d1, d2, self._selected_code()))
+            cands = self.lib.best_share_cards(d1, d2, self._selected_code(),
+                                              self.per_combo.currentData() or 1)
         except Exception:
-            n = 0
+            cands = []
+        n = len(cands)
         self.count_hint.setText(t(
-            f"共 {n} 个鸟种将各出一张「最美」（美学×置信，仅已确认或置信≥0.5）",
-            f"{n} species will each get one “best” card "
-            "(aesthetic × confidence; confirmed or confidence ≥ 0.5 only)"))
+            f"共 {n} 张（每鸟种 {self.per_combo.currentData() or 1} 张「最美」："
+            "美学×置信，仅已确认或置信≥0.5）",
+            f"{n} cards ({self.per_combo.currentData() or 1} “best” per "
+            "species: aesthetic × confidence; confirmed or ≥ 0.5 only)"))
 
     # ---------- 导出 ----------
     def _card_info(self, row: dict) -> dict:
@@ -293,7 +302,8 @@ class BatchShareDialog(QDialog):
     def _export(self):
         d1 = self.from_date.date().toString("yyyy-MM-dd")
         d2 = self.to_date.date().toString("yyyy-MM-dd")
-        cands = self.lib.best_share_cards(d1, d2, self._selected_code())
+        cands = self.lib.best_share_cards(
+            d1, d2, self._selected_code(), self.per_combo.currentData() or 1)
         if not cands:
             QMessageBox.information(self, t("批量分享卡", "Batch share cards"),
                                     t("该范围内没有可出卡的照片",

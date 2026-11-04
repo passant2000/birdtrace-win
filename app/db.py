@@ -1193,8 +1193,10 @@ class Library:
         return [r["id"] for r in rows]
 
     def best_share_cards(self, date_from: str, date_to: str,
-                         code: str | None = None) -> list[dict]:
-        """批量分享卡候选(0.8-⑥): 日期区间内每鸟种一张"最美"。
+                         code: str | None = None,
+                         per_species: int = 1) -> list[dict]:
+        """批量分享卡候选(0.8-⑥): 日期区间内每鸟种 per_species 张"最美"
+        (2026-11-04用户: 张数可选, 不足几张出几张)。
 
         "最美" = 美学分 × 置信度 取最高; 只取 已确认(confirmed_code非空,
         含手工标注, 其confidence=1.0) 或 原始置信≥0.5 的rank=1记录——
@@ -1220,11 +1222,12 @@ class Library:
             args.append(code)
         sql += "ORDER BY p.aesthetic * v.confidence DESC, v.confidence DESC"
         out: list[dict] = []
-        seen: set[str] = set()
+        per: dict[str, int] = {}
         for r in self.conn.execute(sql, args).fetchall():
-            if r["eff_code"] in seen:
+            n = per.get(r["eff_code"], 0)
+            if n >= max(1, per_species):
                 continue
-            seen.add(r["eff_code"])
+            per[r["eff_code"]] = n + 1
             out.append(dict(r))
         return out
 
