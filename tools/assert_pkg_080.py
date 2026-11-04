@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""0.8.0-test1包内断言: 0.7全部检查 + 0.8八项新功能 + 名录1097 + MapTilerKey清除。
+"""0.8.0-test2包内断言: 0.7全部检查 + 0.8八项新功能 + 名录1097 + MapTilerKey清除。
 方法沿用0.6.0: CArchive TOC解析→PYZ marshal code对象→co_names/co_consts
 (常量元组是整体tuple, 符号要兼收tuple元素)。
 """
@@ -132,7 +132,7 @@ def symbols(code):
 # 版本
 v = code_of("app.version")
 syms = symbols(v) if v else set()
-check("版本=0.8.0-test1", "0.8.0-test1" in syms)
+check("版本=0.8.0-test2", "0.8.0-test2" in syms)
 
 # SP引擎
 e = code_of("app.ai.sp_engine")
@@ -273,7 +273,39 @@ check("时间线0.8入口", {"burst_btn", "_collapse_on", "_batch_share",
 mn8 = code_of("app.ui.main_window")
 s = symbols(mn8) if mn8 else set()
 check("主窗口sidecar定时器", "_flush_sidecars_tick" in s
-      and "start_burst_regroup" in s)
+      and "start_burst_regroup" in s
+      and "_save_nav_order" in s and "nav_order" in s)
+bu2 = code_of("app.db")
+s = symbols(bu2) if bu2 else set()
+check("连拍鸟种统一(unify)", "unify_burst_species" in s)
+im2 = code_of("app.ui.import_page")
+s = symbols(im2) if im2 else set()
+check("导入地区确认弹窗", "确认拍摄地区" in s
+      and any("提高识别准确率" in x for x in s if isinstance(x, str)))
+tl5 = code_of("app.ui.timeline_page")
+s = symbols(tl5) if tl5 else set()
+check("重新识别地区/鸟点", "_batch_rerecognize" in s
+      and "识别地区与鸟点" in s)
+rp2 = code_of("app.ui.review_page")
+s = symbols(rp2) if rp2 else set()
+check("待复核全rank(多鸟低置信)", "删除这条记录" in s)
+bt2 = code_of("app.ui.batch_share_dialog")
+s = symbols(bt2) if bt2 else set()
+check("批量分享卡张数+快捷范围", "per_combo" in s and "_apply_quick" in s)
+ed2 = code_of("app.ui.export_dialog")
+s = symbols(ed2) if ed2 else set()
+check("导出模板/快捷/开文件夹", {"_template", "_apply_quick", "tpl_combos"} <= s
+      and "startfile" in s)
+mv3 = code_of("app.ui.migration_view")
+s = symbols(mv3) if mv3 else set()
+check("迁徙非模态+切鸟种", "switch_species" in s
+      and "WindowMaximizeButtonHint" in s)
+mg2 = code_of("app.core.migration")
+s = symbols(mg2) if mg2 else set()
+check("迁徙目录缓存优先", "prefer_cache" in s)
+sp3 = code_of("app.ui.species_page")
+s = symbols(sp3) if sp3 else set()
+check("主题感知配色(OLIVE)", "theme.OLIVE" in s or "OLIVE" in s)
 sh2 = code_of("app.ui.share_dialog")
 s = symbols(sh2) if sh2 else set()
 check("share_dialog复用函数", {"exif_parts_of", "rarity_info"} <= s)
