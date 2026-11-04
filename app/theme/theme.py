@@ -222,6 +222,7 @@ def _set_module_colors(c: dict):
     g["BG"], g["BG_SECONDARY"], g["SIDEBAR_BG"], g["SEPARATOR"] = \
         c["BG"], c["CARD"], c["SIDEBAR"], c["SEP"]
     g["LABEL"], g["LABEL_2"], g["LABEL_3"] = c["LABEL"], c["LABEL_2"], c["LABEL_3"]
+    g["OLIVE"] = c["OLIVE"]
     g["BLUE"], g["GREEN"], g["RED"], g["ORANGE"] = \
         c["BLUE"], c["GREEN"], c["RED"], c["ORANGE"]
     g["FILL"], g["CARD"], g["HOVER"], g["PRESSED"] = \
