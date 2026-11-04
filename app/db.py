@@ -1185,6 +1185,86 @@ class Library:
         from .core.burst import BURST_VERSION
         return self.get_setting("burst_version", "") != BURST_VERSION
 
+    def unify_burst_species(self, gap_s: float = 2.0,
+                            threshold: float = 0.5) -> dict:
+        """连拍组鸟种统一(0.8-②学习SuperPicky burst_species, 用户2026-11-04):
+        按**纯拍摄时间链**(≤gap_s, 不管鸟种——组先形成再统一)成组,
+        组内置信最高且≥threshold的rank=1帧为胜出帧, 其余有鸟帧统一为
+        胜出帧的鸟种与置信度; 组内无帧达标则整组不动。
+        人工确认过的记录(reviewed=1/confirmed_code)绝不改写。
+        在识别完成后由主窗口后台调用(与UI折叠分组是两套组: 本函数
+        按时间, 折叠按时间+鸟种+哈希——统一后两者自然一致)。
+
+        返回 {"groups": 检查组数, "changed": 改写帧数}。"""
+        from .core.burst import parse_ts
+        rows = self.conn.execute(
+            "SELECT p.id, COALESCE(e.dt_original, p.added_at) AS ts, "
+            "  p.group_id FROM photos p "
+            "LEFT JOIN exif e ON e.photo_id=p.id").fetchall()
+        items = []
+        for r in rows:
+            ts = parse_ts(r["ts"])
+            if ts is not None:
+                items.append((ts, r["id"]))
+        items.sort()
+        groups: list[list[int]] = []
+        cur: list[int] = []
+        last_ts = None
+        for ts, pid in items:
+            if cur and ts - last_ts <= gap_s:
+                cur.append(pid)
+            else:
+                if len(cur) >= 2:
+                    groups.append(cur)
+                cur = [pid]
+            last_ts = ts
+        if len(cur) >= 2:
+            groups.append(cur)
+        changed = 0
+        for members in groups:
+            best = None   # (conf, pid, code, rec_id, top5)
+            for pid in members:
+                rec = self.conn.execute(
+                    "SELECT id, species_code, confidence, top5_json, reviewed, "
+                    "  confirmed_code FROM records "
+                    "WHERE photo_id=? AND rank=1 "
+                    "ORDER BY confidence DESC LIMIT 1", (pid,)).fetchone()
+                if rec is None:
+                    continue
+                if rec["reviewed"] or rec["confirmed_code"]:
+                    continue   # 人工确认帧: 优先级高于自动胜出, 不参与也不被改
+                if rec["confidence"] is None or rec["confidence"] < threshold:
+                    continue
+                if best is None or rec["confidence"] > best[0]:
+                    best = (rec["confidence"], pid, rec["species_code"],
+                            rec["id"], rec["top5_json"])
+            if best is None:
+                continue
+            w_conf, w_pid, w_code, _w_rid, w_top5 = best
+            for pid in members:
+                if pid == w_pid:
+                    continue
+                rec = self.conn.execute(
+                    "SELECT id, species_code, confidence, reviewed, "
+                    "  confirmed_code FROM records "
+                    "WHERE photo_id=? AND rank=1 "
+                    "ORDER BY confidence DESC LIMIT 1", (pid,)).fetchone()
+                if rec is None or rec["reviewed"] or rec["confirmed_code"]:
+                    continue   # 无鸟帧/人工帧不动
+                if rec["species_code"] == w_code and                         (rec["confidence"] or 0) >= threshold:
+                    continue
+                self.conn.execute(
+                    "UPDATE records SET species_code=?, confidence=?, "
+                    "  top5_json=?, source='burst', reviewed=0 "
+                    "WHERE id=?",
+                    (w_code, w_conf, w_top5, rec["id"]))
+                self.conn.execute(
+                    "UPDATE photos SET cand_json=NULL WHERE id=?", (pid,))
+                changed += 1
+        if changed:
+            self.conn.commit()
+        return {"groups": len(groups), "changed": changed}
+
     def group_members(self, group_id: str) -> list[int]:
         """组内照片id, 按拍摄时间升序。"""
         rows = self.conn.execute(

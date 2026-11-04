@@ -63,13 +63,23 @@ class BurstWorker(QThread):
     结果直接写 photos.group_id, 完成后主窗口刷新时间线/鸟种页。"""
     finished_all = Signal(dict)        # {"groups": n, "photos": n, "changed": n}
 
-    def __init__(self, lib: Library, parent=None):
+    def __init__(self, lib: Library, unify: bool = False, parent=None):
         super().__init__(parent)
         self.lib = lib
+        self.unify = unify   # 识别完成后顺带做连拍组鸟种统一(0.8学SP)
 
     def run(self):
         try:
             res = self.lib.regroup_bursts()
         except Exception as e:          # 分组失败不影响任何现有功能
             res = {"groups": 0, "photos": 0, "changed": 0, "error": str(e)}
+        if self.unify:
+            try:
+                uni = self.lib.unify_burst_species()
+                res["unified"] = uni["changed"]
+                # 统一改了识别记录 → 按新鸟种重算折叠分组
+                res = self.lib.regroup_bursts()
+                res["unified"] = uni["changed"]
+            except Exception:
+                pass
         self.finished_all.emit(res)

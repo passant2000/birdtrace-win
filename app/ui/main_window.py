@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.aes_worker = None
         self.burst_worker = None
         self._regroup_pending = False   # 识别刚完成: 新照片待分组
+        self._regroup_unify = False     # 该次分组是否附带鸟种统一
         # 标注随文件夹走(0.8-①): 标注变更→库标脏目录, 定时flush(识别进行中不动)
         from PySide6.QtCore import QTimer as _QTimer
         self._sc_timer = _QTimer(self)
@@ -249,6 +250,7 @@ class MainWindow(QMainWindow):
         self._update_status()
         # 新识别的照片接着补美学分(鸟种排序/年度十八图要用), 之后重算连拍分组
         self._regroup_pending = True
+        self._regroup_unify = True   # 识别完成: 连拍组鸟种统一(学SP)
         self.start_aesthetic_backfill()
         # 大量原文件丢失(典型: 引用模式库拷到别的电脑): 明确告知
         missing = summary.get("missing_files", 0)
@@ -336,7 +338,8 @@ class MainWindow(QMainWindow):
         if not (force or self._regroup_pending or self.lib.bursts_stale()):
             return
         from ..core.aesthetic_worker import BurstWorker
-        self.burst_worker = BurstWorker(self.lib, parent=self)
+        self.burst_worker = BurstWorker(self.lib, unify=getattr(
+            self, "_regroup_unify", False), parent=self)
         self.burst_worker.finished_all.connect(self._burst_done)
         self.burst_worker.start()
 
