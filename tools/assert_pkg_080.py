@@ -291,6 +291,12 @@ poi = code_of("app.ui.map_page")
 s = symbols(poi) if poi else set()
 check("POI单数据源", "_parse_maptiler" not in s
       and any("地名搜索不可用" in x for x in s if isinstance(x, str)))
+dm2 = code_of("app.ui.distribution_map")
+strs = [k for k in (symbols(dm2) if dm2 else set()) if isinstance(k, str)]
+# 悬浮定位(2026-11-04修复: 此前#tip无定位永远在窗口外)
+check("分布地图悬浮定位",
+      any("clientWidth-4" in x for x in strs)
+      and any("tip.style.left" in x for x in strs))
 try:
     _ovd = json.loads((DIST / "assets/data/cn_name_overrides.json").read_text(
         encoding="utf-8"))

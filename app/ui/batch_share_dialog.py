@@ -15,9 +15,9 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtWidgets import (QDateEdit, QDialog, QFileDialog, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QProgressBar,
-                               QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QComboBox, QDateEdit, QDialog, QFileDialog,
+                               QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QProgressBar, QPushButton, QVBoxLayout)
 
 from .. import theme
 from ..core import regions
@@ -51,6 +51,15 @@ class BatchShareDialog(QDialog):
         lay.setSpacing(12)
 
         range_card, rc = make_card(t("范围", "Range"))
+        qrow = QHBoxLayout()
+        qrow.addWidget(QLabel(t("快捷", "Quick")))
+        self.quick_seg = SegmentedControl(
+            [t("今天", "Today"), t("近7天", "Last 7d"), t("本月", "This month"),
+             t("今年", "This year"), t("全部", "All")])
+        self.quick_seg.changed.connect(self._apply_quick)
+        qrow.addWidget(self.quick_seg, 1)
+        rc.addLayout(qrow)
+
         drow = QHBoxLayout()
         drow.addWidget(QLabel(t("日期从", "From")))
         today = QDate.currentDate()
@@ -58,14 +67,34 @@ class BatchShareDialog(QDialog):
         self.from_date.setCalendarPopup(True)
         self.from_date.setDisplayFormat("yyyy-MM-dd")
         drow.addWidget(self.from_date)
+        self.from_year = QComboBox()
+        self.from_year.setMaximumWidth(86)
+        drow.addWidget(self.from_year)
         drow.addSpacing(12)
         drow.addWidget(QLabel(t("到", "to")))
         self.to_date = QDateEdit(today)
         self.to_date.setCalendarPopup(True)
         self.to_date.setDisplayFormat("yyyy-MM-dd")
         drow.addWidget(self.to_date)
+        self.to_year = QComboBox()
+        self.to_year.setMaximumWidth(86)
+        drow.addWidget(self.to_year)
         drow.addStretch(1)
         rc.addLayout(drow)
+
+        # 年份下拉: QDateEdit转轮/日历翻页调年份很费劲(用户2026-11-04),
+        # 年份一点直达; 日期手动改动时同步回显(信号防回环)
+        years = sorted({str(y) for y in self.lib.available_years()}
+                       | {str(today.year())}, reverse=True)
+        for combo in (self.from_year, self.to_year):
+            combo.addItem(t("年份…", "Year…"))
+            for y in years:
+                combo.addItem(y)
+            combo.activated.connect(
+                self._on_year_combo if combo is self.from_year
+                else self._on_year_combo_to)
+        self.from_date.dateChanged.connect(lambda q: self._sync_year_combo())
+        self.to_date.dateChanged.connect(lambda q: self._sync_year_combo())
 
         srow = QHBoxLayout()
         srow.addWidget(QLabel(t("鸟种", "Species")))
@@ -156,6 +185,47 @@ class BatchShareDialog(QDialog):
         return Path.home() / "Pictures" / t("BirdTrace分享卡", "BirdTrace Cards")
 
     # ---------- 范围选择 ----------
+    def _apply_quick(self, idx: int):
+        """快捷范围: 今天/近7天/本月/今年/全部(2000-01-01起)。"""
+        today = QDate.currentDate()
+        spans = {
+            0: (today, today),
+            1: (today.addDays(-6), today),
+            2: (QDate(today.year(), today.month(), 1), today),
+            3: (QDate(today.year(), 1, 1), today),
+            4: (QDate(2000, 1, 1), today),
+        }
+        d1, d2 = spans.get(idx, (today, today))
+        self.from_date.setDate(d1)
+        self.to_date.setDate(d2)
+
+    def _on_year_combo(self, idx: int):
+        self._year_apply(self.from_date, self.from_year, idx)
+
+    def _on_year_combo_to(self, idx: int):
+        self._year_apply(self.to_date, self.to_year, idx)
+
+    def _year_apply(self, edit: QDateEdit, combo: QComboBox, idx: int):
+        """年份下拉: 只换年份部分(月日保持, 2/29→2/28由QDate钳制)。"""
+        y = combo.itemText(idx)
+        if not y.isdigit():
+            return
+        d = edit.date()
+        edit.setDate(QDate(int(y), d.month(), d.day()))
+
+    def _sync_year_combo(self):
+        """日期手动改动 → 年份下拉回显(防信号回环)。"""
+        for edit, combo in ((self.from_date, self.from_year),
+                            (self.to_date, self.to_year)):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            y = str(edit.date().year())
+            for i in range(combo.count()):
+                if combo.itemText(i) == y:
+                    combo.setCurrentIndex(i)
+                    break
+            combo.blockSignals(False)
+
     def _pick_species(self):
         from .species_pick import SpeciesPickDialog
         dlg = SpeciesPickDialog(self.lib, t("选择鸟种", "Choose species"), self)

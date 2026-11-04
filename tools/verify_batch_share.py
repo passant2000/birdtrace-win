@@ -55,6 +55,7 @@ def main():
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
+    from PySide6.QtCore import QDate
     from PySide6.QtWidgets import QApplication, QMessageBox
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
@@ -120,6 +121,22 @@ def main():
     dlg.species_combo.setText("")
     dlg._update_count()
 
+    # 快捷范围+年份下拉(2026-11-04: 年份转轮难调)
+    # 注: SegmentedControl.setCurrent不发changed(真实点击才发), 测试直调处理器
+    dlg._apply_quick(3)             # 今年
+    d1, d2 = dlg.from_date.date(), dlg.to_date.date()
+    check(d1 == d1.addDays(-d1.day() + 1) and d2 == QDate.currentDate(),
+          f"快捷'今年'→1月1日~今天 ({d1.toString('yyyy-MM-dd')}~"
+          f"{d2.toString('yyyy-MM-dd')})")
+    dlg.to_year.addItem("2019")     # 测试库只有2026一年, 补一个旧年
+    dlg._on_year_combo_to(dlg.to_year.count() - 1)
+    check(dlg.to_date.date().year() == 2019
+          and dlg.to_date.date().month() == d2.month()
+          and dlg.to_date.date().day() == d2.day(),
+          f"年份下拉选2019→只换年份月日保持 ({dlg.to_date.date().toString('yyyy-MM-dd')})")
+    dlg._apply_quick(0)             # 今天
+    check(dlg.from_date.date() == dlg.to_date.date() == QDate.currentDate(),
+        "快捷'今天'→从=到=今天")
     dlg.dir_edit.setText(str(OUT_DIR))
     dlg.name_edit.setText("测试者")
     dlg._export()
