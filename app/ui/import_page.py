@@ -133,8 +133,9 @@ class ImportPage(QWidget):
                             "background:transparent;")
         lay.addWidget(title)
 
-        # ---- 地区 ----
+        # ---- 地区(重要: 边框高亮——选错地区=识别按错误名录跑, 2026-11-04用户) ----
         card3, form3 = make_card(t("拍摄地区（提高识别准确率）", "Region (improves ID accuracy)"))
+        card3.setStyleSheet("QFrame{border:2px solid #F5A623;border-radius:12px;}")
         reg_row = QHBoxLayout()
         self.country_combo = QComboBox()
         self.sub_combo = QComboBox()
@@ -493,6 +494,36 @@ class ImportPage(QWidget):
                       "Choose a destination folder first (click Browse…)"))
                 return
         region = self.current_region()
+        # 拍摄地区确认(2026-11-04用户: 地区太重要, 开始导入前确认一次;
+        # 不对→返回修改地区再点开始导入)
+        from ..core import regions as _regions
+        region_txt = _regions.region_display(region) if region and region != "GLOBAL"             else t("全球（未指定地区）", "Global (no region set)")
+        spot_txt = t("不挂鸟点", "No spot")
+        spot_data = self.spot_combo.currentData()
+        if spot_data == self.AUTO:
+            spot_txt = t("按GPS自动归点", "Auto by GPS")
+        elif isinstance(spot_data, int):
+            info = self.lib.spot_info(spot_data)
+            spot_txt = info["name"] if info else str(spot_data)
+        mode_txt = {0: t("引用原位置", "Reference originals"),
+                    1: t("复制到新位置", "Copy to new location"),
+                    2: t("移动到新位置", "Move to new location")}[mode]
+        from PySide6.QtWidgets import QMessageBox
+        r = QMessageBox.question(
+            self, t("确认拍摄地区", "Confirm shooting region"),
+            t(f"拍摄地区：{region_txt}\n"
+              f"鸟点：{spot_txt}\n"
+              f"导入方式：{mode_txt}\n\n"
+              "地区决定识别使用的物种名录与先验——确认无误再开始导入。"
+              "\n（选错了？点 No 返回修改后再点「开始导入」）",
+              f"Shooting region: {region_txt}\n"
+              f"Spot: {spot_txt}\n"
+              f"Import mode: {mode_txt}\n\n"
+              "The region decides which species list and prior are used "
+              "for ID — confirm before importing.\n"
+              "(Wrong? Click No to go back and fix it.)"))
+        if r != QMessageBox.Yes:
+            return
         self.lib.set_setting("default_region", region)
         spot_data = self.spot_combo.currentData()
         self._last_spot_choice = spot_data
