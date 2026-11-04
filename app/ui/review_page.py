@@ -162,6 +162,24 @@ class ReviewPage(QWidget):
 
     def _not_bird(self, item: dict):
         from PySide6.QtWidgets import QMessageBox
+        n_recs = self.lib.conn.execute(
+            "SELECT COUNT(*) FROM records WHERE photo_id=?",
+            (item["photo_id"],)).fetchone()[0]
+        if n_recs > 1:
+            # 多鸟照片的次要鸟: 只删这条低置信记录(2026-11-04, 待复核扩到
+            # 全rank后——mark_not_bird会连主鸟一起清掉)
+            r = QMessageBox.question(
+                self, t("删除这条记录", "Delete this record"),
+                t("这张照片还有其他识别记录。只删除这一条低置信记录吗？\n"
+                  "（「不是鸟」整张移到未识别只适用于单鸟照片）",
+                  "This photo has other records. Delete only this "
+                  "low-confidence one?\n(\"Not a bird\" (whole photo) only "
+                  "applies to single-bird photos)"))
+            if r == QMessageBox.StandardButton.Yes:
+                self.lib.remove_record(item["record_id"])
+                self.refresh()
+                self.win.library_changed.emit()
+            return
         r = QMessageBox.question(
             self, t("移到「未识别」", "Move to Unidentified"),
             t("确认这张照片里没有鸟？\n它会从「待复核」移到「未识别」，"

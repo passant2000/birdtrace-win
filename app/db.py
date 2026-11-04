@@ -696,12 +696,13 @@ class Library:
         return best, (best_d if best else None)
 
     def review_queue(self) -> list[dict]:
-        """待复核: 低置信度或整图兜底的未确认主记录。"""
+        """待复核: 低置信或整图兜底的未确认记录(全部rank, 2026-11-04用户:
+        多鸟照片的第二只低置信鸟此前直接进鸟种库绕过待复核)。"""
         rows = self.conn.execute(
             "SELECT v.record_id, v.photo_id, v.path, v.confidence, v.source, "
             "  s.code, s.cn, s.en, v.taken_at "
             "FROM v_records v JOIN species s ON s.code=v.eff_code "
-            "WHERE v.rank=1 AND v.reviewed=0 AND v.confirmed_code IS NULL "
+            "WHERE v.reviewed=0 AND v.confirmed_code IS NULL "
             "  AND (v.confidence < 0.5 OR v.source='whole') "
             "ORDER BY v.confidence ASC").fetchall()
         return [dict(r) for r in rows]
