@@ -231,8 +231,9 @@ class YearlyReportDialog(QFrame):
                                           item["hash"], 240)
                     if tp:
                         pm = QPixmap(str(tp))
+                        # 完整显示(同长图, 2026-11-04用户)
                         thumb.setPixmap(pm.scaled(
-                            120, 90, Qt.KeepAspectRatioByExpanding,
+                            120, 90, Qt.KeepAspectRatio,
                             Qt.SmoothTransformation))
                 g3.addWidget(thumb, i // 6, i % 6)
             cv3.addWidget(host3)
@@ -371,10 +372,12 @@ class YearlyReportDialog(QFrame):
                                           item["hash"], cw2 * 2)
                     if tp:
                         im = QPixmap(str(tp))
-                        sc = im.scaled(cw2, ch2, Qt.KeepAspectRatioByExpanding,
+                        # 完整显示照片(KeepAspectRatio居中, 不足处留底色)
+                        # ——裁切填充会只见局部(2026-11-04用户)
+                        sc = im.scaled(cw2, ch2, Qt.KeepAspectRatio,
                                        Qt.SmoothTransformation)
-                        p.drawPixmap(int(bx - (sc.width() - cw2) / 2),
-                                     int(by - (sc.height() - ch2) / 2), sc)
+                        p.drawPixmap(int(bx + (cw2 - sc.width()) / 2),
+                                     int(by + (ch2 - sc.height()) / 2), sc)
                 p.restore()
         # 月度简表(y0已在画布计算处按实际行数得出)
         p.setPen(QColor(R_TITLE))
