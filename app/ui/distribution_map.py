@@ -85,7 +85,20 @@ new QWebChannel(qt.webChannelTransport, function(ch){
       paint:{'line-color':'rgba(60,60,60,0.55)','line-width':0.7}});
     map.on('mousemove','prov-fill',function(e){
       var info=TIPS[e.features[0].id];
-      if(info){ tip.textContent=info.tip; tip.style.display='block'; }
+      if(info){
+        tip.textContent=info.tip;
+        tip.style.display='block';
+        // Pin beside the cursor, flip at right/bottom edges. Before
+        // 2026-11-04 the tip had no positioning at all: it sat in the
+        // document flow after the 100%-height container, so it rendered
+        // off-window and hover looked dead (0.6.0..0.8.0-test1).
+        var w=tip.offsetWidth, h=tip.offsetHeight;
+        var x=e.point.x+14, y=e.point.y+14;
+        if(x+w>map.getCanvas().clientWidth-4) x=e.point.x-w-14;
+        if(y+h>map.getCanvas().clientHeight-4) y=e.point.y-h-14;
+        tip.style.left=Math.max(4,x)+'px';
+        tip.style.top=Math.max(4,y)+'px';
+      }
     });
     map.on('mouseleave','prov-fill',function(){ tip.style.display='none'; });
     if(PENDING){ apiSetValues(PENDING); PENDING=null; }

@@ -117,6 +117,61 @@ def main():
     check(v0 == payload["110000"]["v"],
           f"北京feature-state为峰值先验 ({v0})")
 
+    # ---- 4. 悬浮定位(回归: 0.6.0~0.8.0-test1提示框无定位=永远在窗口外) ----
+    print("\n[4] 悬浮省份详情(合成鼠标事件真打省面)")
+    # 北京中心投影像素, 在canvas上派发真实DOM mousemove → 走maplibre
+    # 委托事件+queryRenderedFeatures, 与用户悬浮完全同路径
+    js = """
+    (function(){
+      var p=map.project([116.407, 39.904]);
+      var cv=map.getCanvas();
+      cv.dispatchEvent(new MouseEvent('mousemove',
+        {clientX:p.x, clientY:p.y, bubbles:true}));
+      return JSON.stringify({px:p.x, py:p.y});
+    })()
+    """
+    import json as _json
+    pt = _json.loads(js_query(js, timeout_ms=5000) or "{}")
+    check(bool(pt), "投影+事件派发完成")
+    loop3 = QEventLoop()
+    QTimer.singleShot(400, loop3.quit)
+    loop3.exec()
+    state = _json.loads(js_query("""
+    (function(){
+      var t=document.getElementById('tip');
+      var r=t.getBoundingClientRect();
+      return JSON.stringify({disp:t.style.display, text:t.textContent,
+              left:r.left, top:r.top, w:r.width, h:r.height,
+              vw:window.innerWidth, vh:window.innerHeight});
+    })()
+    """, timeout_ms=5000) or "{}")
+    check(bool(state) and state.get("disp") == "block",
+          f"悬浮后提示框display=block ({(state or {}).get('disp')})")
+    check(bool(state) and "北京" in (state.get("text") or ""),
+          f"文案含省份名 ({(state or {}).get('text')!r})")
+    check(bool(state) and 0 <= state["left"] < state["vw"]
+          and 0 <= state["top"] < state["vh"],
+          f"提示框在窗口内 ({state['left']:.0f},{state['top']:.0f} in "
+          f"{state['vw']}x{state['vh']}) — 此前永远在窗口外")
+    check(bool(state) and abs(state["left"] - (pt["px"] + 14)) < 60
+          and abs(state["top"] - (pt["py"] + 14)) < 60,
+          f"提示框跟随鼠标 (鼠标{pt['px']:.0f},{pt['py']:.0f} → "
+          f"框{state['left']:.0f},{state['top']:.0f})")
+    # 移开(海上) → 隐藏
+    js_query("""
+    (function(){
+      var cv=map.getCanvas();
+      cv.dispatchEvent(new MouseEvent('mousemove',
+        {clientX:4, clientY:window.innerHeight-8, bubbles:true}));
+      return true;
+    })()
+    """, timeout_ms=5000)
+    loop4 = QEventLoop()
+    QTimer.singleShot(400, loop4.quit)
+    loop4.exec()
+    disp2 = js_query("document.getElementById('tip').style.display")
+    check(disp2 == "none", f"移开隐藏 ({disp2})")
+
     pm = dlg.grab()
     shots = PROJ / "data/ui_shots"
     shots.mkdir(exist_ok=True)
