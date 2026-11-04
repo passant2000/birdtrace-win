@@ -20,7 +20,7 @@ ASSETS = assets_dir()
 
 # 鸟种资产版本: species_catalog/overrides/labels/iucn 变更时递增,
 # 启动时发现不一致就重刷 species 表(旧库也能吃到中文名等修正)。
-SPECIES_DATA_VERSION = "2026-11-03a"
+SPECIES_DATA_VERSION = "2026-11-04a"
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
