@@ -58,10 +58,12 @@ class TempIdDialog(QDialog):
         b_file.setCursor(Qt.PointingHandCursor)
         b_file.clicked.connect(self._pick_file)
         row.addWidget(b_file)
-        self.status = QLabel(t("截图(如微信/QQ截图)后点粘贴，或选择图片文件——"
-                               "识别不保存到照片库",
-                               "Take a screenshot then paste, or choose an "
-                               "image — results are not saved to the library"))
+        self.status = QLabel(t(
+            "截图后点粘贴，或选择/拖入图片——支持 JPG/PNG/WebP 和相机 RAW"
+            "（ARW/CR2/CR3/NEF/RAF/ORF/RW2/DNG/PEF/SRW）——识别不保存到照片库",
+            "Take a screenshot then paste, or choose / drop an image — "
+            "JPG/PNG/WebP and camera RAW (ARW/CR2/CR3/NEF/RAF/ORF/RW2/DNG/"
+            "PEF/SRW) supported — results are not saved to the library"))
         self.status.setStyleSheet(f"color:{theme.LABEL_3};font-size:12px;"
                                   "background:transparent;")
         self.status.setWordWrap(True)
@@ -107,17 +109,18 @@ class TempIdDialog(QDialog):
     def _pick_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, t("选择图片", "Choose image"), "",
-            t("图片文件 (*.jpg *.jpeg *.png *.webp *.bmp *.arw *.cr2 *.cr3 "
-              "*.nef *.raf *.orf *.rw2 *.dng *.pef *.srw)",
-              "Images (*.jpg *.jpeg *.png *.webp *.bmp *.arw *.cr2 *.cr3 "
-              "*.nef *.raf *.orf *.rw2 *.dng *.pef *.srw)"))
+            t("图片文件 (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff "
+              "*.arw *.cr2 *.cr3 *.nef *.raf *.orf *.rw2 *.dng *.pef *.srw)",
+              "Images (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff "
+              "*.arw *.cr2 *.cr3 *.nef *.raf *.orf *.rw2 *.dng *.pef *.srw)"))
         if path:
             self._recognize_file(Path(path))
 
     def dragEnterEvent(self, ev):
         urls = ev.mimeData().urls() if ev.mimeData() else []
         if urls and urls[0].toLocalFile().lower().endswith(
-                (".jpg", ".jpeg", ".png", ".webp", ".bmp") + _RAW_EXTS):
+                (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff")
+                + _RAW_EXTS):
             ev.acceptProposedAction()
 
     def dropEvent(self, ev):
