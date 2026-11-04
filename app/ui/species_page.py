@@ -507,7 +507,7 @@ class SpeciesPage(QWidget):
             badges.append(t("🌿年鸟", "🌿 Year bird"))
         if badges:
             b = QLabel(" ".join(badges))
-            b.setStyleSheet("font-size:12px;font-weight:700;color:#8A9455;"
+            b.setStyleSheet(f"font-size:12px;font-weight:700;color:{theme.OLIVE};"
                             "background:transparent;")
             v.addWidget(b)
         name = QLabel(sname(sp["cn"], sp["en"]))
@@ -921,11 +921,11 @@ class SpeciesPage(QWidget):
             if a.get("label"):
                 txt = f"📌 {a['label']}"
                 if a.get("caveat"):
-                    txt += f"　<span style='color:#AEAEB2'>{a['caveat']}</span>"
+                    txt += f"　<span style='color:{theme.LABEL_3}'>{a['caveat']}</span>"
                 lab = QLabel(txt)
                 lab.setTextFormat(Qt.RichText)
                 lab.setWordWrap(True)
-                lab.setStyleSheet("color:#8A9455;font-size:13px;background:transparent;"
+                lab.setStyleSheet(f"color:{theme.OLIVE};font-size:13px;background:transparent;"
                                   "padding:2px 4px;")
                 self.content_lay.addWidget(lab)
         for s in stories:
@@ -936,11 +936,11 @@ class SpeciesPage(QWidget):
             v.setSpacing(8)
             if s["categories"]:
                 cat = QLabel(" · ".join(s["categories"]))
-                cat.setStyleSheet("color:#8A9455;font-size:12px;font-weight:700;"
+                cat.setStyleSheet(f"color:{theme.OLIVE};font-size:12px;font-weight:700;"
                                   "background:transparent;")
                 v.addWidget(cat)
             title = QLabel(s["title"] or "")
-            title.setStyleSheet("font-size:17px;font-weight:800;color:#1C1C1E;"
+            title.setStyleSheet(f"font-size:17px;font-weight:800;color:{theme.LABEL};"
                                 "background:transparent;")
             title.setWordWrap(True)
             v.addWidget(title)
@@ -952,7 +952,7 @@ class SpeciesPage(QWidget):
             body = QLabel(s["body"].replace("\n", "<br>"))
             body.setWordWrap(True)
             body.setTextFormat(Qt.RichText)
-            body.setStyleSheet("color:#3A3A32;font-size:14px;line-height:150%;"
+            body.setStyleSheet(f"color:{theme.LABEL_2};font-size:14px;line-height:150%;"
                                "background:transparent;")
             v.addWidget(body)
             foot_bits = []

@@ -416,6 +416,59 @@ class TimelinePage(QWidget):
             QMessageBox.Yes | QMessageBox.No)
         if r != QMessageBox.Yes:
             return
+        # 地区/鸟点可选调整(2026-11-04用户: 导入时可能选错地区和鸟点)
+        from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout,
+                                       QHBoxLayout, QPushButton)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(t("识别地区与鸟点", "Region & spot"))
+        form = QFormLayout(dlg)
+        regions_mod = __import__("app.core.regions", fromlist=["regions"])
+        reg_combo = QComboBox()
+        q2 = ",".join("?" * len(ids))
+        batch_regions = [r["region_id"] for r in self.lib.conn.execute(
+            f"SELECT DISTINCT b.region_id AS region_id FROM batches b "
+            f"JOIN photos p ON p.batch_id=b.id WHERE p.id IN ({q2})")
+            if r["region_id"]]
+        cur = batch_regions[0] if len(set(batch_regions)) == 1 else None
+        reg_combo.addItem(t("保持不变", "Keep unchanged"), None)
+        tree = regions_mod.build_tree()["countries"]
+        for cnode in tree:
+            reg_combo.addItem(cnode["name"], None)   # 国家级
+            for snode in cnode.get("subs") or []:
+                reg_combo.addItem("    " + snode["name"], snode["id"])
+        if cur:
+            idx = reg_combo.findData(cur)
+            if idx >= 0:
+                reg_combo.setCurrentIndex(idx)
+        spot_combo = QComboBox()
+        spot_combo.addItem(t("保持不变", "Keep unchanged"), "keep")
+        spot_combo.addItem(t("不挂鸟点", "No spot"), None)
+        for sp in self.lib.spots_overview():
+            spot_combo.addItem(sp["name"], sp["id"])
+        form.addRow(t("识别地区", "Region"), reg_combo)
+        form.addRow(t("鸟点", "Spot"), spot_combo)
+        bb = QHBoxLayout()
+        bb.addStretch(1)
+        ok = QPushButton(t("开始识别", "Start"))
+        ok.setObjectName("Primary")
+        ok.clicked.connect(dlg.accept)
+        cancel = QPushButton(t("取消", "Cancel"))
+        cancel.clicked.connect(dlg.reject)
+        bb.addWidget(cancel)
+        bb.addWidget(ok)
+        form.addRow(bb)
+        if not dlg.exec():
+            return
+        new_region = reg_combo.currentData()
+        spot_choice = spot_combo.currentData()
+        if new_region:
+            self.lib.conn.execute(
+                f"UPDATE batches SET region_id=? WHERE id IN ("
+                f"SELECT DISTINCT batch_id FROM photos WHERE id IN ({q}))",
+                [new_region] + ids)
+            self.lib.conn.commit()
+        if spot_choice != "keep":
+            self.lib.set_photos_spot(ids, spot_choice)
         self.lib.reset_recognition(ids)
         self._selected.clear()
         self.win.library_changed.emit()

@@ -28,7 +28,7 @@ class ReviewPage(QWidget):
 
         head = QHBoxLayout()
         self.title = QLabel(t("待复核", "Pending review"))
-        self.title.setStyleSheet("font-size:26px;font-weight:800;color:#1C1C1E;"
+        self.title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
                                  "background:transparent;")
         head.addWidget(self.title)
         head.addStretch(1)
