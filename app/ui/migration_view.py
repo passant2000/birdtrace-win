@@ -400,12 +400,20 @@ class _Legend(QWidget):
 
 
 class MigrationMapDialog(QDialog):
-    """52周迁徙动画对话框(模态)。入口: 图鉴页「迁徙地图…」。"""
+    """52周迁徙动画窗口(非模态, 可最大化)。入口: 图鉴页「迁徙地图…」。
+
+    非模态(2026-11-04用户): 下载数据慢, 下载期间要能继续用软件其他
+    功能; 窗口持在 species_page 上, 重复点按钮时 raise 已开的窗口。"""
 
     def __init__(self, lib, win, code: str, parent=None):
         super().__init__(parent or win)
         self.lib = lib
         self.code = code
+        self.setWindowModality(Qt.NonModal)
+        self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowMaximizeButtonHint
+                            | Qt.WindowMinimizeButtonHint)
+        self.resize(1180, 780)
         self._labels: list[str] = []   # 先于时间线(其信号会触发_on_week)
         self._phases: list[str] = []
         self._js: list[str] = []
@@ -428,7 +436,6 @@ class MigrationMapDialog(QDialog):
         sp = lib.species_info(code)
         name = sname(sp["cn"], sp["en"])
         self.setWindowTitle(t(f"{name} · 迁徙地图", f"{name} · Migration map"))
-        self.resize(1100, 740)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 12, 12, 10)
@@ -580,6 +587,31 @@ class MigrationMapDialog(QDialog):
         for e in self._js:
             self.web.page().runJavaScript(e)
         self._js = []
+
+    # ---- 鸟种切换(非模态窗口复用) ----
+    def switch_species(self, code: str):
+        """切换鸟种: 停掉在途worker, 复位状态, 重新下载/渲染。"""
+        if code == self.code:
+            return
+        for w in (self._worker, self._view_worker):
+            if w is not None and w.isRunning():
+                w.cancel() if hasattr(w, "cancel") else w.wait(2000)
+        self._worker = None
+        self._view_worker = None
+        self.code = code
+        self._world_cache = None
+        self._sqlite_path = None
+        self._data_ready = False
+        self._lod = "world"
+        sp = self.lib.species_info(code)
+        name = sname(sp["cn"], sp["en"]) if sp else code
+        self.setWindowTitle(t(f"{name} · 迁徙地图", f"{name} · Migration map"))
+        self._retry_btn.hide()
+        self._status.setText(t("正在获取迁徙目录…", "Fetching migration catalog…"))
+        self._bar.setRange(0, 0)
+        self._bar.show()
+        self._timer.stop()
+        self._start_download()
 
     # ---- 下载 ----
     def _start_download(self):

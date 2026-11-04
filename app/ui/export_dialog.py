@@ -49,6 +49,14 @@ class ExportDialog(QDialog):
 
         # 范围
         range_card, rc = make_card(t("范围", "Range"))
+        qrow = QHBoxLayout()
+        qrow.addWidget(QLabel(t("快捷", "Quick")))
+        self.quick_seg = SegmentedControl(
+            [t("今天", "Today"), t("近7天", "Last 7d"), t("本月", "This month"),
+             t("今年", "This year"), t("全部", "All")])
+        self.quick_seg.changed.connect(self._apply_quick)
+        qrow.addWidget(self.quick_seg, 1)
+        rc.addLayout(qrow)
         drow = QHBoxLayout()
         drow.addWidget(QLabel(t("日期从", "From")))
         self.from_date = QDateEdit()
@@ -58,14 +66,32 @@ class ExportDialog(QDialog):
         self.from_date.setMinimumDate(QDate(2000, 1, 1))
         self.from_date.setDate(self.from_date.minimumDate())
         drow.addWidget(self.from_date)
+        self.from_year = QComboBox()
+        self.from_year.setMaximumWidth(86)
+        drow.addWidget(self.from_year)
         drow.addSpacing(10)
         drow.addWidget(QLabel(t("到", "to")))
         self.to_date = QDateEdit(QDate.currentDate())
         self.to_date.setCalendarPopup(True)
         self.to_date.setDisplayFormat("yyyy-MM-dd")
         drow.addWidget(self.to_date)
+        self.to_year = QComboBox()
+        self.to_year.setMaximumWidth(86)
+        drow.addWidget(self.to_year)
         drow.addStretch(1)
         rc.addLayout(drow)
+        # 年份下拉(批量分享卡同款, 2026-11-04用户: 转轮/翻月调年份太费劲)
+        today = QDate.currentDate()
+        _years = sorted({str(y) for y in self.lib.available_years()}
+                        | {str(today.year())}, reverse=True)
+        for combo in (self.from_year, self.to_year):
+            combo.addItem(t("年份…", "Year…"))
+            for y in _years:
+                combo.addItem(y)
+        self.from_year.activated.connect(self._on_year_from)
+        self.to_year.activated.connect(self._on_year_to)
+        self.from_date.dateChanged.connect(lambda _q: self._sync_year())
+        self.to_date.dateChanged.connect(lambda _q: self._sync_year())
 
         srow = QHBoxLayout()
         srow.addWidget(QLabel(t("鸟种", "Species")))
@@ -132,13 +158,29 @@ class ExportDialog(QDialog):
         hrow.addWidget(self.hier_seg, 1)
         cb.addLayout(hrow)
         mc.addWidget(self.copy_box)
-        nrow = QHBoxLayout()
-        nrow.addWidget(QLabel(t("文件名", "File names")))
-        self.name_seg = SegmentedControl([t("原文件名", "Original"),
-                                          t("日期_鸟种_序号", "Date_Species_No.")])
-        self.name_seg.changed.connect(lambda _i: self._update_preview())
-        nrow.addWidget(self.name_seg, 1)
-        mc.addLayout(nrow)
+        # 文件名模板: CameraRaw式下拉组合(2026-11-04用户)
+        # 每段∈ 无/原文件名/日期/鸟名/序号/鸟点, 用"_"连接;
+        # 默认 日期+鸟名+序号 (=原"日期_鸟种_序号")
+        self._SEG_ITEMS = [t("（无）", "(none)"), t("原文件名", "Filename"),
+                           t("日期", "Date"), t("鸟名", "Species"),
+                           t("序号", "No."), t("鸟点", "Spot")]
+        self._SEG_KEYS = [None, "filename", "date", "name", "seq", "spot"]
+        tpl_row = QHBoxLayout()
+        tpl_row.addWidget(QLabel(t("文件名", "File names")))
+        self.tpl_combos = []
+        for _i in range(4):
+            combo = QComboBox()
+            for it in self._SEG_ITEMS:
+                combo.addItem(it)
+            combo.setMaximumWidth(110)
+            combo.activated.connect(lambda _ix: self._update_preview())
+            tpl_row.addWidget(combo)
+            self.tpl_combos.append(combo)
+        self.tpl_combos[0].setCurrentIndex(self._SEG_ITEMS.index(t("日期", "Date")))
+        self.tpl_combos[1].setCurrentIndex(self._SEG_ITEMS.index(t("鸟名", "Species")))
+        self.tpl_combos[2].setCurrentIndex(self._SEG_ITEMS.index(t("序号", "No.")))
+        tpl_row.addStretch(1)
+        mc.addLayout(tpl_row)
         self.warn_lab = QLabel()
         self.warn_lab.setWordWrap(True)
         self.warn_lab.setStyleSheet(
@@ -180,6 +222,45 @@ class ExportDialog(QDialog):
         self.spot_combo.currentIndexChanged.connect(lambda _i: self._update_preview())
         self.hier_seg.changed.connect(lambda _i: self._update_preview())
         self.rated_toggle.toggled.connect(lambda _v: self._update_preview())
+
+    def _apply_quick(self, idx: int):
+        # 快捷范围: 今天/近7天/本月/今年/全部(2000-01-01=不限)
+        today = QDate.currentDate()
+        spans = {
+            0: (today, today),
+            1: (today.addDays(-6), today),
+            2: (QDate(today.year(), today.month(), 1), today),
+            3: (QDate(today.year(), 1, 1), today),
+            4: (QDate(2000, 1, 1), today),
+        }
+        d1, d2 = spans.get(idx, (today, today))
+        self.from_date.setDate(d1)
+        self.to_date.setDate(d2)
+
+    def _on_year_from(self, idx: int):
+        self._year_apply(self.from_date, self.from_year, idx)
+
+    def _on_year_to(self, idx: int):
+        self._year_apply(self.to_date, self.to_year, idx)
+
+    def _year_apply(self, edit, combo, idx: int):
+        y = combo.itemText(idx)
+        if not y.isdigit():
+            return
+        d = edit.date()
+        edit.setDate(QDate(int(y), d.month(), d.day()))
+
+    def _sync_year(self):
+        for edit, combo in ((self.from_date, self.from_year),
+                            (self.to_date, self.to_year)):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            y = str(edit.date().year())
+            for i in range(combo.count()):
+                if combo.itemText(i) == y:
+                    combo.setCurrentIndex(i)
+                    break
+            combo.blockSignals(False)
 
     def _pick_species(self):
         from .species_pick import SpeciesPickDialog
@@ -226,20 +307,27 @@ class ExportDialog(QDialog):
             self.lib, d1, d2, self._species_code, spot_id,
             rated_only=self.rated_toggle.isChecked())
 
+    def _template(self):
+        # 下拉组合 → 段列表(跳过无); 全空=None(原文件名)
+        out = [self._SEG_KEYS[c.currentIndex()] for c in self.tpl_combos]
+        out = [k for k in out if k]
+        return out or None
+
     def _plan_now(self) -> dict:
         rows = self._range_rows()
+        tpl = self._template()
         if self._mode == "copy":
             return exporter.plan_ops(
                 rows, Path(self.dir_edit.text().strip()),
                 hierarchy=("flat" if self.hier_seg.currentIndex() == 2 else
                            "species_time" if self.hier_seg.currentIndex() == 1
                            else "time_species"),
-                naming="date_name" if self.name_seg.currentIndex() == 1
-                else "original")
+                naming="date_name" if tpl == ["date", "name", "seq"]
+                else "original", template=tpl)
         return exporter.plan_ops(rows, None,
                                  naming="date_name"
-                                 if self.name_seg.currentIndex() == 1
-                                 else "original")
+                                 if tpl == ["date", "name", "seq"]
+                                 else "original", template=tpl)
 
     def _update_preview(self):
         rows = self._range_rows()
@@ -331,6 +419,14 @@ class ExportDialog(QDialog):
                 f"Skipped {len(skipped)} photos whose originals are offline "
                 "(reconnect the drive and export again)")
         QMessageBox.information(self, t("导出", "Export"), msg)
+        # 导出后直接打开新位置文件夹(2026-11-04用户)
+        try:
+            if self._mode == "copy" and done_all:
+                os.startfile(str(Path(done_all[0]["dst"]).parent))
+            elif self._mode == "rename" and plan["ops"]:
+                os.startfile(str(Path(plan["ops"][0]["src"]).parent))
+        except OSError:
+            pass
         self._update_preview()
 
 

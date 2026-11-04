@@ -873,13 +873,24 @@ class SpeciesPage(QWidget):
         # 局部import: WebEngine(194MB DLL)只在用户点击迁徙地图后才拉起
         from PySide6.QtWidgets import QMessageBox
         from .migration_view import MigrationMapDialog
+        # 非模态独立窗口: 已开着就切鸟种复用, 不重复开窗(下载慢, 用户
+        # 要边等边用其他功能)
+        existing = getattr(self, "_mig_dlg", None)
+        if existing is not None and existing.isVisible():
+            existing.switch_species(self.current_code)
+            existing.raise_()
+            existing.activateWindow()
+            return
         try:
             dlg = MigrationMapDialog(self.lib, self.win, self.current_code,
                                      parent=self)
         except FileNotFoundError as e:   # git源码库缺maplibre等资产
             QMessageBox.warning(self, t("迁徙地图", "Migration map"), str(e))
             return
-        dlg.exec()
+        self._mig_dlg = dlg
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.destroyed.connect(lambda: setattr(self, "_mig_dlg", None))
+        dlg.show()
 
     def _open_distribution_map(self):
         # 局部import: WebEngine(194MB DLL)只在用户点击分布地图后才拉起

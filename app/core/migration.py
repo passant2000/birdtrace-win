@@ -80,9 +80,20 @@ class MigrationClient:
         self.timeout = timeout
 
     # ---- 目录 ----
-    def catalog(self, progress=None, cancel=None) -> dict:
-        """latest.json → catalog.json, 校验SHA256后缓存; 断网回退缓存目录。"""
+    def catalog(self, progress=None, cancel=None,
+                prefer_cache: bool = True) -> dict:
+        """latest.json → catalog.json, 校验SHA256后缓存。
+
+        prefer_cache(2026-11-04用户反馈"每次打开都重新下载"): 本地
+        catalog.json 存在就直接用(物种包另有SHA兜底校验, 目录陈旧时
+        ensure_species 会自动重下正确版本) —— 打开地图秒出, 不再每次
+        等两段网络请求; 只有本地没有目录时才联网。"""
         cache = self.dir / "catalog.json"
+        if prefer_cache and cache.exists():
+            try:
+                return json.loads(cache.read_text(encoding="utf-8"))
+            except Exception:
+                pass
         try:
             latest = json.loads(_fetch(
                 self.base_url + LATEST_KEY, self.timeout, progress,

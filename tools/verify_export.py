@@ -274,13 +274,41 @@ def main():
     dlg._on_mode(1)
     check(not dlg.copy_box.isVisibleTo(dlg)
           and "撤销" in dlg.warn_lab.text(), "切原地模式: 目标目录隐藏+警示")
-    dlg.name_seg.setCurrent(0)
+    for c in dlg.tpl_combos:
+        c.setCurrentIndex(0)   # 全(无)=原文件名
     app.processEvents()
     dlg._update_preview()
     check(dlg._plan["ops"] == [] and not dlg.go_btn.isEnabled(),
           "原地+原名=无op且禁用执行")
     dlg._on_mode(0)
-    dlg.name_seg.setCurrent(1)
+    # CameraRaw式模板: 鸟点段(2026-11-04)
+    dlg._apply_quick(4)   # 全部
+    for c in dlg.tpl_combos:
+        c.setCurrentIndex(0)   # 清空
+    dlg.tpl_combos[0].setCurrentIndex(dlg._SEG_ITEMS.index("鸟名"))
+    dlg.tpl_combos[1].setCurrentIndex(dlg._SEG_ITEMS.index("鸟点"))
+    app.processEvents()
+    dlg._update_preview()
+    _spot_ops = [o for o in dlg._plan["ops"] if o["photo_id"] and
+                 lib.conn.execute("SELECT spot_id FROM photos WHERE id=?",
+                                  (o["photo_id"],)).fetchone()[0] == sid]
+    check(_spot_ops and all("测试点" in Path(o["dst"]).stem
+                            for o in _spot_ops),
+          f"鸟名_鸟点模板落位 ({[Path(o['dst']).name for o in _spot_ops]})")
+    # 快捷+年份(同分享卡)
+    dlg._apply_quick(3)
+    check(dlg.from_date.date().month() == 1
+          and dlg.from_date.date().day() == 1, "快捷今年=1月1日起")
+    dlg.to_year.addItem("2019")
+    dlg._on_year_to(dlg.to_year.count() - 1)
+    check(dlg.to_date.date().year() == 2019, "年份下拉直跳2019")
+    # 恢复日期_鸟名_序号模板再执行
+    for c in dlg.tpl_combos:
+        c.setCurrentIndex(0)
+    dlg.tpl_combos[0].setCurrentIndex(dlg._SEG_ITEMS.index("日期"))
+    dlg.tpl_combos[1].setCurrentIndex(dlg._SEG_ITEMS.index("鸟名"))
+    dlg.tpl_combos[2].setCurrentIndex(dlg._SEG_ITEMS.index("序号"))
+    dlg._apply_quick(3)
     dlg.dir_edit.setText(str(BASE / "out_ui"))
     app.processEvents()
     dlg._run()

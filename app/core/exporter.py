@@ -43,11 +43,13 @@ def select_range(lib, date_from: str | None = None,
     sql = (
         "SELECT DISTINCT v.photo_id, p.path, v.eff_code, "
         "  COALESCE(s.cn, s.en, v.eff_code) AS name, s.en AS en_name, "
-        "  COALESCE(e.dt_original, p.added_at) AS taken_at, p.rating "
+        "  COALESCE(e.dt_original, p.added_at) AS taken_at, p.rating, "
+        "  p.spot_id, sp.name AS spot_name "
         "FROM v_records v "
         "JOIN photos p ON p.id=v.photo_id "
         "LEFT JOIN species s ON s.code=v.eff_code "
         "LEFT JOIN exif e ON e.photo_id=p.id "
+        "LEFT JOIN spots sp ON sp.id=p.spot_id "
         "WHERE v.rank=1")
     args: list = []
     if date_from:
@@ -96,7 +98,8 @@ def _unique(dst: Path, taken: set[str]) -> Path:
 
 def plan_ops(rows: list[dict], dest_root: Path | None = None,
              hierarchy: str = "time_species", naming: str = "original",
-             extra_pairs: bool = True) -> dict:
+             extra_pairs: bool = True,
+             template: list[str] | None = None) -> dict:
     """生成执行计划(不落盘)。
 
     dest_root None = 原地重命名(只改名)。
@@ -122,6 +125,31 @@ def plan_ops(rows: list[dict], dest_root: Path | None = None,
         targets: list[tuple[Path, Path, int | None]] = []   # (src, dst, photo_id)
 
         def dst_for(f: Path) -> Path:
+            if template:
+                # CameraRaw式组合模板: 段∈ filename/date/name/seq/spot,
+                # 用"_"连接; 序号按 段组合键(日期|鸟种|鸟点) 递增
+                seq_key = f"{date}|{r.get('eff_code') or ''}|{r.get('spot_name') or ''}"
+                seq = 0
+                parts_out = []
+                for seg in template:
+                    if seg == "filename":
+                        parts_out.append(safe_component(f.stem, "photo")
+                                         + f.suffix.lower())
+                    elif seg == "date":
+                        parts_out.append(date)
+                    elif seg == "name":
+                        parts_out.append(safe_component(name, "photo"))
+                    elif seg == "spot":
+                        sn = r.get("spot_name")
+                        if sn:
+                            parts_out.append(safe_component(sn, "spot"))
+                    elif seg == "seq":
+                        if not seq:
+                            seq_by_key[seq_key] = seq_by_key.get(seq_key, 0) + 1
+                            seq = seq_by_key[seq_key]
+                        parts_out.append(f"{seq:04d}")
+                stem = "_".join(parts_out) or f.name
+                return Path(stem + f.suffix.lower())
             if naming == "date_name":
                 key = f"{date}|{r.get('eff_code') or ''}"
                 seq_by_key[key] = seq_by_key.get(key, 0) + 1
@@ -155,6 +183,7 @@ def plan_ops(rows: list[dict], dest_root: Path | None = None,
             pair = sibling_pair(src)
             if pair is not None and all(t[0] != pair for t in targets):
                 # 成对文件与照片同号: 共用新stem, 各保留自己的后缀
+                # (模板含filename段时主文件保留原名, pair名=主stem, 仍成对)
                 targets.append((pair, base / (new.stem + pair.suffix), None))
         for s, d, pid in targets:
             if s == d:
