@@ -66,33 +66,73 @@ class MainWindow(QMainWindow):
         QGuiApplication.instance().aboutToQuit.connect(self._stop_bg_workers)
 
     def eventFilter(self, obj, ev):
-        # 侧边栏导航按钮拖动重排: 按住拖过相邻项即交换位置, 松手存顺序
-        from PySide6.QtCore import QEvent, QPoint
-        if ev.type() == QEvent.MouseButtonPress \
-                and obj in self._nav_buttons.values():
-            self._nav_drag_start = ev.position().toPoint()
-            self._nav_dragged = False
-        elif ev.type() == QEvent.MouseMove \
-                and obj in self._nav_buttons.values() \
-                and getattr(self, "_nav_drag_start", None) is not None:
-            b = obj
-            dy = ev.position().toPoint().y() - self._nav_drag_start.y()
-            if abs(dy) > 18:
+        # 侧边栏导航按钮拖动重排(2026-11-06重做): 光标拖到哪就插到哪——
+        # 旧实现按"移动超过18px交换一格并重置起点", 拖快一点就一格一格
+        # 顿着走, 且交换后按钮跳位会让阈值反复触发(用户反馈不顺畅)。
+        # 现在直接按光标Y相对各按钮中心算目标位置, 一次到位、无抖动。
+        from PySide6.QtCore import QEvent, Qt
+        if obj not in self._nav_buttons.values():
+            return super().eventFilter(obj, ev)
+        et = ev.type()
+        if et == QEvent.MouseButtonPress:
+            if ev.button() == Qt.LeftButton:
+                self._nav_drag_btn = obj
+                self._nav_drag_origin = ev.globalPosition().toPoint()
+                self._nav_dragged = False
+        elif et == QEvent.MouseMove and getattr(self, "_nav_drag_btn", None):
+            pos = ev.globalPosition().toPoint()
+            if not self._nav_dragged:
+                if abs(pos.y() - self._nav_drag_origin.y()) < 5:
+                    return super().eventFilter(obj, ev)
                 self._nav_dragged = True
-                lay = self._nav_lay
-                idx = lay.indexOf(b)
-                new_idx = idx + (1 if dy > 0 else -1)
-                if 0 <= new_idx < lay.count():
-                    w = lay.itemAt(new_idx).widget()
-                    if w is not None and w in self._nav_buttons.values():
-                        lay.removeWidget(b)
-                        lay.insertWidget(new_idx, b)
-                        self._nav_drag_start = ev.position().toPoint()
-                        self._save_nav_order()
-        elif ev.type() == QEvent.MouseButtonRelease \
-                and obj in self._nav_buttons.values():
-            self._nav_drag_start = None
+                self._nav_drag_btn.setCursor(Qt.ClosedHandCursor)
+            self._nav_drag_to(pos.y())
+        elif et == QEvent.MouseButtonRelease \
+                and getattr(self, "_nav_drag_btn", None):
+            if self._nav_dragged:
+                self._save_nav_order()
+                self._nav_drag_btn.setCursor(Qt.PointingHandCursor)
+                # clicked在release处理内同步发出, 先保留标志吞掉这一次;
+                # 事件循环下一拍再清(拖到按钮外松手时不会吞掉下次点击)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(
+                    0, lambda: setattr(self, "_nav_dragged", False))
+            self._nav_drag_btn = None
+            self._nav_drag_origin = None
         return super().eventFilter(obj, ev)
+
+    def _nav_drag_to(self, cursor_y: int):
+        """按光标全局Y把拖动中的按钮插到目标位置(以其他按钮中心为界)。"""
+        b = self._nav_drag_btn
+        lay = self._nav_lay
+        if b is None or lay.indexOf(b) < 0:
+            return
+        others = [w for w in self._nav_buttons.values()
+                  if w is not b and lay.indexOf(w) >= 0]
+        others.sort(key=lay.indexOf)
+        pos = 0
+        for w in others:
+            if w.mapToGlobal(w.rect().center()).y() < cursor_y:
+                pos += 1
+        cur_pos = sum(1 for w in others if lay.indexOf(w) < lay.indexOf(b))
+        if pos == cur_pos:
+            return
+        # 注意: 导航布局前面还有标题/副标题/间距项, 按钮的布局索引不从0
+        # 开始——必须按"其他按钮的实际布局索引"插入(2026-11-06实测:
+        # 直接insertWidget(pos)会插到标题区, 拖动只挪一格)
+        lay.removeWidget(b)
+        others = [w for w in self._nav_buttons.values()
+                  if w is not b and lay.indexOf(w) >= 0]
+        others.sort(key=lay.indexOf)
+        if not others:
+            lay.insertWidget(0, b)
+        elif pos <= 0:
+            lay.insertWidget(lay.indexOf(others[0]), b)
+        elif pos >= len(others):
+            lay.insertWidget(lay.indexOf(others[-1]) + 1, b)
+        else:
+            lay.insertWidget(lay.indexOf(others[pos]), b)
+        lay.activate()
 
     def _save_nav_order(self):
         keys = [k for k, b in self._nav_buttons.items()
