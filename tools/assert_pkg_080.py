@@ -132,7 +132,7 @@ def symbols(code):
 # 版本
 v = code_of("app.version")
 syms = symbols(v) if v else set()
-check("版本=0.8.0-test2", "0.8.0-test2" in syms)
+check("版本=0.8.0-test3", "0.8.0-test3" in syms)
 
 # SP引擎
 e = code_of("app.ai.sp_engine")
@@ -340,6 +340,21 @@ try:
     check("繁体修复", _ovd.get("ruhpar2") == "红头鸦雀")
 except Exception as _e:
     check("名录覆盖>=1000条", False, str(_e))
+
+# ---- 0.8.0-test3 修复集(2026-11-05复查; 功能级验证=verify_rerecog_region/
+#      verify_burst[7]/verify_export[6]/verify_import_confirm, 此处只做包内符号) ----
+_tl2 = code_of("app.ui.timeline_page")
+_s2 = symbols(_tl2) if _tl2 else set()
+check("重新识别地区弹窗在包内(0.8-test3)",
+      "识别地区与鸟点" in _s2
+      and "JOIN photos p ON p.batch_id=b.id WHERE p.id IN (" in _s2,
+      "(参数修复+国家级data由verify_rerecog_region功能级覆盖)")
+_db2 = code_of("app.db")
+_s3 = symbols(_db2) if _db2 else set()
+check("连拍统一限EXIF(0.8-test3)",
+      "SELECT p.id, e.dt_original AS ts, p.group_id FROM photos p "
+      "JOIN exif e ON e.photo_id=p.id WHERE e.dt_original IS NOT NULL" in _s3)
+# 导出模板单后缀: 无独立常量可辨(修复在表达式层), 由verify_export[6]功能级覆盖
 
 print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
 sys.exit(1 if fail else 0)
