@@ -2,6 +2,14 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-06 · **0.8.0 正式版日期框全空白修复（用户实测，未重新打包）**
+
+用户实测正式版：批量分享卡「日期从/到」全空白、没法选日期。
+- **根因**：日期控件原来继承 QDateEdit；theme QSS 一出现 `QDateEdit` 选择器（即使只写 `padding:0`），Qt 的 QStyleSheetStyle 就把内部 `qt_spinbox_lineedit` 宽度算成 **1px** → 日期文字完全不可见（实测 geometry=(0,9,1,18)）。这是 Qt 对 QAbstractSpinBox 加样式表的固有坑。
+- **修**：`ThemedDateEdit` 改为**自绘 QPushButton 式**（不再继承 QDateEdit），保留 QDateEdit 兼容 API（date/setDate/dateChanged/minimumDate/setDateRange/setSpecialValueText…），配色完全跟主题；点击弹 `_DatePopup`（年份 91 项下拉/月份 12 项下拉/日网格）。弹层原生星期表头是 QCalendarWidget 自绘黑条（QSS/调色板都改不动）→ 关掉原生表头，自绘 7 个星期标签（按 firstDayOfWeek 排序、周末红、与日期列中心像素级对齐）。theme QSS 里彻底不出现 QDateEdit 选择器。
+- **验证**：深/浅两主题渲染目检（日期文字可见、日期框与其他输入框同款圆角、弹层配色统一、星期表头对齐）；verify_batch_share 新增"日期文字可见(宽度不得为1)"回归断言；verify_export/timeline_select/import_confirm/i18n 两道/e2e 全绿。
+- **待用户**：确认后重新打包（0.8.1 或 0.8.0 重建，待定）。
+
 ## 2026-11-06 · **0.8.0 正式版打包（用户指示"打包正式0.8"）——dev-0.8.0 分支收官**
 
 - **包**：releases/鸟迹BirdTrace-0.8.0-便携版（1.2G 不压 zip），内含 `使用说明.txt`（正式版全文：功能总览+升级要点，不再用"test修复清单"式写法）+ `版本升级说明-0.8.0.md`（0.7.0→0.8.0 升级步骤/新功能表/已知事项/回滚）。**断言 69/69**（版本检查改为"0.8.0 且无 test 后缀"）。
