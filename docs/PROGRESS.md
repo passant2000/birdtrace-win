@@ -2,6 +2,16 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-05 · **0.8.0-test2 首批反馈两项修复（未打包）**
+
+用户实测反馈：①导入页地区卡橙色框难看；②点击「开始导入」没有任何反应。
+- **②根因（真 bug，offscreen 真点按钮复现 `KeyError: 'ref'`）**：1db1a5d 加确认弹窗时 `mode_txt` 字典写的是 int 键 `{0:…,1:…,2:…}` 却拿字符串 `mode`（"ref"/"copy"/"move"）去索引——槽函数在 `QMessageBox.question` **之前**就崩了，弹窗永远走不到；打包 exe 无控制台异常被吞 → 用户看到"没有任何反应"。键改字符串同型即愈。**教训：assert_pkg 只查了"确认拍摄地区"字符串存在（符号级断言抓不住运行期 KeyError），新工具补上功能级验证**。
+- **①根因**：地区卡样式用了裸 `QFrame{border:…}` 选择器——**QLabel 继承 QFrame，样式级联到全部子控件**，卡内标题/提示每个标签都被套了一圈 2px 橙框（即用户看到的"难看"）；且 radius 12 与全局卡 14 不齐。改限定 `QFrame#Card{border:2px solid #F5A623;border-radius:14px;}`——只留卡片单一外框（用户给的方案A），背景仍走全局 QSS。
+- **验证**：新工具 `tools/verify_import_confirm.py`——真点 go_btn 全流程（确认弹窗内容含"中国·上海"/Yes→2张入库+default_region保存/No→中止不导入）+ 样式断言（选择器限定 #Card、渲染像素检查橙色只在外缘 2px 一圈、内部残留仅4px圆角抗锯齿）。**桩点**：win.start_recognition（拉真模型）与 BatchSpotDialog.exec()（offscreen 模态永久阻塞）需在测试里替换。
+- **回归**：e2e/smoke/check_i18n_static CLEAN/verify_i18n 全绿。
+- **坑记录**：QComboBox 地区子码是 eBird 式 `CN-SH`（上海），不是 ISO 的 CN-31；槽函数里任何异常在无控制台 exe 中=纯静默，导入类槽要功能级测试兜底。
+- **待用户**：test2 其余反馈（如有）；决定何时打 0.8.0-test3（打包前按惯例先问上一轮测试结果）。
+
 ## 2026-11-04晚 · **0.8.0-test2 打包：16项改进（用户逐条提出）+ 此前两修复一并进包**
 
 全部改动（每项独立提交）：
