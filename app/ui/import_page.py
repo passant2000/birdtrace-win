@@ -134,8 +134,11 @@ class ImportPage(QWidget):
         lay.addWidget(title)
 
         # ---- 地区(重要: 边框高亮——选错地区=识别按错误名录跑, 2026-11-04用户) ----
+        # 样式选择器必须限定#Card: 裸QFrame{}会级联到全部子控件(QLabel也继承
+        # QFrame), 0.8.0-test2用户实测"橙色框难看"=卡内每个标签都被套了橙框
         card3, form3 = make_card(t("拍摄地区（提高识别准确率）", "Region (improves ID accuracy)"))
-        card3.setStyleSheet("QFrame{border:2px solid #F5A623;border-radius:12px;}")
+        card3.setStyleSheet(
+            "QFrame#Card{border:2px solid #F5A623;border-radius:14px;}")
         reg_row = QHBoxLayout()
         self.country_combo = QComboBox()
         self.sub_combo = QComboBox()
@@ -505,9 +508,11 @@ class ImportPage(QWidget):
         elif isinstance(spot_data, int):
             info = self.lib.spot_info(spot_data)
             spot_txt = info["name"] if info else str(spot_data)
-        mode_txt = {0: t("引用原位置", "Reference originals"),
-                    1: t("复制到新位置", "Copy to new location"),
-                    2: t("移动到新位置", "Move to new location")}[mode]
+        # mode是"ref"/"copy"/"move"字符串, 键必须同型(0.8.0-test2用户实测
+        # "点击开始导入没有任何反应"=此处int键碰字符串值KeyError, 槽静默崩溃)
+        mode_txt = {"ref": t("引用原位置", "Reference originals"),
+                    "copy": t("复制到新位置", "Copy to new location"),
+                    "move": t("移动到新位置", "Move to new location")}[mode]
         from PySide6.QtWidgets import QMessageBox
         r = QMessageBox.question(
             self, t("确认拍摄地区", "Confirm shooting region"),
