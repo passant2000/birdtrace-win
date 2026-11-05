@@ -360,7 +360,7 @@ check("连拍统一限EXIF(0.8-test3)",
 #      verify_viewer[5][6]/verify_timeline_select按日分组) ----
 _s3b = symbols(code_of("app.db")) if code_of("app.db") else set()
 check("v_records视图带top5_json(0.8-test4)",
-      "CREATE VIEW IF NOT EXISTS v_records AS" in _s3b
+      any("CREATE VIEW IF NOT EXISTS v_records AS" in x for x in _s3b)
       and any("r.box_json, r.top5_json," in x for x in _s3b))
 check("启动自愈去重(0.8-test4)", "_dedupe_records" in _s3b
       and "has_human_record" in _s3b)
