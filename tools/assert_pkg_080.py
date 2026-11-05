@@ -376,7 +376,7 @@ check("侧边栏拖动重排重做(0.8.0重建)",
       and "_nav_drag_origin" in _mw)
 _wg = symbols(code_of("app.theme.widgets")) if code_of("app.theme.widgets") else set()
 check("日期框自绘(0.8.0重建)",
-      "QPushButton#DateEdit" in _wg and "_week_header" in _wg
+      "QPushButton#DateEdit{background:" in _wg and "_week_header" in _wg
       and "dateChanged" in _wg)
 
 print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
