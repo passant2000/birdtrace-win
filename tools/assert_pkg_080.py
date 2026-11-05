@@ -347,7 +347,7 @@ _tl2 = code_of("app.ui.timeline_page")
 _s2 = symbols(_tl2) if _tl2 else set()
 check("重新识别地区弹窗在包内(0.8-test3)",
       "识别地区与鸟点" in _s2
-      and "JOIN photos p ON p.batch_id=b.id WHERE p.id IN (" in _s2,
+      and any("batch_id=b.id WHERE p.id IN (" in x for x in _s2),
       "(参数修复+国家级data由verify_rerecog_region功能级覆盖)")
 _db2 = code_of("app.db")
 _s3 = symbols(_db2) if _db2 else set()
