@@ -2,6 +2,17 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-05深夜 · **test3 第二批反馈四项修复（未打包，等用户指示）**
+
+用户实测 test3 报 4 项（"接着修，不要急着打包，我说打再打"）。
+- **①图鉴正文深色主题下与背景同色**：`species_page._info_row` 值标签仍硬编码 `#1C1C1E`（c243108 换主题感知时遗漏了这一处）→ 改 `theme.LABEL`。同页 `timeline` 每日一鸟标签 `#8A9455` 一并改 `theme.OLIVE`。
+- **②一张照片出现两个"主鸟"（test版本非常多）**：真 bug——识别 worker 与 sidecar 回填**并发写入**，同一照片出现两条 rank=1（用户库实测 **79 组**）。修三层：a) `db.add_records` 幂等（写入前删旧记录；**有人工确认/复核/手工/改框记录则自动结果不落库**）；b) 启动 `_migrate._dedupe_records()` 自愈：同照片同rank多条→人工全留，否则留"带top5>最新"一条（多鸟照片不同rank不受影响；用户库实测 551→472 条，79组清零，8条人工记录保留）；c) sidecar 回填按 rank 去重（旧json重编号会凭空多出"第二只鸟"），并**存取 top5 候选**。**用户问"清空是否连json一起清"——不删：`.birdtrace.json` 是标注随文件夹走的载体（换机/重导入恢复确认记录靠它），清空库保留是设计；重复鸟是bug已修，重导入会正确恢复一条。**
+- **③待复核下拉没有 top5，只有"（最近）"**：候选列表只在名录层内 **≥0.3%** 才入库——低置信照片（如2.9%）的第二候选基本都低于门槛，只剩当前鸟种；另 sidecar 回填的记录根本没有候选。修：`sp_extend_candidates` 在不足 topk 时用**同名录层**后续物种补齐（不设下限，概率仍原始值；**定种/置信完全不变**，只影响 top5_json），`_classify_box`/`_best_variant` 接线；sidecar 导出/回填带 top5。**旧记录需重新识别一次才会生成候选**（模型推理才能得到）。
+- **④图鉴地区显示成最后一次导入的地区**：`_render_dex` 用 `default_region`（全局"上次导入地区"）→ 最后导入安徽后所有物种都显示安徽。修：新增 `SpeciesPage._species_region`——最美照所属批次的地区优先（非GLOBAL）→ 该物种最近一张照片的地区 → 才回退 default_region。地区分布表的选中行/罕见度徽章同源修正。
+- **另修（上一轮遗留）**：时间线点日期后内容区空白——树节点 key=`YYYY-MM|DD`，`_group_day` 只存了日号"26"，而 day 模式渲染按完整 ISO `YYYY-MM-DD` 过滤 + `ym==focus[:7]` 跳月→全月被跳过；改为 `"-".join(split("|"))` 存完整 ISO。`_build_tree` 增加 `setCurrentItem(None)`+旧item RuntimeError 防御（离屏压力脚本曾偶发 clear() access violation）。
+- **验证**：新 `tools/verify_feedback2.py` 七段（幂等/人工优先/自愈去重/sidecar候选/候选补齐/图鉴地区/深色正文/待复核下拉）全绿；verify_viewer 增 top5 下拉+菜单+点选改种+老库视图迁移；verify_timeline_select 增按日分组断言并改为默认合成库（不再依赖用户真库）；verify_sidecar/viewer/timeline_select/aesthetic/import_confirm/multibird/dex_features/count_logic + e2e/smoke/i18n 两道全绿。**未打包**。
+- **待用户**：test3 实测其余反馈；指示何时打包 test4。
+
 ## 2026-11-05晚 · **0.8.0-test2 全部16项复查：修4真bug+2体验 → 打包 0.8.0-test3**
 
 用户指示"检查昨晚的功能是否有问题，有则修复并重新打包"。逐项过16项（打包断言全是符号级=查不出运行期错误，是漏网根源；本轮给薄弱项补功能级验证）。
