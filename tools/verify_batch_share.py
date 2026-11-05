@@ -128,12 +128,35 @@ def main():
     check(d1 == d1.addDays(-d1.day() + 1) and d2 == QDate.currentDate(),
           f"快捷'今年'→1月1日~今天 ({d1.toString('yyyy-MM-dd')}~"
           f"{d2.toString('yyyy-MM-dd')})")
-    dlg.to_year.addItem("2019")     # 测试库只有2026一年, 补一个旧年
-    dlg._on_year_combo_to(dlg.to_year.count() - 1)
+    # 日期弹层(2026-11-05用户: 年份/月份都应一点直达; 原日期旁的
+    # "年份…"下拉重复且看着没功能→已删)
+    check(not hasattr(dlg, "to_year") and not hasattr(dlg, "from_year"),
+          "多余年份下拉已移除")
+    from app.theme.widgets import ThemedDateEdit, _DatePopup
+    from PySide6.QtWidgets import QAbstractSpinBox
+    check(isinstance(dlg.to_date, ThemedDateEdit)
+          and not dlg.to_date.calendarPopup()
+          and dlg.to_date.buttonSymbols()
+          == QAbstractSpinBox.ButtonSymbols.NoButtons,
+          "日期控件=ThemedDateEdit(自定义弹层+无上下箭头)")
+    pop = _DatePopup(dlg.to_date.date(), dlg.to_date)
+    check(pop.year_combo.count() > 50
+          and pop.year_combo.findData(2019) >= 0,
+          f"年份下拉覆盖多年({pop.year_combo.count()}项, 含2019)")
+    check(pop.month_combo.count() == 12, "月份下拉12项")
+    check(not pop.cal.isNavigationBarVisible(),
+          "日网格不带原生导航栏(年份月份由下拉控制)")
+    pop.year_combo.setCurrentIndex(pop.year_combo.findData(2019))
+    pop.month_combo.setCurrentIndex(d2.month() - 1)
+    check(pop.cal.yearShown() == 2019
+          and pop.cal.monthShown() == d2.month(),
+          f"年份+月份下拉联动日历页 ({pop.cal.yearShown()}-{pop.cal.monthShown()})")
+    pop.date_selected.connect(dlg.to_date._on_picked)
+    pop._pick(QDate(2019, d2.month(), d2.day()))
     check(dlg.to_date.date().year() == 2019
           and dlg.to_date.date().month() == d2.month()
           and dlg.to_date.date().day() == d2.day(),
-          f"年份下拉选2019→只换年份月日保持 ({dlg.to_date.date().toString('yyyy-MM-dd')})")
+          f"选日→只换日期回填 ({dlg.to_date.date().toString('yyyy-MM-dd')})")
     dlg._apply_quick(0)             # 今天
     check(dlg.from_date.date() == dlg.to_date.date() == QDate.currentDate(),
         "快捷'今天'→从=到=今天")

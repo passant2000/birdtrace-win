@@ -40,7 +40,7 @@ def make_img(path: Path, seed: int = 0):
 
 def main():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QDate
     from PySide6.QtWidgets import QApplication, QMessageBox
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
@@ -299,9 +299,18 @@ def main():
     dlg._apply_quick(3)
     check(dlg.from_date.date().month() == 1
           and dlg.from_date.date().day() == 1, "快捷今年=1月1日起")
-    dlg.to_year.addItem("2019")
-    dlg._on_year_to(dlg.to_year.count() - 1)
-    check(dlg.to_date.date().year() == 2019, "年份下拉直跳2019")
+    # 日期弹层年份/月份下拉(2026-11-05: 原日期旁"年份…"下拉已删)
+    check(not hasattr(dlg, "to_year") and not hasattr(dlg, "from_year"),
+          "多余年份下拉已移除")
+    from app.theme.widgets import _DatePopup
+    old = dlg.to_date.date()
+    pop = _DatePopup(old, dlg.to_date)
+    pop.date_selected.connect(dlg.to_date._on_picked)
+    pop.year_combo.setCurrentIndex(pop.year_combo.findData(2019))
+    pop._pick(QDate(2019, old.month(), old.day()))
+    check(dlg.to_date.date().year() == 2019
+          and dlg.to_date.date().month() == old.month(),
+          f"弹层年份下拉直跳2019且月日保持 ({dlg.to_date.date().toString('yyyy-MM-dd')})")
     # 恢复日期_鸟名_序号模板再执行
     for c in dlg.tpl_combos:
         c.setCurrentIndex(0)

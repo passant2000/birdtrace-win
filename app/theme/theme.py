@@ -140,7 +140,7 @@ QPushButton#Link {{ background: transparent; color: {c["BLUE"]}; padding: 4px 8p
 QPushButton#Link:hover {{ background: transparent; color: {c["LINK_HOVER"]}; }}
 
 /* ---- 输入 ---- */
-QLineEdit, QComboBox {{
+QLineEdit, QComboBox, QDateEdit {{
     background: {c["FILL"]}; border: none; border-radius: 10px;
     padding: 9px 14px; font-size: 14px; color: {c["LABEL"]};
 }}

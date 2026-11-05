@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtWidgets import (QComboBox, QDateEdit, QDialog, QFileDialog,
+from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog,
                                QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (QComboBox, QDateEdit, QDialog, QFileDialog,
 from .. import theme
 from ..core import exporter
 from ..i18n import t, sname
-from ..theme.widgets import SegmentedControl, ToggleSwitch, make_card
+from ..theme.widgets import (SegmentedControl, ThemedDateEdit,
+                             ToggleSwitch, make_card)
 
 
 class ExportDialog(QDialog):
@@ -59,39 +60,18 @@ class ExportDialog(QDialog):
         rc.addLayout(qrow)
         drow = QHBoxLayout()
         drow.addWidget(QLabel(t("日期从", "From")))
-        self.from_date = QDateEdit()
-        self.from_date.setCalendarPopup(True)
-        self.from_date.setDisplayFormat("yyyy-MM-dd")
+        # 日期控件=ThemedDateEdit(弹层年份/月份下拉一点直达, 主题配色;
+        # 原日期旁的"年份…"下拉与控件年份重复且看着没功能, 已移除)
+        self.from_date = ThemedDateEdit(QDate(2000, 1, 1))
         self.from_date.setSpecialValueText(" ")     # 空=不限
         self.from_date.setMinimumDate(QDate(2000, 1, 1))
-        self.from_date.setDate(self.from_date.minimumDate())
         drow.addWidget(self.from_date)
-        self.from_year = QComboBox()
-        self.from_year.setMaximumWidth(86)
-        drow.addWidget(self.from_year)
         drow.addSpacing(10)
         drow.addWidget(QLabel(t("到", "to")))
-        self.to_date = QDateEdit(QDate.currentDate())
-        self.to_date.setCalendarPopup(True)
-        self.to_date.setDisplayFormat("yyyy-MM-dd")
+        self.to_date = ThemedDateEdit(QDate.currentDate())
         drow.addWidget(self.to_date)
-        self.to_year = QComboBox()
-        self.to_year.setMaximumWidth(86)
-        drow.addWidget(self.to_year)
         drow.addStretch(1)
         rc.addLayout(drow)
-        # 年份下拉(批量分享卡同款, 2026-11-04用户: 转轮/翻月调年份太费劲)
-        today = QDate.currentDate()
-        _years = sorted({str(y) for y in self.lib.available_years()}
-                        | {str(today.year())}, reverse=True)
-        for combo in (self.from_year, self.to_year):
-            combo.addItem(t("年份…", "Year…"))
-            for y in _years:
-                combo.addItem(y)
-        self.from_year.activated.connect(self._on_year_from)
-        self.to_year.activated.connect(self._on_year_to)
-        self.from_date.dateChanged.connect(lambda _q: self._sync_year())
-        self.to_date.dateChanged.connect(lambda _q: self._sync_year())
 
         srow = QHBoxLayout()
         srow.addWidget(QLabel(t("鸟种", "Species")))
@@ -236,31 +216,6 @@ class ExportDialog(QDialog):
         d1, d2 = spans.get(idx, (today, today))
         self.from_date.setDate(d1)
         self.to_date.setDate(d2)
-
-    def _on_year_from(self, idx: int):
-        self._year_apply(self.from_date, self.from_year, idx)
-
-    def _on_year_to(self, idx: int):
-        self._year_apply(self.to_date, self.to_year, idx)
-
-    def _year_apply(self, edit, combo, idx: int):
-        y = combo.itemText(idx)
-        if not y.isdigit():
-            return
-        d = edit.date()
-        edit.setDate(QDate(int(y), d.month(), d.day()))
-
-    def _sync_year(self):
-        for edit, combo in ((self.from_date, self.from_year),
-                            (self.to_date, self.to_year)):
-            combo.blockSignals(True)
-            combo.setCurrentIndex(0)
-            y = str(edit.date().year())
-            for i in range(combo.count()):
-                if combo.itemText(i) == y:
-                    combo.setCurrentIndex(i)
-                    break
-            combo.blockSignals(False)
 
     def _pick_species(self):
         from .species_pick import SpeciesPickDialog

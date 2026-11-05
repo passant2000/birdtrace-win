@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QDateEdit, QDialog,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QScrollArea,
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDateEdit, QDialog,
 from ..i18n import t, sname
 from ..media import ensure_thumbnail
 from .. import theme
-from ..theme.widgets import PhotoGridItem
+from ..theme.widgets import PhotoGridItem, ThemedDateEdit
 from .viewer import PhotoViewer
 
 THUMB = 128
@@ -279,11 +279,11 @@ class TimelinePage(QWidget):
         form = QFormLayout(dlg)
         lo = QDate.fromString(dates[0], "yyyy-MM-dd")
         hi = QDate.fromString(dates[-1], "yyyy-MM-dd")
-        ed_from = QDateEdit(hi)
-        ed_to = QDateEdit(hi)
+        # ThemedDateEdit: 弹层年份/月份下拉一点直达+主题配色
+        # (QDateEdit原生日历导航栏深色主题下配色不跟随, 用户2026-11-05)
+        ed_from = ThemedDateEdit(hi)
+        ed_to = ThemedDateEdit(hi)
         for ed in (ed_from, ed_to):
-            ed.setCalendarPopup(True)
-            ed.setDisplayFormat("yyyy-MM-dd")
             ed.setDateRange(lo, hi)
         form.addRow(t("从", "From"), ed_from)
         form.addRow(t("到", "To"), ed_to)

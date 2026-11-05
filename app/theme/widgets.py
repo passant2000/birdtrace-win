@@ -2,10 +2,13 @@
 """iOS风格控件: 开关 / 分段控件 / 徽章 / 缩略图网格项。"""
 from __future__ import annotations
 
-from PySide6.QtCore import (QEasingCurve, QPointF, Property, QPropertyAnimation,
-                            QRectF, QSize, Qt, Signal)
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPointF, Property,
+                            QPropertyAnimation, QRectF, QSize, Qt, Signal)
+from PySide6.QtGui import (QColor, QFont, QGuiApplication, QPainter,
+                           QPainterPath, QPixmap)
+from PySide6.QtWidgets import (QAbstractSpinBox, QCalendarWidget, QComboBox,
+                               QDateEdit, QDialog,
+                               QFrame, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
 
 from . import theme
@@ -222,3 +225,157 @@ class PhotoGridItem(QWidget):
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(QRectF(1, 1, 118, 118), 12, 12)
         p.end()
+
+
+# ---------------- 日期选择(主题化, 年份/月份都用下拉) ----------------
+_EN_MONTHS = ["January", "February", "March", "April", "May", "June",
+              "July", "August", "September", "October", "November", "December"]
+
+
+class _DatePopup(QDialog):
+    """日期弹层: 年份/月份下拉 + 日网格(纯主题配色)。
+
+    QDateEdit原生日历弹层在深色主题下导航栏配色不跟随(月份下拉黑底、
+    年份只能上下箭头点), 用户2026-11-05反馈; 这里自绘弹层:
+    年份、月份都是一点直达的下拉, 日网格走当前主题。"""
+
+    date_selected = Signal(QDate)
+
+    def __init__(self, date: QDate, edit: QDateEdit):
+        super().__init__(edit, Qt.Popup)
+        self.setObjectName("DatePopup")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        lo, hi = edit.minimumDate(), edit.maximumDate()
+        y_lo = lo.year() if lo.isValid() else 1970
+        y_hi = hi.year() if hi.isValid() else QDate.currentDate().year() + 1
+        # 下拉年份范围收敛到"照片可能的年份"(QDateEdit默认1752~9999
+        # 会塞八千多项): 前80年~后10年, 并尊重显式日期范围
+        y_lo = max(y_lo, date.year() - 80)
+        y_hi = min(y_hi, date.year() + 10)
+        y_lo = min(y_lo, date.year())
+        y_hi = max(y_hi, date.year())
+        self.year_combo = QComboBox()
+        for y in range(y_hi, y_lo - 1, -1):
+            self.year_combo.addItem(str(y), y)
+        self.year_combo.setCurrentIndex(
+            max(0, self.year_combo.findData(date.year())))
+        self.year_combo.setMinimumWidth(88)
+        self.month_combo = QComboBox()
+        for m in range(1, 13):
+            self.month_combo.addItem(t(f"{m}月", _EN_MONTHS[m - 1]), m)
+        self.month_combo.setCurrentIndex(date.month() - 1)
+        self.month_combo.setMinimumWidth(96)
+        prev_btn = QPushButton("‹")
+        next_btn = QPushButton("›")
+        for b in (prev_btn, next_btn):
+            b.setFixedWidth(32)
+            b.setCursor(Qt.PointingHandCursor)
+        bar.addWidget(self.year_combo)
+        bar.addWidget(self.month_combo)
+        bar.addStretch(1)
+        bar.addWidget(prev_btn)
+        bar.addWidget(next_btn)
+        lay.addLayout(bar)
+
+        self.cal = QCalendarWidget()
+        self.cal.setNavigationBarVisible(False)
+        self.cal.setGridVisible(False)
+        self.cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.cal.setHorizontalHeaderFormat(
+            QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
+        if lo.isValid():
+            self.cal.setMinimumDate(lo)
+        if hi.isValid():
+            self.cal.setMaximumDate(hi)
+        self.cal.setCurrentPage(date.year(), date.month())
+        lay.addWidget(self.cal)
+        self.setStyleSheet(
+            f"QDialog#DatePopup{{background:{theme.CARD};"
+            f"border:1px solid {theme.CARD_BORDER};border-radius:12px;}}"
+            f"QCalendarWidget QWidget{{background:{theme.CARD};"
+            f"color:{theme.LABEL};}}"
+            f"QCalendarWidget QAbstractItemView{{background:{theme.CARD};"
+            f"color:{theme.LABEL};outline:none;"
+            f"selection-background-color:{theme.BLUE};"
+            f"selection-color:white;}}"
+            f"QCalendarWidget QAbstractItemView:disabled{{"
+            f"color:{theme.LABEL_3};}}"
+            f"QCalendarWidget QToolButton{{background:transparent;"
+            f"color:{theme.LABEL};border:none;padding:4px 8px;}}")
+        self.year_combo.currentIndexChanged.connect(self._sync_page)
+        self.month_combo.currentIndexChanged.connect(self._sync_page)
+        prev_btn.clicked.connect(lambda: self._step(-1))
+        next_btn.clicked.connect(lambda: self._step(1))
+        self.cal.clicked.connect(self._pick)
+        self.cal.activated.connect(self._pick)
+
+    def _sync_page(self, *_):
+        self.cal.setCurrentPage(int(self.year_combo.currentData()),
+                                int(self.month_combo.currentData()))
+
+    def _step(self, delta: int):
+        y = int(self.year_combo.currentData())
+        m = int(self.month_combo.currentData()) + delta
+        if m < 1:
+            m, y = 12, y - 1
+        elif m > 12:
+            m, y = 1, y + 1
+        self.year_combo.setCurrentIndex(max(0, self.year_combo.findData(y)))
+        self.month_combo.setCurrentIndex(m - 1)
+
+    def _pick(self, qdate: QDate):
+        self.date_selected.emit(qdate)
+        self.accept()
+
+
+class ThemedDateEdit(QDateEdit):
+    """QDateEdit替代: 弹层用 _DatePopup(年份/月份下拉一点直达)。
+
+    用法与QDateEdit一致(date()/setDate()/dateChanged/日期范围);
+    点击输入框弹出日期选择层。"""
+
+    def __init__(self, date: QDate | None = None, parent=None):
+        super().__init__(date if date is not None else QDate.currentDate(),
+                         parent)
+        self.setDisplayFormat("yyyy-MM-dd")
+        self.setCalendarPopup(False)
+        # 去掉右侧上下箭头(用户2026-11-05: 年份不该靠箭头加减)
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if obj is self.lineEdit() and ev.type() == QEvent.MouseButtonPress:
+            self._open_popup()
+            return True
+        return super().eventFilter(obj, ev)
+
+    def _open_popup(self):
+        popup = _DatePopup(self.date(), self)
+        popup.date_selected.connect(self._on_picked)
+        popup.setAttribute(Qt.WA_DeleteOnClose)
+        popup.adjustSize()
+        g = self.mapToGlobal(self.rect().bottomLeft())
+        screen = QGuiApplication.screenAt(g)
+        if screen is not None:
+            avail = screen.availableGeometry()
+            if g.y() + popup.height() > avail.bottom():
+                g.setY(self.mapToGlobal(self.rect().topLeft()).y()
+                       - popup.height())
+            if g.x() + popup.width() > avail.right():
+                g.setX(avail.right() - popup.width())
+        popup.move(g)
+        self._popup = popup          # 持有引用防GC(非exec的弹出层)
+        popup.show()
+
+    def _on_picked(self, qdate: QDate):
+        d = qdate
+        lo, hi = self.minimumDate(), self.maximumDate()
+        if lo.isValid() and d < lo:
+            d = lo
+        if hi.isValid() and d > hi:
+            d = hi
+        self.setDate(d)
