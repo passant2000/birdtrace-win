@@ -132,7 +132,7 @@ def symbols(code):
 # 版本
 v = code_of("app.version")
 syms = symbols(v) if v else set()
-check("版本=0.8.0-test3", "0.8.0-test3" in syms)
+check("版本=0.8.0-test4", "0.8.0-test4" in syms)
 
 # SP引擎
 e = code_of("app.ai.sp_engine")
@@ -355,6 +355,19 @@ check("连拍统一限EXIF(0.8-test3)",
       "SELECT p.id, e.dt_original AS ts, p.group_id FROM photos p "
       "JOIN exif e ON e.photo_id=p.id WHERE e.dt_original IS NOT NULL" in _s3)
 # 导出模板单后缀: 无独立常量可辨(修复在表达式层), 由verify_export[6]功能级覆盖
+
+# ---- 0.8.0-test4 修复集(2026-11-05第二批反馈; 功能级=verify_feedback2/
+#      verify_viewer[5][6]/verify_timeline_select按日分组) ----
+_s3b = symbols(code_of("app.db")) if code_of("app.db") else set()
+check("v_records视图带top5_json(0.8-test4)",
+      "CREATE VIEW IF NOT EXISTS v_records AS" in _s3b
+      and any("r.box_json, r.top5_json," in x for x in _s3b))
+check("启动自愈去重(0.8-test4)", "_dedupe_records" in _s3b
+      and "has_human_record" in _s3b)
+_sp2 = symbols(code_of("app.ai.sp_engine")) if code_of("app.ai.sp_engine") else set()
+check("候选补齐(0.8-test4)", "sp_extend_candidates" in _sp2)
+_spp = symbols(code_of("app.ui.species_page")) if code_of("app.ui.species_page") else set()
+check("图鉴地区按照片实际(0.8-test4)", "_species_region" in _spp)
 
 print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
 sys.exit(1 if fail else 0)
