@@ -92,9 +92,9 @@ def main():
     rw4, rh4, _, _ = fill_ratio(dlg.view)
     check(max(rw4, rh4) > 0.95, "双击后恢复自适应")
 
-    print("[5] top5候选下拉框+点鸟种名菜单(0.8.0-test3反馈: 从未显示过)")
+    print("[5] top5候选下拉框(点名字改鸟功能已移除, 2026-11-05用户)")
     import json as _json
-    from PySide6.QtWidgets import QComboBox, QLabel, QMenu
+    from PySide6.QtWidgets import QComboBox, QLabel
     top5_db = _json.loads(lib.conn.execute(
         "SELECT top5_json FROM records WHERE photo_id=? AND rank=1",
         (ids[0],)).fetchone()[0])
@@ -104,30 +104,22 @@ def main():
     check(len(items) == len(top5_db) and len(items) >= 2,
           f"下拉框=识别top5 ({items})")
     check(any("✓" in it for it in items), "当前鸟种带✓标记")
-    # 点鸟种名弹菜单: QMenu.exec类级打桩对PySide无效(静态+实例重载),
-    # 在__init__里给实例桩exec收集actions(offscreen真exec会卡死)
-    fired = []
-    _real_init = QMenu.__init__
-
-    def _init_stub(m, *a, **k):
-        _real_init(m, *a, **k)
-        m.exec = lambda *aa, **kk: fired.append([x.text() for x in m.actions()])
-    QMenu.__init__ = _init_stub
+    # 鸟种名=纯展示标签: 点名字弹候选改鸟功能已按用户要求移除(2026-11-05)——
+    # 无手型光标/无tooltip/无mousePressEvent
+    rec0 = lib.photo_detail(ids[0])[1][0]
+    check(rec0.get("top5_json"), "photo_detail经视图带回top5_json")
+    s0 = lib.species_info(rec0["species_code"])
+    sname0 = s0["cn"] if s0 else rec0["species_code"]
     titles = [lb for lb in dlg.findChildren(QLabel)
-              if lb.toolTip() and "候选" in lb.toolTip()]
-    check(len(titles) == 1, "鸟种名可点击(带候选tooltip)")
+              if lb.text().startswith(sname0)]
+    check(bool(titles), "鸟种名标签存在")
     if titles:
-        rec0 = lib.photo_detail(ids[0])[1][0]
-        check(rec0.get("top5_json"), "photo_detail经视图带回top5_json")
-        dlg._species_menu(titles[0], rec0["record_id"], rec0)
-        app.processEvents()
-        acts = fired[0] if fired else []
-        check(len([a for a in acts if "%" in a]) == len(top5_db)
-              and any("其他鸟种" in a for a in acts),
-              f"菜单含全部候选+其他鸟种… ({acts})")
-    QMenu.__init__ = _real_init
-    # 菜单点第2候选→改鸟种(demo_lib共享fixture: 测完还原)
-    if fired and len(top5_db) >= 2:
+        t0 = titles[0]
+        check(t0.cursor().shape() != Qt.PointingHandCursor
+              and t0.toolTip() == "",
+              "鸟种名不可点(无手型光标/无tooltip)")
+    # 下拉候选仍是改鸟种通道(demo_lib共享fixture: 测完还原)
+    if len(top5_db) >= 2:
         from PySide6.QtCore import QObject, Signal
 
         class _W(QObject):
@@ -138,7 +130,7 @@ def main():
         eff = lib.conn.execute(
             "SELECT COALESCE(confirmed_code, species_code) FROM records "
             "WHERE id=?", (rec0["record_id"],)).fetchone()[0]
-        check(eff == c2, f"点候选即改鸟种 ({eff}=={c2})")
+        check(eff == c2, f"下拉候选改鸟种仍可用 ({eff}=={c2})")
         lib.conn.execute(
             "UPDATE records SET confirmed_code=NULL, reviewed=0 WHERE id=?",
             (rec0["record_id"],))
