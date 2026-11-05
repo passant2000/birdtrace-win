@@ -132,7 +132,7 @@ def symbols(code):
 # 版本
 v = code_of("app.version")
 syms = symbols(v) if v else set()
-check("版本=0.8.0-test4", "0.8.0-test4" in syms)
+check("版本=0.8.0正式", "0.8.0" in syms and not any(x.startswith("0.8.0-test") for x in syms))
 
 # SP引擎
 e = code_of("app.ai.sp_engine")
