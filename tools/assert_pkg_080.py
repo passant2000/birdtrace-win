@@ -369,5 +369,15 @@ check("候选补齐(0.8-test4)", "sp_extend_candidates" in _sp2)
 _spp = symbols(code_of("app.ui.species_page")) if code_of("app.ui.species_page") else set()
 check("图鉴地区按照片实际(0.8-test4)", "_species_region" in _spp)
 
+# ---- 0.8.0 重建(2026-11-06): 侧边栏拖动重做 + 日期框自绘 ----
+_mw = symbols(code_of("app.ui.main_window")) if code_of("app.ui.main_window") else set()
+check("侧边栏拖动重排重做(0.8.0重建)",
+      "_nav_drag_to" in _mw and "globalPosition" in _mw
+      and "_nav_drag_origin" in _mw)
+_wg = symbols(code_of("app.theme.widgets")) if code_of("app.theme.widgets") else set()
+check("日期框自绘(0.8.0重建)",
+      "QPushButton#DateEdit" in _wg and "_week_header" in _wg
+      and "dateChanged" in _wg)
+
 print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
 sys.exit(1 if fail else 0)
