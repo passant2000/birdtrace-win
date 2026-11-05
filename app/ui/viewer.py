@@ -466,7 +466,7 @@ class PhotoViewer(QDialog):
                 s = self.lib.species_info(cand["code"])
                 nm = sname(s["cn"], s["en"]) if s else cand["code"]
                 mark = "✓ " if cand["code"] == rec["eff_code"] else ""
-                options.append((f"{mark}{nm}  {cand['prob']*100:.0f}%",
+                options.append((f"{mark}{nm}  {cand.get('prob', 0)*100:.0f}%",
                                 cand["code"]))
                 if cand["code"] == rec["eff_code"]:
                     current_idx = len(options) - 1

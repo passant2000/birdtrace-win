@@ -49,7 +49,9 @@ def _info_row(label: str, value_html: str) -> QWidget:
     val = QLabel(value_html)
     val.setWordWrap(True)
     val.setTextFormat(Qt.RichText)
-    val.setStyleSheet("color:#1C1C1E;font-size:13px;background:transparent;")
+    # 主题感知: 此前硬编码浅色#1C1C1E, 深色主题下图鉴正文与背景同色
+    # (2026-11-05用户实测"文字和背景几乎一个颜色")
+    val.setStyleSheet(f"color:{theme.LABEL};font-size:13px;background:transparent;")
     h.addWidget(lab)
     h.addWidget(val, 1)
     return w
@@ -753,11 +755,14 @@ class SpeciesPage(QWidget):
         v.setContentsMargins(20, 16, 20, 18)
         v.setSpacing(12)
 
-        region_id = self.lib.get_setting("default_region", "GLOBAL")
         hint = get_hint()
 
         # 顶部: 我的最美照片 + 地区/罕见度徽章
         photos = self.lib.photos_of_species(code)
+        # 地区徽章/分布表按**该鸟种照片的实际拍摄地区**(最美照优先),
+        # 不是全局默认地区——此前用default_region, 最后一批导入安徽后
+        # 所有物种都显示安徽(2026-11-05用户反馈), 而首批照片是上海
+        region_id = self._species_region(photos)
         top = QHBoxLayout()
         top.setSpacing(18)
         if photos:
@@ -828,6 +833,31 @@ class SpeciesPage(QWidget):
             self._open(pid, i2)
         bv.addWidget(item)
         return box
+
+    def _species_region(self, photos: list[dict]) -> str:
+        """该物种照片的实际拍摄地区(2026-11-05用户反馈: 图鉴曾把最后
+        一次导入的地区安到所有物种头上)。
+
+        优先=最美照所属批次的地区(非GLOBAL); 否则该物种最近一张照片的
+        地区; 都没有才退回全局默认地区(default_region)。"""
+        if photos:
+            row = self.lib.conn.execute(
+                "SELECT b.region_id FROM photos p "
+                "JOIN batches b ON b.id=p.batch_id WHERE p.id=?",
+                (photos[0]["photo_id"],)).fetchone()
+            if row and row["region_id"] not in (None, "", "GLOBAL"):
+                return row["region_id"]
+        row = self.lib.conn.execute(
+            "SELECT b.region_id FROM v_records v "
+            "JOIN photos p ON p.id=v.photo_id "
+            "JOIN batches b ON b.id=p.batch_id "
+            "WHERE v.eff_code=? AND b.region_id IS NOT NULL "
+            "  AND b.region_id NOT IN ('', 'GLOBAL') "
+            "ORDER BY v.taken_at DESC LIMIT 1",
+            (self.current_code,)).fetchone()
+        if row:
+            return row["region_id"]
+        return self.lib.get_setting("default_region", "GLOBAL")
 
     def _dex_badges(self, hint, code: str, region_id: str,
                     in_classifier) -> list[QLabel]:

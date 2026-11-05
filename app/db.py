@@ -80,12 +80,15 @@ CREATE TABLE IF NOT EXISTS spots(
 );
 
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+"""
 
-CREATE VIEW IF NOT EXISTS v_records AS
+# v_records视图DDL单列: _migrate检测旧库视图缺列时DROP重建用
+# (2026-11-05 test3反馈: 视图缺top5_json→查看器top5候选永远为空)
+_V_RECORDS_DDL = """CREATE VIEW IF NOT EXISTS v_records AS
 SELECT r.id AS record_id, r.photo_id, p.path,
        COALESCE(r.confirmed_code, r.species_code) AS eff_code,
        r.species_code, r.rank, r.confidence, r.source, r.reviewed,
-       r.confirmed_code, r.box_json,
+       r.confirmed_code, r.box_json, r.top5_json,
        COALESCE(e.dt_original, p.added_at) AS taken_at,
        substr(COALESCE(e.dt_original, p.added_at), 1, 7) AS ym,
        substr(COALESCE(e.dt_original, p.added_at), 1, 4) AS yr
@@ -93,6 +96,7 @@ FROM records r
 JOIN photos p ON p.id = r.photo_id
 LEFT JOIN exif e ON e.photo_id = p.id;
 """
+SCHEMA += _V_RECORDS_DDL
 
 
 def default_library_dir() -> Path:
@@ -125,6 +129,14 @@ class Library:
         photos.cand_json (未识别候选Top3, 2026-11-02一键采纳);
         photos.phash (感知哈希dHash64缓存, 0.8连拍分组/十八图去重);
         photos.group_id (连拍分组, 0.8-③); photos.missing INTEGER (原图离线标记)。"""
+        # v_records视图缺top5_json(0.8.0-test3用户反馈: 查看器top5候选
+        # 菜单永远为空的根因) → 重建视图。CREATE VIEW IF NOT EXISTS对
+        # 已建视图无效, 必须显式检测列集后DROP重建
+        vcols = {r["name"] for r in self.conn.execute(
+            "PRAGMA table_info(v_records)")}
+        if vcols and "top5_json" not in vcols:
+            self.conn.executescript(
+                "DROP VIEW IF EXISTS v_records;\n" + _V_RECORDS_DDL)
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(photos)")}
         if "spot_id" not in cols:
             self.conn.execute(
@@ -146,6 +158,47 @@ class Library:
         if "missing" not in cols:
             self.conn.execute(
                 "ALTER TABLE photos ADD COLUMN missing INTEGER DEFAULT 0")
+        self._dedupe_records()
+
+    def _dedupe_records(self):
+        """自愈: 同一照片同一rank多条记录(0.8.0-test3识别与sidecar回填
+        并发写入的历史脏数据)——每条照片每rank只留一条, 优先级:
+        人工(确认/复核/手工/改框) > 带候选(top5) > 最新。多鸟照片的
+        rank1/rank2不同rank, 不受影响。"""
+        dup = self.conn.execute(
+            "SELECT photo_id, rank, COUNT(*) n FROM records "
+            "GROUP BY photo_id, rank HAVING n>1").fetchall()
+        if not dup:
+            return
+        removed = 0
+        for d in dup:
+            rows = self.conn.execute(
+                "SELECT id, confirmed_code, reviewed, source, top5_json "
+                "FROM records WHERE photo_id=? AND rank=? ORDER BY id",
+                (d["photo_id"], d["rank"])).fetchall()
+
+            def score(r):
+                if r["confirmed_code"] or r["reviewed"] or \
+                        r["source"] in ("manual", "rebox"):
+                    return 3
+                if r["top5_json"] and r["top5_json"] not in ("", "[]"):
+                    return 1
+                return 0
+
+            # 人工多条都保留(用户可能真的标了两只); 无人工时只留最优一条
+            humans = [r for r in rows if score(r) == 3]
+            if humans:
+                keep_ids = {r["id"] for r in humans}
+            else:
+                best = max(rows, key=lambda r: (score(r), r["id"]))
+                keep_ids = {best["id"]}
+            for r in rows:
+                if r["id"] not in keep_ids:
+                    self.conn.execute("DELETE FROM records WHERE id=?",
+                                      (r["id"],))
+                    removed += 1
+        if removed:
+            self.conn.commit()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -267,7 +320,24 @@ class Library:
         self.conn.commit()
 
     # ---------- records ----------
+    def has_human_record(self, photo_id: int) -> bool:
+        """该照片是否有人工痕迹(确认/复核/手工标注/改框)。
+
+        自动识别结果一律不得覆盖人工结果(2026-11-05: sidecar回填与
+        识别并发时, 两套rank=1同时存在→查看器显示两个"主鸟")。"""
+        row = self.conn.execute(
+            "SELECT 1 FROM records WHERE photo_id=? AND "
+            "(confirmed_code IS NOT NULL OR reviewed=1 "
+            " OR source IN ('manual','rebox')) LIMIT 1",
+            (photo_id,)).fetchone()
+        return row is not None
+
     def add_records(self, photo_id: int, recs: list[dict]):
+        # 幂等: 同一照片的自动识别结果整体替换(此前直接INSERT, 识别与
+        # sidecar回填并发时产生重复rank——查看器两个"主鸟", 0.8.0-test3)
+        if recs and self.has_human_record(photo_id):
+            return                      # 人工结果优先, 自动结果不落库
+        self.conn.execute("DELETE FROM records WHERE photo_id=?", (photo_id,))
         for i, r in enumerate(recs, 1):
             top5 = [{"code": t["code"], "prob": t["prob"]} for t in r.get("top5", [])]
             self.conn.execute(

@@ -139,6 +139,39 @@ def sp_hard_filter(probs: np.ndarray, tiers: list[frozenset],
     return None
 
 
+def sp_extend_candidates(probs: np.ndarray, tiers: list[frozenset],
+                         labels: list, picked: list[dict],
+                         topk: int) -> list[dict]:
+    """候选补齐(2026-11-05用户反馈: 待复核下拉没有top5, 只有"最近")。
+
+    定种仍按SP语义(名录层内≥0.3%), 但**存库的候选列表**在不足topk时
+    用同层后续物种补齐(不设0.3%下限, 概率仍为原始值)。低置信照片
+    (如2.9%)的第二候选往往低于0.3%, 此前被截断→下拉只剩当前鸟种,
+    用户无法点选近缘种。只影响top5_json(UI候选), 不改变species_code/
+    confidence, 识别口径不变。"""
+    if not picked or len(picked) >= topk or not tiers:
+        return picked
+    first = picked[0]["code"]
+    tier = None
+    for t in tiers:
+        if first in t:
+            tier = t
+            break
+    if tier is None:
+        return picked
+    seen = {p["code"] for p in picked}
+    order = np.argsort(-probs)[:SP_TOP_WINDOW]
+    for i in order:
+        if len(picked) >= topk:
+            break
+        lab = labels[int(i)]
+        if lab["code"] in tier and lab["code"] not in seen:
+            picked.append({"code": lab["code"], "en": lab["en"],
+                           "sci": lab["sci"], "prob": float(probs[int(i)])})
+            seen.add(lab["code"])
+    return picked
+
+
 class SpRegionFilter:
     """sp_regions.json名录: {ebird_region: [code...]}, id_map: 我们区域id→ebird码。"""
 
@@ -270,6 +303,10 @@ class SpRecognitionEngine:
         picked = self._hard_filter(probs, tiers, topk)
         if not picked:                          # 名录全落空
             return None, "lowconf"
+        # 候选补齐: 低置信时第二候选常低于0.3%被截断, 待复核下拉会看不到
+        # 近缘种(定种/置信不变, 只补UI候选; 2026-11-05用户反馈)
+        picked = sp_extend_candidates(probs, tiers, self.classifier.labels,
+                                      picked, topk)
         raw0 = float(picked[0]["prob"])
         if raw0 < gate:
             return None, "lowconf"              # 低置信: 不写鸟名(未识别)
@@ -323,7 +360,7 @@ class SpRecognitionEngine:
 
     def _best_variant(self, img, box, tiers, topk) -> dict | None:
         """多种取景里取原始概率最高者(画框识别/低置信救援共用)。"""
-        best: tuple[float, list] | None = None
+        best: tuple[float, list, "np.ndarray"] | None = None
         for crop in self._variant_crops(img, box):
             probs = self._probs(crop)
             if float(probs.max()) < REJECT_GPROB:
@@ -333,10 +370,12 @@ class SpRecognitionEngine:
                 continue
             raw0 = float(picked[0]["prob"])
             if best is None or raw0 > best[0]:
-                best = (raw0, picked)
+                best = (raw0, picked, probs)
         if best is None:
             return None
-        return self._record_from_picked(best[1], best[0], box)
+        picked = sp_extend_candidates(best[2], tiers,
+                                      self.classifier.labels, best[1], topk)
+        return self._record_from_picked(picked, best[0], box)
 
     def recognize(self, img_rgb: np.ndarray, region_id: str | None,
                   month: int, topk: int = 5) -> list[dict]:

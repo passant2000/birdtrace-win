@@ -83,7 +83,7 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
             continue
         recs = lib.conn.execute(
             "SELECT r.species_code, r.confirmed_code, r.rank, r.confidence, "
-            "  r.source, r.box_json, r.reviewed, "
+            "  r.source, r.box_json, r.top5_json, r.reviewed, "
             "  COALESCE(sp.cn, sp.en) AS name "
             "FROM records r LEFT JOIN species sp "
             "  ON sp.code=COALESCE(r.confirmed_code, r.species_code) "
@@ -94,11 +94,16 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
                 box = json.loads(rec["box_json"]) if rec["box_json"] else None
             except ValueError:
                 box = None
+            try:
+                top5 = json.loads(rec["top5_json"]) if rec["top5_json"] else None
+            except ValueError:
+                top5 = None
             records.append({
                 "code": rec["species_code"], "confirmed": rec["confirmed_code"],
                 "name": rec["name"], "rank": rec["rank"],
                 "confidence": rec["confidence"], "source": rec["source"],
-                "reviewed": int(rec["reviewed"] or 0), "box": box})
+                "reviewed": int(rec["reviewed"] or 0), "box": box,
+                "top5": top5})
         entry = {
             "file": os.path.basename(r["path"]),
             "records": records,
@@ -179,7 +184,17 @@ def apply_entry(lib, photo_id: int, entry: dict) -> dict:
             "SELECT code FROM species WHERE code IN (%s)" % ",".join(
                 "?" * len(recs)),
             [r.get("confirmed") or r.get("code") for r in recs])}
-        for i, r in enumerate(sorted(recs, key=lambda x: x.get("rank") or 99), 1):
+        # 按rank去重: 旧版json可能含同rank重复条目, 顺序重编号会凭空
+        # 多出"第二只鸟"(2026-11-05双主鸟反馈的连带防护)
+        seen_ranks: set = set()
+        uniq = []
+        for r in sorted(recs, key=lambda x: x.get("rank") or 99):
+            rk = int(r.get("rank") or 0)
+            if rk in seen_ranks:
+                continue
+            seen_ranks.add(rk)
+            uniq.append(r)
+        for i, r in enumerate(uniq, 1):
             code = r.get("code")
             conf = r.get("confirmed")
             if code not in valid and conf not in valid:
@@ -188,9 +203,11 @@ def apply_entry(lib, photo_id: int, entry: dict) -> dict:
                 code = conf
             lib.conn.execute(
                 "INSERT INTO records(photo_id,species_code,rank,confidence,source,"
-                "box_json,reviewed,confirmed_code) VALUES(?,?,?,?,?,?,?,?)",
+                "box_json,top5_json,reviewed,confirmed_code) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (photo_id, code, i, float(r.get("confidence") or 0),
                  r.get("source") or "sidecar", json.dumps(r.get("box")),
+                 json.dumps(r.get("top5")) if r.get("top5") else None,
                  int(r.get("reviewed") or 0),
                  conf if conf in valid else None))
             done["records"] = True

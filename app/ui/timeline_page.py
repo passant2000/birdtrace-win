@@ -726,8 +726,12 @@ class TimelinePage(QWidget):
         """重建左侧时间树。锚点: 月=月份标题QLabel, 日=当日首个网格项;
         点击itemClicked跳转, 滚动反向高亮(_sync_tree_current)。"""
         keep = self.tree_nav.currentItem()
-        keep_key = keep.data(0, Qt.UserRole) if keep else None
+        try:
+            keep_key = keep.data(0, Qt.UserRole) if keep else None
+        except RuntimeError:      # 上一次refresh的旧item已删(离屏压力下偶发)
+            keep_key = None
         self.tree_nav.blockSignals(True)
+        self.tree_nav.setCurrentItem(None)   # 清空内部current指针再clear
         self.tree_nav.clear()
         import datetime
         today = datetime.date.today()
@@ -791,8 +795,12 @@ class TimelinePage(QWidget):
         key = item.data(0, Qt.UserRole)
         target = None
         if key and "|" in key:
-            day = key.split("|", 1)[1]
-            if getattr(self, "_group_level", "month") != "day" or                     getattr(self, "_group_day", None) != day:
+            # key="YYYY-MM|DD"——_group_day必须存完整ISO日期"YYYY-MM-DD":
+            # refresh的day模式按 iso==focus 与 ym==focus[:7] 过滤,
+            # 此前只存日号"26"→全月被continue跳过→内容区空白(test3实测)
+            day = "-".join(key.split("|", 1))
+            if getattr(self, "_group_level", "month") != "day" \
+                    or getattr(self, "_group_day", None) != day:
                 # 级别切换: 按日分组并重建(重建后走下方滚动定位)
                 self._group_level = "day"
                 self._group_day = day
@@ -980,7 +988,7 @@ class TimelinePage(QWidget):
         info = QVBoxLayout()
         info.setSpacing(2)
         tag = QLabel(t("每日一鸟 · 文化故事", "Bird of the day · Culture story"))
-        tag.setStyleSheet("color:#8A9455;font-size:11px;font-weight:700;"
+        tag.setStyleSheet(f"color:{theme.OLIVE};font-size:11px;font-weight:700;"
                           "background:transparent;")
         info.addWidget(tag)
         name = QLabel(sname(sp["cn"], sp["en"]))

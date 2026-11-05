@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """时间线：树删除后刷新 / 按日期选择 / Shift范围选择 验证。"""
 import sys
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -49,7 +50,11 @@ def _seed_synthetic(lib_d: Path, n: int = 30):
     lib2.close()
 
 
-if SRC.exists() and sqlite3.connect(SRC).execute(
+# 默认合成库: 不再依赖用户真库(会被清空/变化, 且474张×多次全量重建
+# 在offscreen下会偶发Qt access violation——2026-11-05)。需要真库时:
+# BIRDTRACE_VERIFY_REAL_LIB=1
+USE_REAL = os.environ.get("BIRDTRACE_VERIFY_REAL_LIB") == "1"
+if USE_REAL and SRC.exists() and sqlite3.connect(SRC).execute(
         "SELECT COUNT(*) FROM photos").fetchone()[0] > 10:
     shutil.copy2(SRC, D / "catalog.db")
     lib = Library(D)
@@ -131,9 +136,53 @@ for i in range(page.tree_nav.topLevelItemCount()):
 print(f"部分删除 月节点: '{before_month}' -> '{after_month}'")
 assert before_month != after_month, "月节点张数未刷新"
 
+# ---- 3b) 按树级别分组(0.8.0-test3反馈: 点日期后内容区空白) ----
+# 根因: 日节点key="YYYY-MM|DD"只取日号"DD"存_group_day, 而day模式渲染
+# 按 iso=="YYYY-MM-DD"过滤+ym==focus[:7]跳月——日号永远匹配不上→全空白
+def _find_tree_item(key):
+    from PySide6.QtWidgets import QTreeWidgetItemIterator
+    it = QTreeWidgetItemIterator(page.tree_nav)
+    while it.value() is not None:
+        if it.value().data(0, Qt.UserRole) == key:
+            return it.value()
+        it += 1
+    return None
+
+
+_day_iso = sorted(set(dates.values()))[-1]          # 有照片的最后一天
+_ym, _dd = _day_iso[:7], _day_iso[8:10]
+_ditem = _find_tree_item(f"{_ym}|{_dd}")
+assert _ditem is not None, f"树里找不到日节点 {_ym}|{_dd}"
+_exp_day = sum(1 for d in dates.values() if d == _day_iso)
+page._on_tree_click(_ditem, 0)
+settle(500)
+assert getattr(page, "_group_level", "") == "day", "点击日期后应切day分组"
+assert getattr(page, "_group_day", None) == _day_iso, \
+    f"_group_day应存完整ISO (got {getattr(page, '_group_day', None)})"
+_n_day = len(page._order_ids)
+_all_that_day = all(page._iso_dates.get(i) == _day_iso for i in page._order_ids)
+print(f"点日期 {_day_iso}: 渲染 {_n_day} 项 (该日共 {_exp_day} 张, "
+      f"连拍折叠后可少于总数)")
+# test3空白bug的判定: 有内容 且 全部属于该日 (连拍折叠开启时
+# 封面数≤照片数是正常行为)
+assert 0 < _n_day <= _exp_day and _all_that_day, \
+    f"按日分组应显示该日照片 (got {_n_day}/{_exp_day}, 全属该日={_all_that_day})"
+_day_heads = [lb.text() for lb in page.content.findChildren(type(page.title))
+              if f"{int(_dd)}日" in lb.text() and "张" in lb.text()]
+assert _day_heads, "day分组应渲染日小标题"
+# 点月节点→回月分组
+_mitem = _find_tree_item(_ym)
+page._on_tree_click(_mitem, 0)
+settle(500)
+assert getattr(page, "_group_level", "") == "month", "点月后应回month分组"
+assert len(page._order_ids) >= _n_day, "月分组照片数应不少于单日"
+print(f"点月 {_ym}: 恢复 {len(page._order_ids)} 项 (按月分组)")
+
 # ---- 4) 全选删除后树必须清空(原bug) ----
 for pid in [r["id"] for r in lib.conn.execute("SELECT id FROM photos")]:
     lib.remove_photo(pid)
+settle(300)   # offscreen陷阱: 让上一轮refresh的deleteLater回收, 否则
+              # tree.clear()碰到半删C++对象会access violation(坑记录同款)
 page.refresh()
 settle(500)
 print("全删后: 照片", len(page._order_ids), "树顶层", page.tree_nav.topLevelItemCount(),

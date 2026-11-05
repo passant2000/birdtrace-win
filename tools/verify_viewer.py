@@ -92,6 +92,78 @@ def main():
     rw4, rh4, _, _ = fill_ratio(dlg.view)
     check(max(rw4, rh4) > 0.95, "双击后恢复自适应")
 
+    print("[5] top5候选下拉框+点鸟种名菜单(0.8.0-test3反馈: 从未显示过)")
+    import json as _json
+    from PySide6.QtWidgets import QComboBox, QLabel, QMenu
+    top5_db = _json.loads(lib.conn.execute(
+        "SELECT top5_json FROM records WHERE photo_id=? AND rank=1",
+        (ids[0],)).fetchone()[0])
+    combos = dlg.findChildren(QComboBox)
+    items = [combos[0].itemText(i) for i in range(combos[0].count())] \
+        if combos else []
+    check(len(items) == len(top5_db) and len(items) >= 2,
+          f"下拉框=识别top5 ({items})")
+    check(any("✓" in it for it in items), "当前鸟种带✓标记")
+    # 点鸟种名弹菜单: QMenu.exec类级打桩对PySide无效(静态+实例重载),
+    # 在__init__里给实例桩exec收集actions(offscreen真exec会卡死)
+    fired = []
+    _real_init = QMenu.__init__
+
+    def _init_stub(m, *a, **k):
+        _real_init(m, *a, **k)
+        m.exec = lambda *aa, **kk: fired.append([x.text() for x in m.actions()])
+    QMenu.__init__ = _init_stub
+    titles = [lb for lb in dlg.findChildren(QLabel)
+              if lb.toolTip() and "候选" in lb.toolTip()]
+    check(len(titles) == 1, "鸟种名可点击(带候选tooltip)")
+    if titles:
+        rec0 = lib.photo_detail(ids[0])[1][0]
+        check(rec0.get("top5_json"), "photo_detail经视图带回top5_json")
+        dlg._species_menu(titles[0], rec0["record_id"], rec0)
+        app.processEvents()
+        acts = fired[0] if fired else []
+        check(len([a for a in acts if "%" in a]) == len(top5_db)
+              and any("其他鸟种" in a for a in acts),
+              f"菜单含全部候选+其他鸟种… ({acts})")
+    QMenu.__init__ = _real_init
+    # 菜单点第2候选→改鸟种(demo_lib共享fixture: 测完还原)
+    if fired and len(top5_db) >= 2:
+        from PySide6.QtCore import QObject, Signal
+
+        class _W(QObject):
+            library_changed = Signal()
+        dlg.win = _W()          # _confirm会发win.library_changed
+        c2 = top5_db[1]["code"]
+        dlg._confirm(rec0["record_id"], c2)
+        eff = lib.conn.execute(
+            "SELECT COALESCE(confirmed_code, species_code) FROM records "
+            "WHERE id=?", (rec0["record_id"],)).fetchone()[0]
+        check(eff == c2, f"点候选即改鸟种 ({eff}=={c2})")
+        lib.conn.execute(
+            "UPDATE records SET confirmed_code=NULL, reviewed=0 WHERE id=?",
+            (rec0["record_id"],))
+        lib.conn.commit()
+
+    print("[6] v_records老库视图迁移(缺top5_json自动重建)")
+    import shutil
+    MIG = PROJ / "data/viewer_mig_check"
+    if MIG.exists():
+        shutil.rmtree(MIG)
+    lib2 = Library(MIG)
+    lib2.conn.execute("DROP VIEW v_records")   # 降级成旧定义
+    lib2.conn.execute(
+        "CREATE VIEW v_records AS SELECT r.id AS record_id, r.photo_id, "
+        "r.species_code, r.rank, r.confidence, r.source, r.reviewed "
+        "FROM records r JOIN photos p ON p.id = r.photo_id")
+    lib2.conn.commit()
+    lib2.close()
+    lib3 = Library(MIG)                        # 重开→_migrate应重建
+    vcols = {r["name"] for r in lib3.conn.execute(
+        "PRAGMA table_info(v_records)")}
+    check("top5_json" in vcols and "eff_code" in vcols,
+          f"老库视图自动重建含top5_json ({sorted(vcols)[:4]}…)")
+    lib3.close()
+
     print()
     print("FAILED" if FAILED["v"] else "ALL PASS")
     app.quit()
