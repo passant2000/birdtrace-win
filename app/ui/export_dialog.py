@@ -420,9 +420,13 @@ class ExportDialog(QDialog):
                 "(reconnect the drive and export again)")
         QMessageBox.information(self, t("导出", "Export"), msg)
         # 导出后直接打开新位置文件夹(2026-11-04用户)
+        # copy打开所选目标根目录(第一个文件的dst可能深埋在鸟种/年月子
+        # 目录里, 打开它用户摸不着头绪); rename原地改名→打开照片原文件夹
         try:
             if self._mode == "copy" and done_all:
-                os.startfile(str(Path(done_all[0]["dst"]).parent))
+                root = self.dir_edit.text().strip()
+                os.startfile(root if root
+                             else str(Path(done_all[0]["dst"]).parent))
             elif self._mode == "rename" and plan["ops"]:
                 os.startfile(str(Path(plan["ops"][0]["src"]).parent))
         except OSError:

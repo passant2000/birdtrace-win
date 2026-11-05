@@ -133,8 +133,9 @@ def plan_ops(rows: list[dict], dest_root: Path | None = None,
                 parts_out = []
                 for seg in template:
                     if seg == "filename":
-                        parts_out.append(safe_component(f.stem, "photo")
-                                         + f.suffix.lower())
+                        # 只放stem: 扩展名由末尾统一追加一次——段内先加一次
+                        # 会产生 DSC0001.arw.arw 双后缀(0.8.0-test2复查)
+                        parts_out.append(safe_component(f.stem, "photo"))
                     elif seg == "date":
                         parts_out.append(date)
                     elif seg == "name":
@@ -148,7 +149,7 @@ def plan_ops(rows: list[dict], dest_root: Path | None = None,
                             seq_by_key[seq_key] = seq_by_key.get(seq_key, 0) + 1
                             seq = seq_by_key[seq_key]
                         parts_out.append(f"{seq:04d}")
-                stem = "_".join(parts_out) or f.name
+                stem = "_".join(parts_out) or f.stem   # f.name会双后缀
                 return Path(stem + f.suffix.lower())
             if naming == "date_name":
                 key = f"{date}|{r.get('eff_code') or ''}"

@@ -71,12 +71,14 @@ class MainWindow(QMainWindow):
         if ev.type() == QEvent.MouseButtonPress \
                 and obj in self._nav_buttons.values():
             self._nav_drag_start = ev.position().toPoint()
+            self._nav_dragged = False
         elif ev.type() == QEvent.MouseMove \
                 and obj in self._nav_buttons.values() \
                 and getattr(self, "_nav_drag_start", None) is not None:
             b = obj
             dy = ev.position().toPoint().y() - self._nav_drag_start.y()
             if abs(dy) > 18:
+                self._nav_dragged = True
                 lay = self._nav_lay
                 idx = lay.indexOf(b)
                 new_idx = idx + (1 if dy > 0 else -1)
@@ -97,6 +99,13 @@ class MainWindow(QMainWindow):
                 if self._nav_lay.indexOf(b) >= 0]
         keys.sort(key=lambda k: self._nav_lay.indexOf(self._nav_buttons[k]))
         self.lib.set_setting("nav_order", ",".join(keys))
+
+    def _nav_click(self, key: str):
+        # 拖动重排刚发生过: 松手仍落在按钮内会触发clicked——不切页
+        if getattr(self, "_nav_dragged", False):
+            self._nav_dragged = False
+            return
+        self.switch_to(key)
 
     def _stop_bg_workers(self):
         """退出前让后台QThread有机会收尾, 避免线程销毁告警。"""
@@ -179,7 +188,7 @@ class MainWindow(QMainWindow):
             b.setObjectName("NavItem")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, k=key: self.switch_to(k))
+            b.clicked.connect(lambda _=False, k=key: self._nav_click(k))
             lay.addWidget(b)
             self._nav_buttons[key] = b
             b.installEventFilter(self)

@@ -224,6 +224,66 @@ def main():
     check(got and "groups" in got[0] and got[0]["groups"] == 1, f"worker同步跑通 ({got})")
     win.close()
 
+    print("\n[7] unify_burst_species 连拍组鸟种统一")
+    # 场景1: EXIF链1s两帧, 高置信A + 低置信异种B → B帧统一成A
+    u1 = add("u1", "bird", 1, "2026-06-01 10:00:00", A, 6.0)
+    lib.conn.execute(
+        "UPDATE records SET confidence=0.92 WHERE photo_id=? AND rank=1", (u1,))
+    u2 = add("u2", "bird", 2, "2026-06-01 10:00:01", B, 6.0)
+    lib.conn.execute(
+        "UPDATE records SET confidence=0.30 WHERE photo_id=? AND rank=1", (u2,))
+    lib.conn.commit()
+    r = lib.unify_burst_species()
+    rec2 = lib.conn.execute(
+        "SELECT species_code, confidence, source FROM records "
+        "WHERE photo_id=? AND rank=1", (u2,)).fetchone()
+    check(rec2["species_code"] == A and abs(rec2["confidence"] - 0.92) < 1e-9
+          and rec2["source"] == "burst",
+          f"低置信帧统一成胜出帧 ({dict(rec2)})")
+    # 场景2: 人工确认帧绝不改写
+    u3 = add("u3", "bird", 3, "2026-06-01 10:00:02", B, 6.0)
+    lib.conn.execute(
+        "UPDATE records SET confidence=0.95, reviewed=1 WHERE photo_id=? AND rank=1",
+        (u3,))   # 假装人工确认(B, 高置信)——若被采纳为胜出帧应改u2, 但reviewed不参与
+    lib.conn.commit()
+    lib.unify_burst_species()
+    rec2b = lib.conn.execute(
+        "SELECT species_code FROM records WHERE photo_id=? AND rank=1",
+        (u2,)).fetchone()
+    rec3 = lib.conn.execute(
+        "SELECT species_code, reviewed FROM records WHERE photo_id=? AND rank=1",
+        (u3,)).fetchone()
+    check(rec3["species_code"] == B and rec3["reviewed"] == 1,
+          f"人工确认帧不被改写 ({dict(rec3)})")
+    # 场景3: 全组低于0.5 → 不动
+    u4 = add("u4", "bird", 4, "2026-07-01 11:00:00", A, 6.0)
+    u5 = add("u5", "bird", 5, "2026-07-01 11:00:01", B, 6.0)
+    lib.conn.execute(
+        "UPDATE records SET confidence=0.30 WHERE photo_id=?", (u4,))
+    lib.conn.execute(
+        "UPDATE records SET confidence=0.40 WHERE photo_id=?", (u5,))
+    lib.conn.commit()
+    lib.unify_burst_species()
+    got4 = lib.conn.execute(
+        "SELECT species_code FROM records WHERE photo_id=? AND rank=1",
+        (u4,)).fetchone()["species_code"]
+    check(got4 == A, f"组内无≥0.5帧整组不动 ({got4}=={A})")
+    # 场景4(0.8.0-test2复查修复): 无EXIF照片不参与统一——
+    # added_at全在同一秒, 纯时间链曾把整批不相干照片并组改写鸟种
+    n1 = add("n1", "bird", 6, None, B, 6.0)
+    n2 = add("n2", "checker", 7, None, A, 6.0)
+    lib.conn.execute("DELETE FROM exif WHERE photo_id IN (?,?)", (n1, n2))
+    lib.conn.execute(
+        "UPDATE records SET confidence=0.95 WHERE photo_id=?", (n2,))
+    lib.conn.execute("UPDATE records SET confidence=0.30 WHERE photo_id=?", (n1,))
+    lib.conn.commit()
+    lib.unify_burst_species()
+    recn = lib.conn.execute(
+        "SELECT species_code, source FROM records WHERE photo_id=? AND rank=1",
+        (n1,)).fetchone()
+    check(recn["species_code"] == B and recn["source"] != "burst",
+          f"无EXIF照片绝不被并组改写 ({dict(recn)})")
+
     print()
     if FAILED["v"]:
         print("FAILED")

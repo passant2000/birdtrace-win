@@ -317,6 +317,38 @@ def main():
           f"UI执行落盘{n_total + 1}个文件 (实际{len(out_files)})")
     dlg.close()
 
+    print("\n[6] 文件名模板专项(0.8.0-test2复查: 原文件名段曾双后缀)")
+    # 原文件名+日期: 扩展名只能出现一次(曾产出 p_2026-05-05.arw.arw)
+    planT = exporter.plan_ops(rows_p, BASE / "out_t1", hierarchy="flat",
+                              template=["filename", "date"])
+    bad = [Path(o["dst"]).name for o in planT["ops"]
+           if Path(o["dst"]).suffix in Path(o["dst"]).stem.lower()]
+    jpg = next(o for o in planT["ops"]
+               if Path(o["dst"]).suffix.lower() == ".jpg"
+               and Path(o["src"]).name == "p.jpg")
+    arw = next(o for o in planT["ops"]
+               if Path(o["dst"]).suffix.lower() == ".arw")
+    check(not bad, f"无双重扩展名 ({bad})")
+    check(Path(jpg["dst"]).name.lower() == "p_2026-05-05.jpg"
+          and Path(arw["dst"]).name.lower() == "p_2026-05-05.arw",
+          f"filename段=stem, RAW+JPG成对同号 "
+          f"({Path(jpg['dst']).name}, {Path(arw['dst']).name})")
+    # 日期+序号: 序号按 日期|鸟种|鸟点 组合键递增(每日重启), 成对同号
+    planT2 = exporter.plan_ops(rows_p, BASE / "out_t2", hierarchy="flat",
+                               template=["date", "seq"])
+    stems2 = sorted({Path(o["dst"]).stem for o in planT2["ops"]})
+    check(stems2 == ["2026-05-03_0001", "2026-05-05_0001",
+                     "2026-06-01_0001"],
+          f"日期+序号模板, 每日重启 (stems={stems2})")
+    # 全段落空(鸟点段但无鸟点)→回退原名, 仍不双后缀
+    rows_nospot = [dict(r, spot_name=None) for r in rows_p]
+    planT3 = exporter.plan_ops(rows_nospot, BASE / "out_t3",
+                               hierarchy="flat", template=["spot"])
+    check(all(Path(o["dst"]).name == Path(o["src"]).name
+              for o in planT3["ops"] if o["photo_id"]),
+          f"段落空回退原名单后缀 "
+          f"({[Path(o['dst']).name for o in planT3['ops']][:2]})")
+
     print()
     if FAILED["v"]:
         print("FAILED")

@@ -1197,10 +1197,13 @@ class Library:
 
         返回 {"groups": 检查组数, "changed": 改写帧数}。"""
         from .core.burst import parse_ts
+        # 只认EXIF拍摄时间: 无EXIF照片(截图/扫描/微信收图)的added_at是
+        # 导入时刻, 整批导入全在同一两秒内→纯时间链会把不相干照片并成
+        # 一组改写鸟种(数据破坏)。UI折叠分组另有dHash护栏, 这里是写库侧。
         rows = self.conn.execute(
-            "SELECT p.id, COALESCE(e.dt_original, p.added_at) AS ts, "
-            "  p.group_id FROM photos p "
-            "LEFT JOIN exif e ON e.photo_id=p.id").fetchall()
+            "SELECT p.id, e.dt_original AS ts, p.group_id FROM photos p "
+            "JOIN exif e ON e.photo_id=p.id "
+            "WHERE e.dt_original IS NOT NULL").fetchall()
         items = []
         for r in rows:
             ts = parse_ts(r["ts"])

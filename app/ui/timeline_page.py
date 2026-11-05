@@ -425,15 +425,19 @@ class TimelinePage(QWidget):
         regions_mod = __import__("app.core.regions", fromlist=["regions"])
         reg_combo = QComboBox()
         q2 = ",".join("?" * len(ids))
+        # 参数必须传: 此前execute()漏了ids→ProgrammingError槽静默崩溃,
+        # 用户看到"确认后没有任何反应"(0.8.0-test2复查)
         batch_regions = [r["region_id"] for r in self.lib.conn.execute(
             f"SELECT DISTINCT b.region_id AS region_id FROM batches b "
-            f"JOIN photos p ON p.batch_id=b.id WHERE p.id IN ({q2})")
+            f"JOIN photos p ON p.batch_id=b.id WHERE p.id IN ({q2})", ids)
             if r["region_id"]]
         cur = batch_regions[0] if len(set(batch_regions)) == 1 else None
         reg_combo.addItem(t("保持不变", "Keep unchanged"), None)
         tree = regions_mod.build_tree()["countries"]
         for cnode in tree:
-            reg_combo.addItem(cnode["name"], None)   # 国家级
+            # data必须是地区id: 此前国家级传None与「保持不变」同值,
+            # 选国家后if new_region不成立→地区静默不变(0.8.0-test2复查)
+            reg_combo.addItem(cnode["name"], cnode["id"])
             for snode in cnode.get("subs") or []:
                 reg_combo.addItem("    " + snode["name"], snode["id"])
         if cur:
