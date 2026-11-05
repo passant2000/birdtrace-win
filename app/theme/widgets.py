@@ -6,8 +6,8 @@ from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPointF, Property,
                             QPropertyAnimation, QRectF, QSize, Qt, Signal)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QPainter,
                            QPainterPath, QPixmap)
-from PySide6.QtWidgets import (QAbstractSpinBox, QCalendarWidget, QComboBox,
-                               QDateEdit, QDialog,
+from PySide6.QtWidgets import (QCalendarWidget, QComboBox, QDialog,
+                               QHeaderView,
                                QFrame, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
 
@@ -241,7 +241,7 @@ class _DatePopup(QDialog):
 
     date_selected = Signal(QDate)
 
-    def __init__(self, date: QDate, edit: QDateEdit):
+    def __init__(self, date: QDate, edit):
         super().__init__(edit, Qt.Popup)
         self.setObjectName("DatePopup")
         lay = QVBoxLayout(self)
@@ -285,13 +285,19 @@ class _DatePopup(QDialog):
         self.cal.setNavigationBarVisible(False)
         self.cal.setGridVisible(False)
         self.cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        # 原生星期表头是QCalendarWidget自绘的黑条(QSS改不动) → 关闭,
+        # 用_week_header()自绘的7个标签跟随主题(2026-11-06)
         self.cal.setHorizontalHeaderFormat(
-            QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
+            QCalendarWidget.HorizontalHeaderFormat.NoHorizontalHeader)
         if lo.isValid():
             self.cal.setMinimumDate(lo)
         if hi.isValid():
             self.cal.setMaximumDate(hi)
+        hv = self.cal.findChild(QHeaderView)
+        if hv is not None:
+            hv.hide()          # 原生黑条表头彻底隐藏(见_week_header)
         self.cal.setCurrentPage(date.year(), date.month())
+        lay.addLayout(self._week_header())
         lay.addWidget(self.cal)
         self.setStyleSheet(
             f"QDialog#DatePopup{{background:{theme.CARD};"
@@ -304,6 +310,11 @@ class _DatePopup(QDialog):
             f"selection-color:white;}}"
             f"QCalendarWidget QAbstractItemView:disabled{{"
             f"color:{theme.LABEL_3};}}"
+            f"QCalendarWidget QTableView{{background:{theme.CARD};"
+            f"color:{theme.LABEL};selection-background-color:{theme.BLUE};}}"
+            f"QCalendarWidget QHeaderView::section{{background:{theme.CARD};"
+            f"color:{theme.LABEL_2};border:none;padding:4px 2px;"
+            f"font-size:11px;}}"
             f"QCalendarWidget QToolButton{{background:transparent;"
             f"color:{theme.LABEL};border:none;padding:4px 8px;}}")
         self.year_combo.currentIndexChanged.connect(self._sync_page)
@@ -312,6 +323,24 @@ class _DatePopup(QDialog):
         next_btn.clicked.connect(lambda: self._step(1))
         self.cal.clicked.connect(self._pick)
         self.cal.activated.connect(self._pick)
+
+    def _week_header(self) -> QHBoxLayout:
+        """自绘星期表头(周一开头由firstDayOfWeek决定, 周末红色)。"""
+        zh = ["一", "二", "三", "四", "五", "六", "日"]  # i18n:ok (走t配对en)
+        en = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        first = self.cal.firstDayOfWeek().value   # Qt.Monday=1
+        row = QHBoxLayout()
+        row.setSpacing(0)
+        row.setContentsMargins(0, 0, 0, 2)
+        for i in range(7):
+            idx = (first - 1 + i) % 7            # 0=周一 ... 6=周日
+            lab = QLabel(t(zh[idx], en[idx]))
+            color = theme.RED if idx >= 5 else theme.LABEL_2
+            lab.setAlignment(Qt.AlignCenter)
+            lab.setStyleSheet(
+                f"color:{color};font-size:11px;background:transparent;")
+            row.addWidget(lab, 1)
+        return row
 
     def _sync_page(self, *_):
         self.cal.setCurrentPage(int(self.year_combo.currentData()),
@@ -332,29 +361,108 @@ class _DatePopup(QDialog):
         self.accept()
 
 
-class ThemedDateEdit(QDateEdit):
-    """QDateEdit替代: 弹层用 _DatePopup(年份/月份下拉一点直达)。
+class ThemedDateEdit(QPushButton):
+    """日期输入(自绘按钮式, 非QDateEdit)。
 
-    用法与QDateEdit一致(date()/setDate()/dateChanged/日期范围);
-    点击输入框弹出日期选择层。"""
+    为什么不用QDateEdit: 只要QSS里出现QDateEdit选择器, Qt会把内部
+    输入框宽度压成1px→日期文字完全不可见(2026-11-06用户实测0.8.0
+    日期框全空白)。改用QPushButton自绘: 配色完全跟主题、点击弹
+    _DatePopup(年份/月份都是下拉)。
+
+    API与QDateEdit兼容: date()/setDate()/dateChanged/minimumDate/
+    setMinimumDate/maximumDate/setMaximumDate/setDateRange/
+    setSpecialValueText/setDisplayFormat/setCalendarPopup。
+    """
+
+    dateChanged = Signal(QDate)
 
     def __init__(self, date: QDate | None = None, parent=None):
-        super().__init__(date if date is not None else QDate.currentDate(),
-                         parent)
-        self.setDisplayFormat("yyyy-MM-dd")
-        self.setCalendarPopup(False)
-        # 去掉右侧上下箭头(用户2026-11-05: 年份不该靠箭头加减)
-        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.lineEdit().installEventFilter(self)
+        super().__init__(parent)
+        self.setObjectName("DateEdit")
+        self.setCursor(Qt.PointingHandCursor)
+        self._date = QDate(date) if date is not None else QDate.currentDate()
+        self._min = QDate(1752, 9, 14)
+        self._max = QDate(9999, 12, 31)
+        self._special = ""
+        self._apply_style()
+        self.clicked.connect(self._open_popup)
+        self._refresh()
 
-    def eventFilter(self, obj, ev):
-        if obj is self.lineEdit() and ev.type() == QEvent.MouseButtonPress:
-            self._open_popup()
-            return True
-        return super().eventFilter(obj, ev)
+    def _apply_style(self):
+        self.setStyleSheet(
+            f"QPushButton#DateEdit{{background:{theme.FILL};"
+            f"color:{theme.LABEL};border:none;border-radius:10px;"
+            f"padding:9px 14px;font-size:14px;text-align:left;}}"
+            f"QPushButton#DateEdit:hover{{background:{theme.HOVER};}}"
+            f"QPushButton#DateEdit:pressed{{background:{theme.PRESSED};}}"
+            f"QPushButton#DateEdit:focus{{border:2px solid {theme.BLUE};"
+            f"padding:7px 12px;}}")
 
+    def _refresh(self):
+        if self._special and self._date == self._min:
+            self.setText(self._special)
+        else:
+            self.setText(self._date.toString("yyyy-MM-dd"))
+        self.setMinimumWidth(120)
+
+    # ---- QDateEdit兼容API ----
+    def date(self) -> QDate:
+        return QDate(self._date)
+
+    def setDate(self, d: QDate):
+        if not isinstance(d, QDate):
+            d = QDate(d)
+        if not d.isValid():
+            return
+        if self._min.isValid() and d < self._min:
+            d = self._min
+        if self._max.isValid() and d > self._max:
+            d = self._max
+        if d == self._date:
+            self._refresh()
+            return
+        self._date = QDate(d)
+        self._refresh()
+        self.dateChanged.emit(QDate(self._date))
+
+    def minimumDate(self) -> QDate:
+        return QDate(self._min)
+
+    def maximumDate(self) -> QDate:
+        return QDate(self._max)
+
+    def setMinimumDate(self, d: QDate):
+        self._min = QDate(d)
+
+    def setMaximumDate(self, d: QDate):
+        self._max = QDate(d)
+
+    def setDateRange(self, lo: QDate, hi: QDate):
+        self._min, self._max = QDate(lo), QDate(hi)
+        self.setDate(self._date)
+
+    def setSpecialValueText(self, text: str):
+        self._special = text
+        self._refresh()
+
+    def setDisplayFormat(self, _fmt: str):
+        pass                      # 固定 yyyy-MM-dd 展示
+
+    def setCalendarPopup(self, _on: bool):
+        pass                      # 兼容旧调用; 弹层始终自绘
+
+    def calendarPopup(self) -> bool:
+        return False
+
+    def setButtonSymbols(self, *_a):
+        pass                      # 兼容旧调用; 没有上下箭头
+
+    def lineEdit(self):
+        return None               # 兼容旧调用(自绘控件无内部输入框)
+
+    # ---- 弹层 ----
     def _open_popup(self):
-        popup = _DatePopup(self.date(), self)
+        popup = _DatePopup(self._date, self)
         popup.date_selected.connect(self._on_picked)
         popup.setAttribute(Qt.WA_DeleteOnClose)
         popup.adjustSize()
@@ -372,10 +480,4 @@ class ThemedDateEdit(QDateEdit):
         popup.show()
 
     def _on_picked(self, qdate: QDate):
-        d = qdate
-        lo, hi = self.minimumDate(), self.maximumDate()
-        if lo.isValid() and d < lo:
-            d = lo
-        if hi.isValid() and d > hi:
-            d = hi
-        self.setDate(d)
+        self.setDate(qdate)

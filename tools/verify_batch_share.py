@@ -133,12 +133,19 @@ def main():
     check(not hasattr(dlg, "to_year") and not hasattr(dlg, "from_year"),
           "多余年份下拉已移除")
     from app.theme.widgets import ThemedDateEdit, _DatePopup
-    from PySide6.QtWidgets import QAbstractSpinBox
+    from PySide6.QtWidgets import QDateEdit
     check(isinstance(dlg.to_date, ThemedDateEdit)
-          and not dlg.to_date.calendarPopup()
-          and dlg.to_date.buttonSymbols()
-          == QAbstractSpinBox.ButtonSymbols.NoButtons,
-          "日期控件=ThemedDateEdit(自定义弹层+无上下箭头)")
+          and not isinstance(dlg.to_date, QDateEdit)
+          and not dlg.to_date.calendarPopup(),
+          "日期控件=自绘ThemedDateEdit(非QDateEdit, 无原生弹层)")
+    # 回归(2026-11-06用户实测日期框全空白): QSS里一旦出现QDateEdit选择器,
+    # Qt会把内部输入框宽度压成1px→日期不可见。改成自绘按钮后断言文字非空。
+    app.processEvents()
+    check(dlg.from_date.text() == dlg.from_date.date().toString("yyyy-MM-dd")
+          and dlg.to_date.text() == dlg.to_date.date().toString("yyyy-MM-dd")
+          and dlg.from_date.text() and dlg.from_date.width() > 50,
+          f"日期文字可见({dlg.from_date.text()}/{dlg.to_date.text()}, "
+          f"宽{dlg.from_date.width()})")
     pop = _DatePopup(dlg.to_date.date(), dlg.to_date)
     check(pop.year_combo.count() > 50
           and pop.year_combo.findData(2019) >= 0,
