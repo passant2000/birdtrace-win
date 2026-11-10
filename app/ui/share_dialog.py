@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
 
+import os
+
 from ..core import regions
 from ..core.sharecard import render_card
 from ..i18n import t, sname
@@ -116,6 +118,16 @@ class ShareDialog(QDialog):
         self.theme_seg.changed.connect(lambda _=0: self._update())
         theme_row.addWidget(self.theme_seg, 1)
         opt.addLayout(theme_row)
+
+        # 分辨率档位(2026-11-10用户: 数毛细节): 标准2000/高清3000,
+        # 高清单卡文件更大, 适合存档/图床
+        res_row = QHBoxLayout()
+        res_row.addWidget(QLabel(t("分辨率", "Resolution")))
+        self.res_seg = SegmentedControl([t("标准 2000", "Standard 2000"),
+                                         t("高清 3000", "HD 3000")])
+        self.res_seg.changed.connect(lambda _=0: self._update())
+        res_row.addWidget(self.res_seg, 1)
+        opt.addLayout(res_row)
 
         life_row = QHBoxLayout()
         life_row.addWidget(QLabel(t("显示 Life # 序号", "Show Life #")))
@@ -266,7 +278,15 @@ class ShareDialog(QDialog):
 
     def _update(self):
         theme = "dark" if self.theme_seg.currentIndex() == 1 else "light"
-        self.pm = render_card(self.photo["path"], self._card_info(), theme)
+        # BIRDTRACE_CARD_WIDTH: 测试钩子(强制卡宽→k=1)。offscreen无字体
+        # 环境下画笔scale(k≠1)时drawText不出墨(tofu都不画), ink类测试
+        # 需k=1才能断言文字渲染; 真实运行不受影响(见sharecard DESIGN_W)
+        env_w = os.environ.get("BIRDTRACE_CARD_WIDTH")
+        w = int(env_w) if env_w else (
+            3000 if getattr(self, "res_seg", None) is not None
+            and self.res_seg.currentIndex() == 1 else 2000)
+        self.pm = render_card(self.photo["path"], self._card_info(), theme,
+                              width=w)
         self._show_preview()
 
     def _show_preview(self):

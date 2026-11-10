@@ -125,15 +125,19 @@ def main():
                                       "shot": "ISO 800"}}
     pm = render_card(str(p1), info, "light")
     check(not pm.isNull() and pm.width() == 2000, f"渲染2000宽 ({pm.width()})")
+    pm_hd = render_card(str(p1), info, "light", width=3000)
+    check(not pm_hd.isNull() and pm_hd.width() == 3000,
+          f"分辨率档位: 高清3000 ({pm_hd.width()})")
     pm.save(str(BASE / "card_score_iucn.png"))
     # OCR不可用: 用像素抽验胶囊区域颜色(罕见红#E5484D 与 极危深红#8B1A12
     # 应同时出现在标题行 y≈photo区+329 的色带里)
     img = pm.toImage()
-    ph = pm.height() - 1000          # 文字区起点(与dpi测试同口径)
-    band = ph + 329
+    k = 2000 / 1600                  # 物理宽/设计宽: 像素坐标乘k
+    ph = pm.height() - int(1000 * k)  # 文字区起点(物理)
+    band = ph + int(329 * k)
     found_rare = found_cr = False
     for x in range(0, pm.width(), 2):
-        c1_ = img.pixelColor(x, band + 31)
+        c1_ = img.pixelColor(x, band + int(31 * k))
         if c1_.name().upper() == "#E5484D":
             found_rare = True
         if c1_.name().upper() == "#8B1A12":
@@ -144,7 +148,8 @@ def main():
     info2 = dict(info, iucn=None, rarity_score=None)
     pm2 = render_card(str(p1), info2, "light")
     img2 = pm2.toImage()
-    found_cr2 = any(img2.pixelColor(x, band + 31).name().upper() == "#8B1A12"
+    found_cr2 = any(img2.pixelColor(x, band + int(31 * k)).name().upper()
+                    == "#8B1A12"
                     for x in range(0, pm2.width(), 2))
     check(not found_cr2, "iucn=None 时无 IUCN 胶囊")
     pm2.save(str(BASE / "card_no_iucn.png"))

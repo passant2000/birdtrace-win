@@ -23,7 +23,8 @@ from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter,
 
 from ..i18n import t, sname
 
-CARD_W = 2000
+CARD_W = 2000          # 默认输出宽(物理)
+DESIGN_W = 1600         # 设计坐标基准(布局/字体按此绘制, 渲染时等比放大)
 PAD = 112
 RADIUS = 60
 
@@ -153,14 +154,21 @@ def _logo_pixmap() -> QPixmap:
     return pm if not pm.isNull() else QPixmap()
 
 
-def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixmap:
+def render_card(photo_path: str, info: dict, theme_name: str = "light",
+                width: int | None = None) -> QPixmap:
     """info: {cn, pinyin, en, sci, lifer_no|None, photographer, date, place|None,
     exif|None: {"body","lens","shot"} 拍摄参数(勾选后; 三段有什么显示什么)}
 
     date: "2024-05-12 08:31:00" 或 "2024-05-12"
     """
     tc = THEMES.get(theme_name, THEMES["light"])
-    W = CARD_W
+    # width=分辨率档(2026-11-10用户: 标准2000/高清3000), 默认CARD_W。
+    # **整卡按比例渲染**: 布局/字体全部用 DESIGN_W(1600) 设计坐标绘制,
+    # 画笔 scale(k) 等比放大到物理宽度——否则绝对字号在高宽卡上相对
+    # 变小(0.8.1首轮实测: 3000宽卡拼音看着没变大)。照片先按物理分辨率
+    # 缩放(保住数毛细节), 再经画笔1:1映射, 不做二次重采样。
+    k = (int(width or CARD_W)) / DESIGN_W
+    W = DESIGN_W
     exif = info.get("exif") or {}
     body = str(exif.get("body") or "").strip()
     lens = str(exif.get("lens") or "").strip()
@@ -169,27 +177,34 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
 
     src = QPixmap(photo_path)
     if src.isNull():
-        src = QPixmap(W, int(W * 0.9))
+        src = QPixmap(round(W * k), round(W * 0.9 * k))
         src.fill(QColor("#D8D8DE"))
 
     ratio = src.height() / max(1, src.width())
-    ph = int(W * min(1.28, max(0.70, ratio)))       # 照片区高: 裁切填充
+    ph = int(W * min(1.28, max(0.70, ratio)))       # 照片区高(设计坐标)
     th = TEXT_ZONE_H
-    H = ph + th
+    H = ph + th                                     # 全设计坐标
 
-    card = QPixmap(W, H)
+    card = QPixmap(round(W * k), round(H * k))
     card.fill(Qt.transparent)
     p = QPainter(card)
     p.setRenderHint(QPainter.Antialiasing)
     p.setRenderHint(QPainter.SmoothPixmapTransform)
-    p.setClipPath(_card_path(W, H, RADIUS))          # 整卡圆角裁剪
+    p.scale(k, k)                                   # 设计→物理 等比映射
+    p.setClipPath(_card_path(W, H, RADIUS))          # 整卡圆角裁剪(设计坐标)
 
-    # 背景与照片(满宽 bleed)
+    # 背景与照片(满宽 bleed)。照片按**物理**分辨率缩放, 目标矩形用
+    # 设计坐标(画笔放大后恰好1:1物理像素, 无二次重采样)
     p.fillRect(0, 0, W, H, QColor(tc["bg"]))
-    scaled = src.scaled(W, ph, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-    sx = (scaled.width() - W) / 2
-    sy = (scaled.height() - ph) / 2
-    p.drawPixmap(int(-sx), int(-sy), scaled)
+    scaled = src.scaled(round(W * k), round(ph * k),
+                        Qt.KeepAspectRatioByExpanding,
+                        Qt.SmoothTransformation)
+    sx = (scaled.width() - round(W * k)) / 2
+    sy = (scaled.height() - round(ph * k)) / 2
+    p.drawPixmap(QRectF(-sx / k, -sy / k,
+                        scaled.width() / k, scaled.height() / k),
+                 scaled,
+                 QRectF(0, 0, scaled.width(), scaled.height()))
 
     y = ph  # 文字区起点
 
@@ -218,7 +233,7 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         pys = pys.split()
     avail = W - PAD * 2 - (pill_w + 40 if lifer is not None else 0)
     gap = 26
-    py_size, cn_size = 46, 106
+    py_size, cn_size = 54, 106   # 0.8.1: 拼音加大(用户反馈字小)
     for _ in range(3):   # 宽度自适应缩放(一般1轮收敛)
         p.setFont(_font(py_size, 600))
         fm_py = p.fontMetrics()
@@ -233,18 +248,19 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         if total <= avail or not units:
             break
         scale = avail / total
-        py_size = max(26, int(py_size * scale))
+        py_size = max(30, int(py_size * scale))
         cn_size = max(56, int(cn_size * scale))
     x = float(PAD)
     for ch, py, uw, pw, cw in units:
         if py:
             p.setPen(QColor(tc["pinyin"]))
             p.setFont(_font(py_size, 600))
-            p.drawText(QRectF(x + (uw - pw) / 2, y + 44, pw + 8, 64),
+            # y+58: 离照片更远(旧44太贴, 用户2026-11-10)
+            p.drawText(QRectF(x + (uw - pw) / 2, y + 58, pw + 8, 66),
                        Qt.AlignCenter, py)
         p.setPen(QColor(tc["title"]))
         p.setFont(_font(cn_size, 900))
-        p.drawText(QRectF(x + (uw - cw) / 2, y + 112, cw + 8, 176),
+        p.drawText(QRectF(x + (uw - cw) / 2, y + 130, cw + 8, 170),
                    Qt.AlignCenter, ch)
         x += uw + gap
 
@@ -268,7 +284,7 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         # 同源百分位映射, 见 prior_hint.rarity_score
         score = info.get("rarity_score")
         if score is not None and rarity in ("稀有", "罕见"):  # i18n:ok
-            rarity_txt += t(f" · {score:.1f}分", f" · {score:.1f}")
+            rarity_txt += f" · {score:.1f}"
         p.setFont(_font(38, 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
         pw, rph = tw + 56, 62

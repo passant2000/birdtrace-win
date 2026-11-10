@@ -122,6 +122,17 @@ class BatchShareDialog(QDialog):
         theme_row.addWidget(self.theme_seg, 1)
         sc.addLayout(theme_row)
 
+        # 分辨率档位(与单卡同款, 2026-11-10用户)
+        res_row = QHBoxLayout()
+        res_row.addWidget(QLabel(t("分辨率", "Resolution")))
+        self.res_seg = SegmentedControl([t("标准 2000", "Standard 2000"),
+                                         t("高清 3000", "HD 3000")])
+        self.res_seg.setToolTip(t(
+            "高清模式细节保留更多，单卡文件也更大（约5-8MB）",
+            "HD keeps more feather detail; files are larger (5-8MB each)"))
+        res_row.addWidget(self.res_seg, 1)
+        sc.addLayout(res_row)
+
         life_row = QHBoxLayout()
         life_row.addWidget(QLabel(t("显示 Life # 序号", "Show Life #")))
         self.lifer_toggle = ToggleSwitch(True)
@@ -294,7 +305,9 @@ class BatchShareDialog(QDialog):
             base = f"{date}_{_safe_name(title)}"
             name = base if base not in used else f"{base}_{row['eff_code']}"
             used.add(name)
-            pm = render_card(row["path"], self._card_info(row), theme_name)
+            w = 3000 if self.res_seg.currentIndex() == 1 else 2000
+            pm = render_card(row["path"], self._card_info(row), theme_name,
+                             width=w)
             dst = out_dir / f"{name}.png"
             pm.save(str(dst), "PNG")
             self._exported.append(dst)

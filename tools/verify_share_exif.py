@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sys
@@ -112,6 +113,7 @@ def main():
 
     from app import i18n
     from app.core.importer import import_files
+    os.environ["BIRDTRACE_CARD_WIDTH"] = "1600"   # ink断言需k=1(见钩子注释)
     from app.core.sharecard import render_card, TEXT_ZONE_H
     from app.db import Library
     from app.exif import read_exif
@@ -158,27 +160,30 @@ def main():
     check(dlg.taken == "2024-05-12", f"拍摄日期取EXIF DateTimeOriginal: {dlg.taken}")
     check(dlg.exif_toggle.isChecked() and CAMERA[1] in dlg.exif_hint.text(),
           f"默认勾选, 提示行含机型: «{dlg.exif_hint.text()}»")
-    ph1 = 2560                       # 900x1200图 → 照片区 2000*1.28
+    ph1 = 2048                       # 900x1200图 → 照片区 1600*1.28(k=1)
     pm_on = dlg.pm
-    check(pm_on.width() == 2000 and pm_on.height() == ph1 + TEXT_ZONE_H,
+    th_phys = TEXT_ZONE_H                           # k=1(env强制1600)→物理=设计
+    check(pm_on.width() == 1600 and pm_on.height() == ph1 + th_phys,
           f"开启参数: 尺寸 {pm_on.width()}x{pm_on.height()} (文字区含品牌行)")
 
     dlg.exif_toggle.setChecked(False)          # toggled → 实时重绘
     pm_off = dlg.pm
     check(dlg._card_info()["exif"] == {}, "关闭勾选后参数段消失")
-    check(pm_off.height() == ph1 + TEXT_ZONE_H,
+    check(pm_off.height() == ph1 + th_phys,
           f"关闭后画布高度不变(品牌行常驻) {pm_off.height()}")
     dlg.exif_toggle.setChecked(True)
     check(dlg.pm.height() == pm_on.height(), "重新勾选实时恢复渲染")
 
     # 像素级验证(v3布局): 右列三行=机身(与日期同行)/镜头(与地点)/参数(与拍摄者);
     # 罕见度胶囊在英文名行右侧; 底部品牌行(produced by+logo)常驻
-    x0 = 112
-    x_col = 2000 - 112 - 880
-    rows = [("机身", ph1 + 470), ("镜头", ph1 + 582), ("参数", ph1 + 678)]
+    kk = 1.0   # env强制1600→k=1(offscreen下k≠1的drawText无墨, 见share_dialog钩子)
+    x0 = int(112 * kk)
+    x_col = int((1600 - 112 - 880) * kk)
+    rows = [("机身", ph1 + int(470 * kk)), ("镜头", ph1 + int(582 * kk)),
+            ("参数", ph1 + int(678 * kk))]
     for tag, ry in rows:
-        ink_on = ink_count(pm_on, x_col, ry, 880, 86)
-        ink_off = ink_count(pm_off, x_col, ry, 880, 86)
+        ink_on = ink_count(pm_on, x_col, ry, int(880 * kk), int(86 * kk))
+        ink_off = ink_count(pm_off, x_col, ry, int(880 * kk), int(86 * kk))
         check(ink_on > 200, f"右列{tag}行渲染出文字(墨水 {ink_on})")
         check(ink_off == 0, f"关闭后{tag}行无墨水({ink_off})")
     # 高对比胶囊(稀有=红底白字)确定性验证: 直接指定rarity渲染
@@ -186,10 +191,12 @@ def main():
     info_rare = dict(dlg._card_info())
     info_rare["rarity"] = "稀有"
     pm_rare = render_card(p_exif.resolve().as_posix(), info_rare, "light")
-    ink_rare = ink_count(pm_rare, x_col, ph1 + 320, 880, 78)
+    ink_rare = ink_count(pm_rare, x_col, ph1 + int(320 * kk),
+                         int(880 * kk), int(78 * kk))
     check(ink_rare > 500, f"稀有红胶囊在英文名行右侧(墨水 {ink_rare})")
     pm_rare.save(str(SHOTS / "share_exif_card_rare.png"), "PNG")
-    brand_on = ink_count(pm_on, x0, ph1 + 790, 1380, 150)
+    brand_on = ink_count(pm_on, x0, ph1 + int(790 * kk),
+                         int(1380 * kk), int(150 * kk))
     check(brand_on > 500, f"品牌行(produced by+logo)有内容(墨水 {brand_on})")
 
     dlg.grab().save(str(SHOTS / "share_exif_dialog_zh.png"))
@@ -203,10 +210,11 @@ def main():
           "无EXIF照片勾选后不产生空段")
     check("未检测到" in dlg2.exif_hint.text(),
           f"提示行显示无参数: «{dlg2.exif_hint.text()}»")
-    ph2 = 1500                       # 1200x900图 → 照片区 2000*0.75
+    ph2 = 1200                       # 1200x900图 → 照片区 1600*0.75(k=1)
     pm2 = dlg2.pm
-    check(pm2.height() == ph2 + TEXT_ZONE_H, f"无参数卡片高度 {pm2.height()}")
-    check(ink_count(pm2, x_col, ph2 + 470, 880, 300) == 0,
+    check(pm2.height() == ph2 + th_phys, f"无参数卡片高度 {pm2.height()}")
+    check(ink_count(pm2, x_col, ph2 + int(470 * kk),
+                    int(880 * kk), int(300 * kk)) == 0,
           "无参数卡片右列三行无墨水")
     pm2.save(str(SHOTS / "share_exif_card_noexif.png"), "PNG")
 
@@ -216,14 +224,20 @@ def main():
     check(dlg2b._card_info()["exif"] == {"body": "", "lens": "",
                                          "shot": "ISO 3200"},
           f"只有ISO时仅显示ISO段: {dlg2b._card_info()['exif']}")
-    check(dlg2b.pm.height() == ph2 + TEXT_ZONE_H,
+    check(dlg2b.pm.height() == ph2 + th_phys,
           f"仅参数行画布高度 {dlg2b.pm.height()} (品牌行常驻)")
     check(ink_count(dlg2b.pm, x_col, ph2 + 678, 880, 86) > 200,
           "ISO参数在拍摄者同行右列渲染出文字")
-    check(ink_count(dlg2b.pm, x_col, ph2 + 470, 880, 86) == 0,
+    check(ink_count(dlg2b.pm, x_col, ph2 + int(470 * kk),
+                    int(880 * kk), int(86 * kk)) == 0,
           "机身/镜头行保持空白(只显示ISO)")
 
-    # ---- [4] EN模式: 对话框可见文案无中文残留 ----
+    # ---- [4] 渲染健壮性(dark/丢失/超长) — ink无关但统一k=1口径 ----
+    def render_card_weak(*a, **kw):
+        kw["width"] = 1600
+        return render_card(*a, **kw)
+
+    # ---- [4] EN模式文案 ----
     print("\n[4] EN模式文案")
     i18n.set_lang("en")
     d_en = ShareDialog(lib, win, pid_exif)
@@ -239,19 +253,19 @@ def main():
     # ---- [5] 渲染健壮性: dark主题/照片丢失/超长参数 ----
     print("\n[5] 渲染健壮性")
     info = d_en._card_info()
-    pm_dark = render_card(p_exif.resolve().as_posix(), info, "dark")
+    pm_dark = render_card_weak(p_exif.resolve().as_posix(), info, "dark")
     check(not pm_dark.isNull() and pm_dark.height() == pm_on.height(),
           f"dark主题渲染不崩溃 {pm_dark.width()}x{pm_dark.height()}")
     pm_dark.save(str(SHOTS / "share_exif_card_dark.png"), "PNG")
-    pm_missing = render_card(str(SRC / "missing.jpg"), info, "light")
+    pm_missing = render_card_weak(str(SRC / "missing.jpg"), info, "light")
     check(not pm_missing.isNull()
-          and pm_missing.height() == 2000 * 9 // 10 + TEXT_ZONE_H,
+          and pm_missing.height() == 1600 * 9 // 10 + th_phys,
           "照片文件丢失时占位图渲染不崩溃")
     info_long = dict(info)
     info_long["exif"] = {"body": "X" * 80, "lens": "Y" * 80, "shot": "Z" * 200}
-    pm_long = render_card(p_exif.resolve().as_posix(), info_long, "light")
+    pm_long = render_card_weak(p_exif.resolve().as_posix(), info_long, "light")
     check(not pm_long.isNull()
-          and pm_long.height() == ph1 + TEXT_ZONE_H,
+          and pm_long.height() == ph1 + th_phys,
           f"超长参数不崩溃(右列880封顶/左列省略号截断) {pm_long.width()}x{pm_long.height()}")
 
     print(f"\n截图/卡片: {SHOTS / 'share_exif_*.png'}  测试库: {LIB_DIR}")

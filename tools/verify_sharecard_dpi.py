@@ -91,12 +91,12 @@ def worker(factor: str):
 
     for name, shot, expect in CASES:
         pm = render_card(os.path.join(PROJ, "data", "_no_such.jpg"),
-                         render_info(shot), "dark")
-        ph = pm.height() - 1000
+                         render_info(shot), "dark", width=1600)
+        ph = pm.height() - 1000   # k=1(1600设计宽)
         adv = fm.horizontalAdvance(shot)
         col_w = min(max(fm.horizontalAdvance(BODY), fm.horizontalAdvance(LENS),
                         adv), 880)
-        ext = line_extent(pm, ph + 686, ph + 754, 2000 - 112 - col_w - 80)
+        ext = line_extent(pm, ph + 686, ph + 754, 1600 - 112 - col_w - 80)
         if ext is None:
             check(False, f"{factor} {name}: 参数行无像素")
             ok = False
@@ -120,9 +120,9 @@ def worker(factor: str):
     pm = render_card(os.path.join(PROJ, "data", "_no_such.jpg"),
                      render_info("600mm · f/6.3 · 1/50s · ISO 400",
                                  lens=LONG_LENS), "dark")
-    ph = pm.height() - 1000
+    ph = pm.height() - 1000   # k=1(1600设计宽)
     adv_l = fm.horizontalAdvance(LONG_LENS)
-    ext = line_extent(pm, ph + 590, ph + 658, 2000 - 112 - 880 - 80)
+    ext = line_extent(pm, ph + 590, ph + 658, 1600 - 112 - 880 - 80)
     good = bool(ext) and ext[1] - ext[0] + 1 <= 880 and adv_l > 880
     check(good, f"{factor} 长镜头ElideMiddle: "
                 f"宽{(ext[1]-ext[0]+1) if ext else 0}≤880 (advance{adv_l})")
