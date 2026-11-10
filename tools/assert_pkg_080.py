@@ -132,7 +132,7 @@ def symbols(code):
 # 版本
 v = code_of("app.version")
 syms = symbols(v) if v else set()
-check("版本=0.8.0正式", "0.8.0" in syms and not any(x.startswith("0.8.0-test") for x in syms))
+check("版本=0.8.1", "0.8.1" in syms)
 
 # SP引擎
 e = code_of("app.ai.sp_engine")
@@ -378,6 +378,15 @@ _wg = symbols(code_of("app.theme.widgets")) if code_of("app.theme.widgets") else
 check("日期框自绘(0.8.0重建)",
       "QPushButton#DateEdit{background:" in _wg and "_week_header" in _wg
       and "dateChanged" in _wg)
+
+# ---- 0.8.1: 区域稀有度分值 + IUCN 胶囊 + 卡宽2000 ----
+_ph = symbols(code_of("app.core.prior_hint")) if code_of("app.core.prior_hint") else set()
+check("稀有度分值(0.8.1)", "rarity_score" in _ph)
+_sd = symbols(code_of("app.ui.share_dialog")) if code_of("app.ui.share_dialog") else set()
+check("IUCN胶囊接口(0.8.1)", "iucn_of" in _sd)
+_sc = symbols(code_of("app.core.sharecard")) if code_of("app.core.sharecard") else set()
+check("卡宽2000(0.8.1)", "CARD_W = 2000" in _sc
+      and any("rarity_score" in x for x in _sc))
 
 print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
 sys.exit(1 if fail else 0)

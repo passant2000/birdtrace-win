@@ -104,6 +104,21 @@ class PriorHint:
         got = self._rarity_for_region(region_id).get(idx)
         return got[1] if got else None
 
+    def rarity_score(self, code: str, region_id: str | None) -> float | None:
+        """区域稀有度分值 0-10(越大越罕见, 2026-11-10用户: 懂鸟式9.2分)。
+
+        由同源百分位线性映射: score = 10 - pct/10。档位与分带天然对齐
+        (百分位与档位同 rank 派生, 每20%一档):
+          常见 80-100% → 0-2 | 较常见 60-80% → 2-4 | 不常见 40-60% → 4-6
+          稀有 20-40% → 6-8 | 罕见 0-20% → 8-10
+        同一物种在不同地区分数不同(上海少见的鸟在上海分高)。
+        口径=区域内清单频率估算(eBird 先验), 与懂鸟全国口径不可比。
+        无数据/全球区域返回 None。"""
+        pct = self.rarity_percentile(code, region_id)
+        if pct is None:
+            return None
+        return round(max(0.0, min(10.0, 10.0 - pct / 10.0)), 1)
+
     def region_peaks(self, code: str) -> dict[str, float]:
         """该物种全球各区域的峰值先验 {region_id: max(12个月)}。
 

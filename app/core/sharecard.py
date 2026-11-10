@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """分享卡渲染 v3 —— 参照观鸟社区卡片风格。
 
-布局(宽1600, 整卡圆角, 照片满 bleed 占上部):
+布局(宽2000, 整卡圆角, 照片满 bleed 占上部; 0.8.1 起 2000 保数毛细节):
   ┌────────────────────────────┐
   │          照片               │
   ├────────────────────────────┤
@@ -23,7 +23,7 @@ from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter,
 
 from ..i18n import t, sname
 
-CARD_W = 1600
+CARD_W = 2000
 PAD = 112
 RADIUS = 60
 
@@ -264,6 +264,11 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         if pct is not None and rarity in ("稀有", "罕见"):  # i18n:ok
             rarity_txt += t(f" · 前 {_fmt_pct(pct)}%",
                             f" · Top {_fmt_pct(pct)}%")
+        # 稀有度分值(0-10, 2026-11-10用户: 懂鸟式9.2分)——区域相对,
+        # 同源百分位映射, 见 prior_hint.rarity_score
+        score = info.get("rarity_score")
+        if score is not None and rarity in ("稀有", "罕见"):  # i18n:ok
+            rarity_txt += t(f" · {score:.1f}分", f" · {score:.1f}")
         p.setFont(_font(38, 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
         pw, rph = tw + 56, 62
@@ -273,9 +278,33 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light") -> QPixm
         p.drawRoundedRect(QRectF(px, rpy, pw, rph), rph / 2, rph / 2)
         p.setPen(QColor(fg))
         p.drawText(QRectF(px, rpy, pw, rph), Qt.AlignCenter, rarity_txt)
+    # ---- IUCN 受威胁胶囊(罕见度左侧; 2026-11-10用户: 濒危/易危) ----
+    # 只标受威胁等级(NT/VU/EN/CR/EW/EX), 无危不显示
+    iucn = info.get("iucn")
+    iw = 0
+    if iucn:
+        IUCN_ZH = {"NT": "近危", "VU": "易危", "EN": "濒危",  # i18n:ok
+                   "CR": "极危", "EW": "野外灭绝", "EX": "灭绝"}  # i18n:ok
+        IUCN_EN = {"NT": "Near Threatened", "VU": "Vulnerable",
+                   "EN": "Endangered", "CR": "Critically Endangered",
+                   "EW": "Extinct in the Wild", "EX": "Extinct"}
+        IUCN_BG = {"NT": "#C7A519", "VU": "#E07B1F", "EN": "#DE3730",
+                   "CR": "#8B1A12", "EW": "#3A3A3C", "EX": "#1C1C1E"}
+        iucn_txt = t(f"{IUCN_ZH[iucn]} {iucn}",
+                     f"{iucn} · {IUCN_EN[iucn]}")  # i18n:ok
+        p.setFont(_font(38, 700))
+        itw = p.fontMetrics().horizontalAdvance(iucn_txt)
+        iw, rph2 = itw + 56, 62
+        ix = (W - PAD - pw - 24 - iw) if rarity else (W - PAD - iw)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(IUCN_BG.get(iucn, "#1C1C1E")))
+        p.drawRoundedRect(QRectF(ix, y + 329, iw, rph2),
+                          rph2 / 2, rph2 / 2)
+        p.setPen(QColor("white"))
+        p.drawText(QRectF(ix, y + 329, iw, rph2), Qt.AlignCenter, iucn_txt)
     p.setPen(QColor(tc["en"]))
     p.setFont(_font(56, 500, italic=True))
-    en_w = (W - PAD * 2) - ((pw + 36) if rarity else 0)
+    en_w = (W - PAD * 2) - ((pw + 36) if rarity else 0)            - (iw + 24 if iucn else 0)
     p.drawText(QRectF(PAD, y + 320, en_w, 80),
                Qt.AlignLeft | Qt.AlignVCenter, info.get("en", ""))
 

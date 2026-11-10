@@ -158,9 +158,9 @@ def main():
     check(dlg.taken == "2024-05-12", f"拍摄日期取EXIF DateTimeOriginal: {dlg.taken}")
     check(dlg.exif_toggle.isChecked() and CAMERA[1] in dlg.exif_hint.text(),
           f"默认勾选, 提示行含机型: «{dlg.exif_hint.text()}»")
-    ph1 = 2048                       # 900x1200图 → 照片区 1600*1.28
+    ph1 = 2560                       # 900x1200图 → 照片区 2000*1.28
     pm_on = dlg.pm
-    check(pm_on.width() == 1600 and pm_on.height() == ph1 + TEXT_ZONE_H,
+    check(pm_on.width() == 2000 and pm_on.height() == ph1 + TEXT_ZONE_H,
           f"开启参数: 尺寸 {pm_on.width()}x{pm_on.height()} (文字区含品牌行)")
 
     dlg.exif_toggle.setChecked(False)          # toggled → 实时重绘
@@ -174,7 +174,7 @@ def main():
     # 像素级验证(v3布局): 右列三行=机身(与日期同行)/镜头(与地点)/参数(与拍摄者);
     # 罕见度胶囊在英文名行右侧; 底部品牌行(produced by+logo)常驻
     x0 = 112
-    x_col = 1600 - 112 - 880
+    x_col = 2000 - 112 - 880
     rows = [("机身", ph1 + 470), ("镜头", ph1 + 582), ("参数", ph1 + 678)]
     for tag, ry in rows:
         ink_on = ink_count(pm_on, x_col, ry, 880, 86)
@@ -203,7 +203,7 @@ def main():
           "无EXIF照片勾选后不产生空段")
     check("未检测到" in dlg2.exif_hint.text(),
           f"提示行显示无参数: «{dlg2.exif_hint.text()}»")
-    ph2 = 1200                       # 1200x900图 → 照片区 1600*0.75
+    ph2 = 1500                       # 1200x900图 → 照片区 2000*0.75
     pm2 = dlg2.pm
     check(pm2.height() == ph2 + TEXT_ZONE_H, f"无参数卡片高度 {pm2.height()}")
     check(ink_count(pm2, x_col, ph2 + 470, 880, 300) == 0,
@@ -245,7 +245,7 @@ def main():
     pm_dark.save(str(SHOTS / "share_exif_card_dark.png"), "PNG")
     pm_missing = render_card(str(SRC / "missing.jpg"), info, "light")
     check(not pm_missing.isNull()
-          and pm_missing.height() == 1600 * 9 // 10 + TEXT_ZONE_H,
+          and pm_missing.height() == 2000 * 9 // 10 + TEXT_ZONE_H,
           "照片文件丢失时占位图渲染不崩溃")
     info_long = dict(info)
     info_long["exif"] = {"body": "X" * 80, "lens": "Y" * 80, "shot": "Z" * 200}

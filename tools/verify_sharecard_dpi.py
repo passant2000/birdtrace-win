@@ -96,7 +96,7 @@ def worker(factor: str):
         adv = fm.horizontalAdvance(shot)
         col_w = min(max(fm.horizontalAdvance(BODY), fm.horizontalAdvance(LENS),
                         adv), 880)
-        ext = line_extent(pm, ph + 686, ph + 754, 1600 - 112 - col_w - 80)
+        ext = line_extent(pm, ph + 686, ph + 754, 2000 - 112 - col_w - 80)
         if ext is None:
             check(False, f"{factor} {name}: 参数行无像素")
             ok = False
@@ -122,7 +122,7 @@ def worker(factor: str):
                                  lens=LONG_LENS), "dark")
     ph = pm.height() - 1000
     adv_l = fm.horizontalAdvance(LONG_LENS)
-    ext = line_extent(pm, ph + 590, ph + 658, 1600 - 112 - 880 - 80)
+    ext = line_extent(pm, ph + 590, ph + 658, 2000 - 112 - 880 - 80)
     good = bool(ext) and ext[1] - ext[0] + 1 <= 880 and adv_l > 880
     check(good, f"{factor} 长镜头ElideMiddle: "
                 f"宽{(ext[1]-ext[0]+1) if ext else 0}≤880 (advance{adv_l})")

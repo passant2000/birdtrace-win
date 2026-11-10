@@ -181,7 +181,7 @@ def main():
     from PySide6.QtGui import QImage
     for f in files:
         im = QImage(str(f))
-        check(not im.isNull() and im.width() == 1600, f"{f.name} 1600宽PNG")
+        check(not im.isNull() and im.width() == 2000, f"{f.name} 2000宽PNG")
     check(dlg.open_btn.isVisibleTo(dlg), "导出后显示打开文件夹按钮")
 
     print("\n[3] 文件名安全化")

@@ -52,21 +52,43 @@ def exif_parts_of(p: dict) -> dict:
 
 
 def rarity_info(code: str | None, region_id: str | None
-                ) -> tuple[str | None, float | None]:
-    """(罕见度档位, 百分位) — 百分位仅稀有/罕见档返回(0.8-⑤)。
+                ) -> tuple[str | None, float | None, float | None]:
+    """(罕见度档位, 百分位, 分值0-10) — 百分位/分值仅稀有/罕见档返回。
 
-    异常/无数据/全球区域 = (None, None)。单卡与批量导出共用。"""
+    分值=懂鸟式9.2风格(2026-11-10用户), 由同源百分位映射, 见
+    prior_hint.rarity_score。异常/无数据/全球区域 = (None,)*3。
+    单卡与批量导出共用。"""
     if not code:
-        return None, None
+        return None, None, None
     try:
         from ..core.prior_hint import get_hint
         hint = get_hint()
         tier = hint.rarity_tier(code, region_id)
-        pct = hint.rarity_percentile(code, region_id) \
-            if tier in ("稀有", "罕见") else None  # i18n:ok
-        return tier, pct
+        if tier not in ("稀有", "罕见"):  # i18n:ok
+            return tier, None, None
+        pct = hint.rarity_percentile(code, region_id)
+        score = hint.rarity_score(code, region_id)
+        return tier, pct, score
     except Exception:
-        return None, None
+        return None, None, None
+
+
+def iucn_of(lib, code: str | None) -> str | None:
+    """物种 IUCN 受威胁等级码(NT/VU/EN/CR/EW/EX); LC/无数据返回 None。
+
+    供分享卡"濒危/易危"胶囊(2026-11-10用户): 只标受威胁物种,
+    无危不显示。数据=species.iucn(assets iucn_status.json, 10812种)。"""
+    if not code:
+        return None
+    try:
+        # species_info返回sqlite3.Row(无.get方法), 用键访问+异常兜底
+        row = lib.species_info(code)
+        if row is None:
+            return None
+        v = row["iucn"]
+        return v if v in ("NT", "VU", "EN", "CR", "EW", "EX") else None
+    except (KeyError, IndexError, Exception):
+        return None
 
 
 class ShareDialog(QDialog):
@@ -223,9 +245,9 @@ class ShareDialog(QDialog):
             lifer_no = self.lib.lifer_no_for_species(species["code"])
         # 罕见度(参考birdtrace/慧眼观鸟分享卡): 按照片批次地区计算;
         # 稀有/罕见再取百分位("罕见 · 前 3%", 0.8方案⑤)
-        rarity, rarity_pct = rarity_info(
-            species["code"] if species else None,
-            self.photo.get("region_id"))
+        code = species["code"] if species else None
+        rarity, rarity_pct, rarity_score = rarity_info(
+            code, self.photo.get("region_id"))
         return {
             "cn": title,
             "pinyin": pys,
@@ -234,6 +256,8 @@ class ShareDialog(QDialog):
             "lifer_no": lifer_no,
             "rarity": rarity,
             "rarity_pct": rarity_pct,
+            "rarity_score": rarity_score,
+            "iucn": iucn_of(self.lib, code),
             "photographer": self.name_edit.text().strip(),
             "date": self.taken,
             "place": self.place_edit.text().strip(),

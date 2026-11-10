@@ -88,7 +88,7 @@ def main():
             "photographer": "测试者", "date": "2026-11-03",
             "place": "中国·上海", "exif": {}}
     pm = render_card("", info, "light")
-    check(not pm.isNull() and pm.width() == 1600, "rarity+pct 渲染出卡")
+    check(not pm.isNull() and pm.width() == 2000, "rarity+pct 渲染出卡")
     from app.core.sharecard import _fit, _font
     from PySide6.QtGui import QFontMetrics
     tier_txt = "罕见"  # 内部码→按当前语言(默认zh)绘制

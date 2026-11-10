@@ -25,7 +25,8 @@ from ..core.sharecard import render_card
 from ..i18n import t, sname
 from ..theme.widgets import (SegmentedControl, ThemedDateEdit, ToggleSwitch,
                              make_card)
-from .share_dialog import exif_parts_of, pinyin_spaced, rarity_info
+from .share_dialog import (exif_parts_of, iucn_of, pinyin_spaced,
+                           rarity_info)
 
 
 def _safe_name(s: str) -> str:
@@ -233,7 +234,7 @@ class BatchShareDialog(QDialog):
         if len(pys) != len(title):   # 非逐字汉字(英文名)不叠画拼音
             pys = []
         rid = row.get("region_id")
-        rarity, pct = rarity_info(code, rid)
+        rarity, pct, score = rarity_info(code, rid)
         photographer = self.name_edit.text().strip() or \
             (row.get("artist") or "").strip()
         return {
@@ -245,6 +246,8 @@ class BatchShareDialog(QDialog):
                         if self.lifer_toggle.isChecked() else None,
             "rarity": rarity,
             "rarity_pct": pct,
+            "rarity_score": score,
+            "iucn": iucn_of(self.lib, code),
             "photographer": photographer,
             "date": (row.get("taken_at") or "")[:10],
             "place": regions.region_display(rid)
