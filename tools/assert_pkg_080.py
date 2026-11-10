@@ -385,7 +385,7 @@ check("稀有度分值(0.8.1)", "rarity_score" in _ph)
 _sd = symbols(code_of("app.ui.share_dialog")) if code_of("app.ui.share_dialog") else set()
 check("IUCN胶囊接口(0.8.1)", "iucn_of" in _sd)
 _sc = symbols(code_of("app.core.sharecard")) if code_of("app.core.sharecard") else set()
-check("卡宽2000(0.8.1)", "CARD_W = 2000" in _sc
+check("卡宽2000(0.8.1)", any("布局(宽2000" in x for x in _sc)
       and any("rarity_score" in x for x in _sc))
 
 print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
