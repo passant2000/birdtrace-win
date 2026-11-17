@@ -696,7 +696,11 @@ class SpeciesPage(QWidget):
         tab_row.addStretch(1)
         tab_row.addWidget(make_grid_tier_control(
             self.lib, lambda: self._show_detail(code, restore=True)))
-        self.content_lay.addLayout(tab_row)
+        # 宿主widget: 本页清理循环只deleteLater(it.widget()), 裸layout会整行
+        # 漏删——旧档位控件以旧几何残留+新行叠加=重影(0.8.5实测)
+        tab_host = QWidget()
+        tab_host.setLayout(tab_row)
+        self.content_lay.addWidget(tab_host)
 
         if self.detail_tab == 1:
             self._render_dex(code)

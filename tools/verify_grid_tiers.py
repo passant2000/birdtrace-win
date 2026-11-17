@@ -148,6 +148,43 @@ def main():
               f"{sw0}→{sorted({w.width() for w in t2})}")
     sdlg.hide()
 
+    print("\n[7] 重影回归: 嵌套布局行不再漏删(0.8.5实测)")
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    def _count(host, text):
+        return sum(1 for b in host.findChildren(QPushButton)
+                   if b.text() == text)
+
+    def _drain():      # 强制派发deleteLater(offscreen会滞后→假阳)
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    from PySide6.QtWidgets import QPushButton
+    from app.ui.species_page import SpeciesPage
+
+    spage = SpeciesPage(lib, None)
+    spage.resize(1200, 800)
+    spage.show()
+    _drain()
+    spage._show_detail(code2)
+    _drain()
+    g1 = _count(spage, "特大")
+    spage._show_detail(code2, restore=True)   # 点档位即此重渲染路径
+    _drain()
+    g2 = _count(spage, "特大")
+    check(g1 == 1 and g2 == 1,
+          f"鸟种详情重渲染档位控件不残留 ({g1}→{g2})")
+    sdlg.show()
+    _drain()
+    d1 = _count(sdlg, "删除鸟点")
+    sdlg._reload()
+    _drain()
+    d2 = _count(sdlg, "删除鸟点")
+    check(d1 == 1 and d2 == 1,
+          f"鸟点详情_reload操作行不残留 ({d1}→{d2})")
+    spage.hide()
+    sdlg.hide()
+
     lib.close()
     print()
     if FAILED["v"]:

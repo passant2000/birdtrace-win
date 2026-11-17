@@ -493,7 +493,10 @@ class SpotDetailDialog(QDialog):
         from ..theme.widgets import make_grid_tier_control
         ops.addWidget(make_grid_tier_control(self.lib, self._tier_changed))
         ops.addStretch(1)
-        self.head_lay.addLayout(ops)
+        # 宿主widget: head_lay清理循环只删widget, 裸layout同款漏删隐患(0.8.5)
+        ops_host = QWidget()
+        ops_host.setLayout(ops)
+        self.head_lay.addWidget(ops_host)
         self._photos = self.lib.spot_photos(self.spot_id)
         self._refresh_view()
 
