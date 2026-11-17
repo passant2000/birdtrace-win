@@ -161,11 +161,12 @@ class PhotoGridItem(QWidget):
         self._disp = self._scaled_disp()
 
     def _scaled_disp(self):
-        """预缩放显示图(0.8.5: 旧paintEvent每次重采样→只在set时做一次,
-        大档位/整页重绘不再卡; 传入更大缓存(如512)自动降到tile)。"""
+        """预缩放显示图(0.8.5: 信纸式**整图可见**——用户要Windows超大图标
+        那种横竖图都不裁; 旧paintEvent每次重采样→只在set时做一次,
+        传入更大缓存(如512)自动降到tile)。"""
         if self.pixmap and not self.pixmap.isNull():
             return self.pixmap.scaled(self.tile, self.tile,
-                                      Qt.KeepAspectRatioByExpanding,
+                                      Qt.KeepAspectRatio,
                                       Qt.SmoothTransformation)
         return None
 
@@ -188,12 +189,12 @@ class PhotoGridItem(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, 12, 12)
         p.setClipPath(path)
+        # 信纸式整图可见(0.8.5用户实测: Windows超大图标式, 横图竖图都
+        # 不裁切): 短边方向留主题底色, 照片完整居中
+        p.fillRect(rect, QColor(theme.FILL))
         if self._disp:
-            x = (self._disp.width() - s) / 2
-            y = (self._disp.height() - s) / 2
-            p.drawPixmap(QPointF(-x, -y), self._disp)
-        else:
-            p.fillRect(rect, QColor(theme.FILL))
+            p.drawPixmap(QPointF((s - self._disp.width()) / 2,
+                                 (s - self._disp.height()) / 2), self._disp)
         p.setClipping(False)
         bh = max(20, s // 8)         # 角标胶囊高(随档位)
         if self.corner:
@@ -262,8 +263,8 @@ def grid_tile_of(lib) -> int:
 def make_grid_tier_control(lib, on_change):
     """档位切换控件(小/中/大/特大): 写库持久化+回调刷新所在页面。
     注意setCurrent不发changed(SegmentedControl既有坑), 初值手动对齐。"""
-    seg = SegmentedControl([t("小图", "S"), t("中图", "M"),
-                            t("大图", "L"), t("特大", "XL")])
+    seg = SegmentedControl([t("小", "S"), t("中", "M"),
+                            t("大", "L"), t("特大", "XL")])
 
     def _apply(idx: int):
         lib.set_setting("grid_tile", str(GRID_TIERS[idx]))

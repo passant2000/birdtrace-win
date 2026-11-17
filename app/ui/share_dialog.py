@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QGuiApplication, QPixmap
 from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QScrollArea, QSlider,
                                QVBoxLayout, QWidget)
@@ -140,11 +140,14 @@ def focus_point(lib, rec: dict | None, photo: dict) -> list | None:
 
 
 class _PreviewLabel(QLabel):
-    """卡预览宿主(0.8.5): 鼠标/滚轮事件转发给ShareDialog做手动构图。"""
+    """卡预览宿主(0.8.5): 鼠标/滚轮事件转发给ShareDialog做手动构图。
+    必须AlignCenter——_pv_phys按居中算坐标, 左对齐时命中测试整体偏移
+    (0.8.5实测: 卡贴左+拖动"不灵"的真因)。"""
 
     def __init__(self, host):
         super().__init__()
         self.host = host
+        self.setAlignment(Qt.AlignCenter)
 
     def mousePressEvent(self, e):
         self.host._pv_press(e)
@@ -181,7 +184,12 @@ class ShareDialog(QDialog):
         self._drag = None
         self._build_ui()
         self._update()
-        self.setWindowState(self.windowState() | Qt.WindowMaximized)
+        # 默认窗口(0.8.5用户: 卡都是竖图, 不要最大化——竖向用满屏幕,
+        # 左右紧凑: 宽=最宽卡(3:4)按高适配的宽度+右栏, 留最大化按钮可手动放大)
+        scr = QGuiApplication.primaryScreen().availableGeometry()
+        h = scr.height() - 48
+        w = min(scr.width() - 80, round(h * 0.78) + 430)
+        self.resize(max(self.minimumWidth(), w), h)
 
     def _build_ui(self):
         root = QHBoxLayout(self)
@@ -666,12 +674,14 @@ class ShareDialog(QDialog):
             self._crop_zoom(xy[0], xy[1], 1.1 if d > 0 else 1 / 1.1)
 
     def _pan_by(self, dx: float, dy: float):
+        """抓取式平移(0.8.5实测修方向): 照片跟手——手往右(dx>0)照片右移
+        =裁切窗口左移(sx减小)。旧实现sx+dx正好相反, 手和画面各走各的。"""
         adj = self._adjust
         pl = self._placement(adj)
         if pl["rx"]:
-            adj["ox"] = min(1.0, max(0.0, (pl["sx"] + dx) / pl["rx"]))
+            adj["ox"] = min(1.0, max(0.0, (pl["sx"] - dx) / pl["rx"]))
         if pl["ry"]:
-            adj["oy"] = min(1.0, max(0.0, (pl["sy"] + dy) / pl["ry"]))
+            adj["oy"] = min(1.0, max(0.0, (pl["sy"] - dy) / pl["ry"]))
         self._update(interact_w=1400)     # 拖动中低清, 松手回全分辨率
 
     def _crop_zoom(self, ax: float, ay: float, factor: float):

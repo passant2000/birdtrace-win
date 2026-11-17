@@ -91,7 +91,7 @@ class TimelinePage(QWidget):
         self.select_btn.setCursor(Qt.PointingHandCursor)
         self.select_btn.clicked.connect(self._toggle_select)
         head.addWidget(self.select_btn)
-        head.addWidget(make_grid_tier_control(self.lib, self.refresh))
+        head.addWidget(make_grid_tier_control(self.lib, self._tier_changed))
         lay.addLayout(head)
 
         # 多选工具条
@@ -540,6 +540,12 @@ class TimelinePage(QWidget):
 
     def _toggle_collapse(self, on: bool):
         self.lib.set_setting("burst_collapse", "1" if on else "0")
+        self.refresh(force=True)
+
+    def _tier_changed(self):
+        """网格档位切换(0.8.5实测修): 重读档位+force重建——
+        self._tile构造时只读一次会stale, 且数据签名优化会吞掉无变化刷新。"""
+        self._tile = grid_tile_of(self.lib)
         self.refresh(force=True)
 
     def refresh(self, force: bool = False):

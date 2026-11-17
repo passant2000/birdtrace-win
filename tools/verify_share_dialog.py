@@ -24,6 +24,7 @@ def check(cond, msg):
 
 def main():
     from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
     app = QApplication(sys.argv)
     from app import theme, i18n
@@ -65,7 +66,12 @@ def main():
     dlg = ShareDialog(lib, None, pid)
     dlg.show()
     app.processEvents()
-    check(dlg.isMaximized(), "默认最大化打开(0.8.4鸟点详情同款)")
+    scr = QGuiApplication.primaryScreen().availableGeometry()
+    check(not dlg.isMaximized()
+          and dlg.height() >= scr.height() - 140
+          and dlg.width() <= round((scr.height() - 48) * 0.78) + 470,
+          f"默认窗口=竖向满屏横向紧凑, 不最大化 "
+          f"({dlg.width()}×{dlg.height()}, 屏 {scr.width()}×{scr.height()})")
     dlg.showNormal()
     app.processEvents()
     check(all(hasattr(dlg, w) for w in
@@ -75,6 +81,8 @@ def main():
           "左工具条/预览+右选项/构图卡控件齐全")
     check(dlg.zoom_slider.maximum() == 300 and dlg.zoom_slider.minimum() == 100,
           "滑杆范围100~300%")
+    check(int(dlg.preview_host.alignment() & Qt.AlignCenter) != 0,
+          "预览居中对齐(0.8.5实测修: 左对齐=卡贴左+拖动命中偏移)")
 
     print("\n[2] 自动渲染基线(k=1)")
     check(dlg.pm.width() == 1600, f"卡宽=1600(env钩子) 实际{dlg.pm.width()}")
@@ -87,25 +95,26 @@ def main():
           and dlg.zoom_slider.isEnabled(),
           "初始=自动(复位钮灰), 手动可用")
 
-    print("\n[3] 手动平移(直接调_pan_by, env钉1600)")
+    print("\n[3] 手动平移(直接调_pan_by, env钉1600; 0.8.5修=抓取式跟手)")
     dlg._ensure_adjust()
     check(dlg._adjust["zoom"] == 1.0
           and abs(dlg._adjust["ox"] - 0.5) < 1e-6,
           f"进入手动=自动起点(zoom1/ox0.5) {dlg._adjust}")
-    dlg._pan_by(-138.5, 0)                  # sx 138.5→0 = 贴左缘
-    check(abs(dlg._adjust["ox"]) < 0.01, f"平移到左缘ox=0 {dlg._adjust['ox']:.3f}")
+    dlg._pan_by(138.5, 0)                  # 手往右→窗口左移 sx 138.5→0
+    check(abs(dlg._adjust["ox"]) < 0.01,
+          f"右拖→窗口左移到ox=0 {dlg._adjust['ox']:.3f}")
     check(is_red(px(dlg.pm, 30, 940)),
-          f"左缘红块入卡 {px(dlg.pm, 30, 940)}")
-    dlg._pan_by(400, 0)                     # 越界→夹紧ox=1
-    check(abs(dlg._adjust["ox"] - 1.0) < 0.01, "继续右推夹紧ox=1")
-    dlg._pan_by(-5000, 0)                   # 越界→夹紧ox=0
-    check(abs(dlg._adjust["ox"]) < 0.01, "反向越界夹紧ox=0")
+          f"跟手方向: 右拖后左缘红块入卡 {px(dlg.pm, 30, 940)}")
+    dlg._pan_by(-400, 0)                   # 手往左越界→夹紧ox=1
+    check(abs(dlg._adjust["ox"] - 1.0) < 0.01, "左拖越界夹紧ox=1")
+    dlg._pan_by(5000, 0)                   # 手往右越界→夹紧ox=0
+    check(abs(dlg._adjust["ox"]) < 0.01, "右拖越界夹紧ox=0")
     check(dlg.auto_btn.isEnabled(), "手动后复位钮亮")
 
     print("\n[4] 滚轮缩放(锚=光标: 该点画面不动)")
     dlg._reset_adjust()
     dlg._ensure_adjust()
-    dlg._pan_by(-138.5, 0)                  # ox=0 红块贴左
+    dlg._pan_by(138.5, 0)                  # 右拖→ox=0 红块贴左(0.8.5跟手方向)
     dlg._crop_zoom(0, 940, 1.5)             # 锚在左缘: 缩放后左缘仍是照片左缘
     check(abs(dlg._adjust["zoom"] - 1.5) < 1e-6,
           f"zoom=1.5 {dlg._adjust['zoom']}")
@@ -144,9 +153,9 @@ def main():
     dlg.preview_host.mouseMoveEvent(
         mev(QEvent.MouseMove, cx, cy, 500, 500))
     dlg._pv_move(mev(QEvent.MouseMove, cx, cy,
-                     500 - dlg._view_s * 300, 500))   # 左拖300物理px
+                     500 + dlg._view_s * 300, 500))   # 右拖300物理px(跟手)
     check(dlg._adjust is not None and abs(dlg._adjust["ox"]) < 0.05,
-          f"左拖→ox趋向0 {dlg._adjust['ox']:.3f}")
+          f"右拖→照片跟手右移, ox趋向0 {dlg._adjust['ox']:.3f}")
     dlg.preview_host.mouseReleaseEvent(
         mev(QEvent.MouseButtonRelease, cx, cy, 500, 500, Qt.LeftButton))
     check(dlg._drag is None and dlg.pm.width() == 1600,

@@ -491,10 +491,16 @@ class SpotDetailDialog(QDialog):
         b_del.clicked.connect(self._delete)
         ops.addWidget(b_del)
         from ..theme.widgets import make_grid_tier_control
-        ops.addWidget(make_grid_tier_control(self.lib, self._refresh_view))
+        ops.addWidget(make_grid_tier_control(self.lib, self._tier_changed))
         ops.addStretch(1)
         self.head_lay.addLayout(ops)
         self._photos = self.lib.spot_photos(self.spot_id)
+        self._refresh_view()
+
+    def _tier_changed(self):
+        """网格档位切换(0.8.5实测修): 重读档位再重建(self._tile会stale)。"""
+        from ..theme.widgets import grid_tile_of
+        self._tile = grid_tile_of(self.lib)
         self._refresh_view()
 
     # ---- 视图(鸟种筛选 × 时间树) ----

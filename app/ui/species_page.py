@@ -684,14 +684,16 @@ class SpeciesPage(QWidget):
         hv.addWidget(t2)
         self.content_lay.addWidget(head)
 
-        # 标签页(右挂网格档位, 0.8.5)
+        # 标签页(右挂网格档位, 0.8.5; 实测修: 标签页不吃stretch+中间加
+        # 弹性分隔, 两组分段控件同行硬挤会视觉叠压)
         from ..theme.widgets import SegmentedControl, make_grid_tier_control
         seg = SegmentedControl([t("概览", "Overview"), t("图鉴", "Field guide"),
                                 t("文化", "Culture")],
                                current=self.detail_tab)
         seg.changed.connect(self._tab_changed)
         tab_row = QHBoxLayout()
-        tab_row.addWidget(seg, 1)
+        tab_row.addWidget(seg)
+        tab_row.addStretch(1)
         tab_row.addWidget(make_grid_tier_control(
             self.lib, lambda: self._show_detail(code, restore=True)))
         self.content_lay.addLayout(tab_row)
