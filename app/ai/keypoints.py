@@ -67,3 +67,37 @@ class KeyPointDetector:
                 ((float(beak[0]), float(beak[1])) if beak is not None else None)
         except Exception:
             return None      # 推理任何异常=无眼点, 走纯SP裁剪
+
+
+# ---- 分享卡框对准保头(0.8.4): 导出路径惰性眼点, 与识别管线零耦合 ----
+_DET = None
+
+
+def eye_for_photo(path: str, box: list[float]) -> list[float] | None:
+    """整图归一化眼睛点[ex,ey], 供分享卡框对准裁剪(0.8.4用户: 头不能裁)。
+
+    在导出/渲染路径惰性计算(单例CPU推理, 模型缺失/眼不可见/任何异常
+    一律None, 调用方回落框心)。box=原图像素坐标[x1,y1,x2,y2]。
+    """
+    global _DET
+    try:
+        if _DET is None:
+            from ..paths import assets_dir
+            _DET = KeyPointDetector(assets_dir() / "models" / KEYPOINT_MODEL,
+                                    use_gpu=False)
+        if not _DET.available():
+            return None
+        img = np.asarray(Image.open(path).convert("RGB"))
+        ih, iw = img.shape[:2]
+        x1 = max(0, int(box[0])); y1 = max(0, int(box[1]))
+        x2 = min(iw, int(box[2])); y2 = min(ih, int(box[3]))
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return None
+        det = _DET.detect(img[y1:y2, x1:x2])
+        if det is None:
+            return None
+        (ex, ey), _vis, _beak = det
+        bw, bh = x2 - x1, y2 - y1
+        return [(x1 + ex * bw) / iw, (y1 + ey * bh) / ih]
+    except Exception:
+        return None

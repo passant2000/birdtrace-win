@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -25,8 +26,19 @@ from ..core.sharecard import render_card
 from ..i18n import t, sname
 from ..theme.widgets import (SegmentedControl, ThemedDateEdit, ToggleSwitch,
                              make_card)
-from .share_dialog import (exif_parts_of, iucn_of, pinyin_spaced,
+from .share_dialog import (exif_parts_of, focus_point, iucn_of, pinyin_spaced,
                            rarity_info)
+
+
+def _place_with_spot(row: dict, rid: str | None) -> str:
+    """地点行: 国别·省级·鸟点, 分隔点统一紧排"·"; 简称优先(单卡同款)。"""
+    spot = row.get("spot_short") or row.get("spot_name") or ""
+    if not rid or rid == "GLOBAL":
+        return spot
+    place = regions.region_display(rid)
+    if spot:
+        place += "·" + spot
+    return place
 
 
 def _safe_name(s: str) -> str:
@@ -35,12 +47,16 @@ def _safe_name(s: str) -> str:
 
 
 class BatchShareDialog(QDialog):
-    def __init__(self, lib, win):
+    def __init__(self, lib, win, photo_ids: list[int] | None = None):
         super().__init__(win)
         self.lib = lib
         self.win = win
+        self._photo_ids = list(photo_ids) if photo_ids else None
         self._exported: list[Path] = []
-        self.setWindowTitle(t("批量分享卡", "Batch share cards"))
+        self.setWindowTitle(t("批量分享卡", "Batch share cards")
+                            if not self._photo_ids else
+                            t(f"批量分享卡 · 已选 {len(self._photo_ids)} 张",
+                              f"Batch share cards · {len(self._photo_ids)} selected"))
         self.setModal(True)
         self.setMinimumWidth(560)
         self._build_ui()
@@ -122,16 +138,37 @@ class BatchShareDialog(QDialog):
         theme_row.addWidget(self.theme_seg, 1)
         sc.addLayout(theme_row)
 
-        # 分辨率档位(与单卡同款, 2026-11-10用户)
+        # 分辨率档位(与单卡同款, 2026-11-10用户; 0.8.3加原图档)
         res_row = QHBoxLayout()
         res_row.addWidget(QLabel(t("分辨率", "Resolution")))
         self.res_seg = SegmentedControl([t("标准 2000", "Standard 2000"),
-                                         t("高清 3000", "HD 3000")])
+                                         t("高清 3000", "HD 3000"),
+                                         t("原图", "Original")])
         self.res_seg.setToolTip(t(
-            "高清模式细节保留更多，单卡文件也更大（约5-8MB）",
-            "HD keeps more feather detail; files are larger (5-8MB each)"))
+            "原图档：卡片宽度=照片自身像素宽（竖图即原图短边），"
+            "照片不做任何缩放；超大原图文件会非常大。",
+            "Original: card width = photo's own pixels (the short side "
+            "for portrait photos), photo untouched; very large originals "
+            "produce very large files."))
         res_row.addWidget(self.res_seg, 1)
         sc.addLayout(res_row)
+
+        # 版式(与单卡同款; 2026-11-17竖版改3:5即9:15): 自动=横3:4/竖3:5
+        lay_row = QHBoxLayout()
+        lay_row.addWidget(QLabel(t("版式", "Layout")))
+        self.lay_seg = SegmentedControl(
+            [t("自动", "Auto"), t("竖 3:5", "Tall 3:5"),
+             t("横 3:4", "Wide 3:4"), t("经典", "Classic")])
+        self.lay_seg.setToolTip(t(
+            "自动：每张照片按方向选版式（横图3:4，竖图/方图3:5）。\n"
+            "3:5（=9:15）=小红书竖版全屏图文；3:4=信息流预览完整；"
+            "经典=旧自适应。",
+            "Auto: pick per photo by orientation (landscape 3:4, "
+            "portrait/square 3:5).\n3:5 (= 9:15) is Xiaohongshu's "
+            "fullscreen post; 3:4 previews fully in the feed; "
+            "Classic = old adaptive."))
+        lay_row.addWidget(self.lay_seg, 1)
+        sc.addLayout(lay_row)
 
         life_row = QHBoxLayout()
         life_row.addWidget(QLabel(t("显示 Life # 序号", "Show Life #")))
@@ -154,6 +191,15 @@ class BatchShareDialog(QDialog):
         exif_row.addStretch(1)
         exif_row.addWidget(self.exif_toggle)
         sc.addLayout(exif_row)
+
+        # 鸟点上卡(0.8.3): 地点行追加" · 鸟点名"; 发稀有鸟记得关——
+        # 分享卡常发公开平台, 鸟点=精确位置(防盗猎/骚扰)
+        spot_row = QHBoxLayout()
+        spot_row.addWidget(QLabel(t("显示鸟点", "Show birding spot")))
+        self.spot_toggle = ToggleSwitch(True)
+        spot_row.addStretch(1)
+        spot_row.addWidget(self.spot_toggle)
+        sc.addLayout(spot_row)
         lay.addWidget(style_card)
 
         self.progress = QProgressBar()
@@ -223,6 +269,12 @@ class BatchShareDialog(QDialog):
         return self.species_combo.property("code") or None
 
     def _update_count(self):
+        if self._photo_ids:
+            self.count_hint.setText(t(
+                f"将按所选 {len(self._photo_ids)} 张照片逐张出卡（以照片当前鸟种命名）。",
+                f"Exports one card per selected photo ({len(self._photo_ids)}), "
+                "named by each photo's species."))
+            return
         d1 = self.from_date.date().toString("yyyy-MM-dd")
         d2 = self.to_date.date().toString("yyyy-MM-dd")
         try:
@@ -248,6 +300,8 @@ class BatchShareDialog(QDialog):
         rarity, pct, score = rarity_info(code, rid)
         photographer = self.name_edit.text().strip() or \
             (row.get("artist") or "").strip()
+        # 框对准锚点(0.8.4保头): 眼睛点优先(惰性算一次落库)→框心→None
+        focus = focus_point(self.lib, row, row)
         return {
             "cn": title,
             "pinyin": pys,
@@ -261,16 +315,21 @@ class BatchShareDialog(QDialog):
             "iucn": iucn_of(self.lib, code),
             "photographer": photographer,
             "date": (row.get("taken_at") or "")[:10],
-            "place": regions.region_display(rid)
-                      if rid and rid != "GLOBAL" else "",
+            "place": _place_with_spot(row, rid) if self.spot_toggle.isChecked()
+                      else (regions.region_display(rid)
+                            if rid and rid != "GLOBAL" else ""),
             "exif": exif_parts_of(row) if self.exif_toggle.isChecked() else {},
+            "focus": focus,
         }
 
     def _export(self):
         d1 = self.from_date.date().toString("yyyy-MM-dd")
         d2 = self.to_date.date().toString("yyyy-MM-dd")
-        cands = self.lib.best_share_cards(
-            d1, d2, self._selected_code(), self.per_combo.currentData() or 1)
+        cands = (self.lib.share_card_rows(self._photo_ids)
+                 if self._photo_ids else
+                 self.lib.best_share_cards(
+                     d1, d2, self._selected_code(),
+                     self.per_combo.currentData() or 1))
         if not cands:
             QMessageBox.information(self, t("批量分享卡", "Batch share cards"),
                                     t("该范围内没有可出卡的照片",
@@ -303,11 +362,23 @@ class BatchShareDialog(QDialog):
                 continue
             date = (row.get("taken_at") or "")[:10]
             base = f"{date}_{_safe_name(title)}"
-            name = base if base not in used else f"{base}_{row['eff_code']}"
+            # 同种同日多张(连拍/多选出卡, 0.8.4用户实测5张只剩2张):
+            # 旧兜底只拼一次eff_code, 第3张起同名静默覆盖——循环递增绝不覆盖
+            name = base
+            seq = 2
+            while name in used:
+                name = f"{base}_{seq}"
+                seq += 1
             used.add(name)
-            w = 3000 if self.res_seg.currentIndex() == 1 else 2000
+            if self.res_seg.currentIndex() == 2:
+                # 原图档: 卡宽=照片像素宽(竖图即短边), 1:1零重采样
+                w = max(1200, int(row.get("width") or 2000))
+            else:
+                w = 3000 if self.res_seg.currentIndex() == 1 else 2000
+            layout = ("auto", "3:5", "3:4", "classic")[
+                self.lay_seg.currentIndex()]
             pm = render_card(row["path"], self._card_info(row), theme_name,
-                             width=w)
+                             width=w, layout=layout)
             dst = out_dir / f"{name}.png"
             pm.save(str(dst), "PNG")
             self._exported.append(dst)

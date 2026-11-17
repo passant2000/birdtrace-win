@@ -150,10 +150,18 @@ def main():
         pass
     win = _Win()
 
+def _classic(dlg):
+    """0.8.3版式默认自动; 老断言针对classic布局, 显式切回并重绘
+    (SegmentedControl.setCurrent不发changed, 必须手动_update)。"""
+    dlg.lay_seg.setCurrentIndex(3)
+    dlg._update()
+    return dlg
+
+
     # ---- [2] 参数两列布局: 三段正确/显隐/实时重绘/高度预算/像素级墨水 ----
     print("\n[2] 参数两列渲染(中文模式: 左=焦·孔·快·ISO, 右=机身/镜头叠logo上方)")
     i18n.set_lang("zh")
-    dlg = ShareDialog(lib, win, pid_exif)
+    dlg = _classic(ShareDialog(lib, win, pid_exif))
     parts = dlg._card_info()["exif"]
     check(parts == EXPECTED_PARTS,
           f"参数三段正确(机身/镜头/焦·孔·快·ISO): {parts}")
@@ -205,7 +213,7 @@ def main():
 
     # ---- [3] 无EXIF照片: 勾选不产生空段; 单字段只显示该字段 ----
     print("\n[3] 无EXIF/部分EXIF")
-    dlg2 = ShareDialog(lib, win, pid_plain)
+    dlg2 = _classic(ShareDialog(lib, win, pid_plain))
     check(not any(dlg2._card_info()["exif"].values()),
           "无EXIF照片勾选后不产生空段")
     check("未检测到" in dlg2.exif_hint.text(),
@@ -220,7 +228,7 @@ def main():
 
     lib.conn.execute("UPDATE exif SET iso=3200 WHERE photo_id=?", (pid_plain,))
     lib.conn.commit()
-    dlg2b = ShareDialog(lib, win, pid_plain)
+    dlg2b = _classic(ShareDialog(lib, win, pid_plain))
     check(dlg2b._card_info()["exif"] == {"body": "", "lens": "",
                                          "shot": "ISO 3200"},
           f"只有ISO时仅显示ISO段: {dlg2b._card_info()['exif']}")
@@ -240,7 +248,7 @@ def main():
     # ---- [4] EN模式文案 ----
     print("\n[4] EN模式文案")
     i18n.set_lang("en")
-    d_en = ShareDialog(lib, win, pid_exif)
+    d_en = _classic(ShareDialog(lib, win, pid_exif))
     texts = collect_texts(d_en)
     bad = [s for s in texts if ZH.search(s)]
     check(not bad, f"EN 对话框 {len(texts)} 条可见文案无中文残留"

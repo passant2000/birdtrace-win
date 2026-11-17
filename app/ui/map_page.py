@@ -18,7 +18,8 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QFrame,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox,
-                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QTreeWidget,
+                               QVBoxLayout, QWidget, QTreeWidgetItem)
 
 from ..core.gcj02 import gcj02_to_wgs84
 from ..core.spots import format_coord
@@ -155,6 +156,12 @@ class SpotEditDialog(QDialog):
         self.name_edit.setPlaceholderText(t("如：奥森南园 / 野鸭湖观鸟堤",
                                            "e.g. Olympic Forest Park / Wild Duck Lake"))
         form.addRow(t("名称", "Name"), self.name_edit)
+        self.short_edit = QLineEdit(
+            (spot["short_name"] or "") if spot else "")
+        self.short_edit.setPlaceholderText(t(
+            "简称（可省，分享卡地点行显示用）",
+            "Short name (optional, for share cards)"))
+        form.addRow(t("简称", "Short name"), self.short_edit)
         self.note_edit = QLineEdit(spot["note"] if spot else "")
         self.note_edit.setPlaceholderText(t("备注（可省）", "Note (optional)"))
         form.addRow(t("备注", "Note"), self.note_edit)
@@ -225,9 +232,10 @@ class SpotEditDialog(QDialog):
         lat = self._num(self.lat_edit.text())
         lon = self._num(self.lon_edit.text())
         note = self.note_edit.text().strip()
+        short = self.short_edit.text().strip()
         if self.spot:
             self.lib.update_spot(self.spot["id"], name=name, note=note,
-                                 lat=lat, lon=lon)
+                                 lat=lat, lon=lon, short_name=short)
         else:
             self.created_id = self.lib.create_spot(name, lat, lon, note)
         self.accept()
@@ -370,7 +378,8 @@ class MapPickDialog(QDialog):
 
 # ============================ 鸟点详情 ============================
 class SpotDetailDialog(QDialog):
-    """鸟点详情: 基本信息 + 物种清单 + 照片流, 支持编辑/删除。"""
+    """鸟点详情: 信息头 + 鸟种筛选胶囊 + 左时间树右照片网格(月份分组,
+    0.8.4用户: 像时间线一样浏览本鸟点; 点鸟种只看该种; 窗口可放大)。"""
 
     def __init__(self, lib, win, spot_id: int, parent=None):
         super().__init__(parent or win)
@@ -378,60 +387,100 @@ class SpotDetailDialog(QDialog):
         self.win = win
         self.spot_id = spot_id
         self.deleted = False
+        self._sp_code = None            # 鸟种筛选(None=全部)
+        self._photos = []               # 本鸟点全部照片(缓存, 筛选只过滤视图)
+        from ..theme.widgets import grid_tile_of
+        self._tile = grid_tile_of(lib)  # 网格档位(0.8.5全局持久化)
+        # 可最小化/最大化(0.8.4用户: 详情页不能放大)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMinimizeButtonHint
+                            | Qt.WindowMaximizeButtonHint)
         self.setWindowTitle(t("鸟点详情", "Spot details"))
-        self.resize(860, 680)
-        v = QVBoxLayout(self)
-        v.setContentsMargins(20, 18, 20, 18)
-        v.setSpacing(12)
-        self.body = QVBoxLayout()
-        self.body.setSpacing(12)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        content.setLayout(self.body)
-        scroll.setWidget(content)
-        v.addWidget(scroll, 1)
+        self.resize(1080, 760)
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 14)
+        root.setSpacing(10)
+
+        # 信息头(每次_reload重建内容)
+        self.head_card = QFrame()
+        self.head_card.setObjectName("Card")
+        self.head_lay = QVBoxLayout(self.head_card)
+        self.head_lay.setContentsMargins(20, 16, 20, 16)
+        self.head_lay.setSpacing(6)
+        root.addWidget(self.head_card)
+
+        # 鸟种筛选行
+        self.chips_card = QFrame()
+        self.chips_card.setObjectName("Card")
+        from ..theme.widgets import FlowLayout
+        self.chips_lay = FlowLayout(self.chips_card, spacing=8)
+        self.chips_lay.setContentsMargins(18, 12, 18, 12)
+        root.addWidget(self.chips_card)
+
+        # 主体: 左时间树 + 右照片网格(月份分组)
+        body_h = QHBoxLayout()
+        body_h.setSpacing(12)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setFixedWidth(210)
+        self.tree.setStyleSheet(
+            f"QTreeWidget{{background:{theme.CARD};border:1px solid {theme.SEP};"
+            "border-radius:12px;padding:4px;}"
+            "QTreeWidget::item{height:26px;border-radius:7px;margin:1px 2px;}"
+            "QTreeWidget::item:hover{background:rgba(127,127,127,40);}"
+            "QTreeWidget::item:selected{background:rgba(0,122,255,60);}")
+        self.tree.itemClicked.connect(self._on_tree_click)
+        body_h.addWidget(self.tree)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.grid_holder = QWidget()
+        self.grid_lay = QVBoxLayout(self.grid_holder)
+        self.grid_lay.setContentsMargins(0, 0, 12, 20)
+        self.grid_lay.setSpacing(12)
+        self.scroll.setWidget(self.grid_holder)
+        body_h.addWidget(self.scroll, 1)
+        root.addLayout(body_h, 1)
+
+        # 窗口拉伸后重排列数(防抖)
+        self._rz_timer = QTimer(self)
+        self._rz_timer.setSingleShot(True)
+        self._rz_timer.setInterval(350)
+        self._rz_timer.timeout.connect(self._refresh_view)
         self._reload()
 
+    # ---- 数据 ----
     def _reload(self):
-        while self.body.count():
-            it = self.body.takeAt(0)
-            w = it.widget()
-            if w:
-                w.hide()
-                w.setParent(None)
-                w.deleteLater()
         sp = self.lib.spot_info(self.spot_id)
         if not sp:
             self.deleted = True
             return
+        while self.head_lay.count():
+            it = self.head_lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
         overview = next((s for s in self.lib.spots_overview()
                          if s["id"] == self.spot_id), None)
-
-        head = QFrame()
-        head.setObjectName("Card")
-        hv = QVBoxLayout(head)
-        hv.setContentsMargins(20, 16, 20, 16)
-        hv.setSpacing(6)
         n_photos = overview["n_photos"] if overview else 0
         n_species = overview["n_species"] if overview else 0
         t1 = QLabel(t(f"{sp['name']}    {n_photos} 张照片 · {n_species} 种鸟",
-                      f"{sp['name']}    {n_photos} photos · {n_species} species"))
+                      f"{sp['name']}    {n_photos} photos · "
+                      f"{n_species} species"))
         t1.setStyleSheet(f"font-size:20px;font-weight:800;color:{theme.LABEL};"
                          "background:transparent;")
         t1.setWordWrap(True)
-        hv.addWidget(t1)
+        self.head_lay.addWidget(t1)
         t2_text = format_coord(sp["lat"], sp["lon"])
         if sp["note"]:
             t2_text += "  ·  " + sp["note"]
         if overview and overview["last_at"]:
-            t2_text += t(
-                f"  ·  最近记录 {(overview['last_at'] or '')[:10]}",
-                f"  ·  Last record {(overview['last_at'] or '')[:10]}")
+            t2_text += t(f"  ·  最近记录 {(overview['last_at'] or '')[:10]}",
+                         f"  ·  Last record {(overview['last_at'] or '')[:10]}")
         t2 = QLabel(t2_text)
-        t2.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};background:transparent;")
+        t2.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};"
+                         "background:transparent;")
         t2.setWordWrap(True)
-        hv.addWidget(t2)
+        self.head_lay.addWidget(t2)
         ops = QHBoxLayout()
         b_edit = QPushButton(t("编辑信息", "Edit info"))
         b_edit.setCursor(Qt.PointingHandCursor)
@@ -441,59 +490,161 @@ class SpotDetailDialog(QDialog):
         b_del.setCursor(Qt.PointingHandCursor)
         b_del.clicked.connect(self._delete)
         ops.addWidget(b_del)
+        from ..theme.widgets import make_grid_tier_control
+        ops.addWidget(make_grid_tier_control(self.lib, self._refresh_view))
         ops.addStretch(1)
-        hv.addLayout(ops)
-        self.body.addWidget(head)
+        self.head_lay.addLayout(ops)
+        self._photos = self.lib.spot_photos(self.spot_id)
+        self._refresh_view()
 
-        species = self.lib.spot_species(self.spot_id)
-        if species:
-            card, lay = self._card(t("此处鸟种清单", "Species at this spot"))
-            flow = QHBoxLayout()
-            flow.setSpacing(8)
-            for s in species:
-                chip = QLabel(f"{sname(s['cn'], s['en'])} ×{s['n']}")
-                chip.setStyleSheet(f"font-size:13px;color:{theme.LABEL};background:{theme.FILL};"
-                                   "border-radius:12px;padding:4px 12px;")
-                chip.setCursor(Qt.PointingHandCursor)
-                chip.mousePressEvent = lambda e, code=s["code"]: \
-                    self.win.open_species(code)
-                flow.addWidget(chip)
-            flow.addStretch(1)
-            lay.addLayout(flow)
-            self.body.addWidget(card)
+    # ---- 视图(鸟种筛选 × 时间树) ----
+    def _filtered(self):
+        if self._sp_code is None:
+            return self._photos
+        return [p for p in self._photos if p["main_code"] == self._sp_code]
 
-        photos = self.lib.spot_photos(self.spot_id)
-        card, lay = self._card(t(f"照片流 · {len(photos)} 张",
-                                 f"Photo stream · {len(photos)}"))
-        if photos:
-            grid_widget = QWidget()
-            grid = QGridLayout(grid_widget)
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setSpacing(10)
-            cols = 6
-            ids = [p["id"] for p in photos]
-            for i, p in enumerate(photos):
-                tp = ensure_thumbnail(self.lib.root, p["path"],
-                                      self._hash_of(p["id"]), 240)
-                pm = QPixmap(str(tp)) if tp else QPixmap()
-                label = ""
-                if p["n_species"] and p["main_code"]:
-                    info = self.lib.species_info(p["main_code"])
-                    if info:
-                        label = sname(info["cn"], info["en"])
-                item = self._thumb_item(p["id"], pm, label, ids)
-                grid.addWidget(item, i // cols, i % cols)
-            for c in range(cols):
-                grid.setColumnStretch(c, 1)
-            lay.addWidget(grid_widget)
-        else:
+    def _refresh_view(self):
+        self._rebuild_chips()
+        rows = self._filtered()
+        self._build_tree(rows)
+        self._build_grid(rows)
+
+    def _rebuild_chips(self):
+        while self.chips_lay.count():
+            it = self.chips_lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+
+        def _chip(text, code):
+            sel = (self._sp_code == code)
+            c = QLabel(text)
+            c.setStyleSheet(
+                "font-size:13px;padding:4px 14px;border-radius:14px;"
+                + (f"background:{theme.BLUE};color:white;" if sel else
+                   f"background:{theme.FILL};color:{theme.LABEL};"))
+            c.setCursor(Qt.PointingHandCursor)
+            c.mousePressEvent = lambda e, cd=code: self._pick_species(cd)
+            self.chips_lay.addWidget(c)
+
+        _chip(t(f"全部 {len(self._photos)}", f"All {len(self._photos)}"), None)
+        for s in self.lib.spot_species(self.spot_id):
+            _chip(f"{sname(s['cn'], s['en'])} ×{s['n']}", s["code"])
+        self.chips_lay.addStretch(1)
+        tip = QLabel(t("点鸟种只看该种；再点一次恢复全部",
+                       "Click a species to filter; click again for all"))
+        tip.setStyleSheet(f"font-size:12px;color:{theme.LABEL_3};"
+                          "background:transparent;")
+        self.chips_lay.addWidget(tip)
+
+    def _pick_species(self, code):
+        self._sp_code = None if self._sp_code == code else code
+        self._refresh_view()
+
+    # ---- 时间树 ----
+    def _build_tree(self, rows):
+        self.tree.clear()
+        top = QTreeWidgetItem([t(f"全部 {len(rows)} 张", f"All {len(rows)}")])
+        top.setData(0, Qt.UserRole, ("all", None))
+        self.tree.addTopLevelItem(top)
+        ym_groups = {}
+        for r in rows:
+            d = (r["taken_at"] or "")[:10]
+            if len(d) >= 7:
+                ym_groups.setdefault(d[:4], {}).setdefault(d[:7], set()).add(d)
+        for y in sorted(ym_groups, reverse=True):
+            months = ym_groups[y]
+            n_y = sum(len(v) for v in months.values())
+            iy = QTreeWidgetItem([t(f"{y}年 · {n_y} 张", f"{y} · {n_y}")])
+            iy.setData(0, Qt.UserRole, ("y", y))
+            top.addChild(iy)
+            for m in sorted(months, reverse=True):
+                days = months[m]
+                n_m = len([r for r in rows
+                           if (r["taken_at"] or "")[:7] == m])
+                im = QTreeWidgetItem([t(f"{int(m[5:])}月 · {len(days)} 天 "
+                                        f"{n_m} 张",
+                                        f"{int(m[5:])} · {n_m}")])
+                im.setData(0, Qt.UserRole, ("m", m))
+                iy.addChild(im)
+                for d in sorted(days, reverse=True):
+                    n_d = len([r for r in rows
+                               if (r["taken_at"] or "")[:10] == d])
+                    id_ = QTreeWidgetItem([t(f"{int(d[8:])}日 · {n_d}",
+                                             f"{int(d[8:])} · {n_d}")])
+                    id_.setData(0, Qt.UserRole, ("d", d))
+                    im.addChild(id_)
+            iy.setExpanded(True)
+        top.setExpanded(True)
+
+    def _on_tree_click(self, item, _col=0):
+        kind, key = item.data(0, Qt.UserRole) or ("all", None)
+        if kind == "all":
+            self.scroll.verticalScrollBar().setValue(0)
+            return
+        w = next((w for day, w in getattr(self, "_flow", [])
+                  if day.startswith(key)), None)
+        if w is not None:
+            self.scroll.ensureWidgetVisible(w, 0, 0)
+
+    # ---- 照片网格(月份分组, 列数随窗宽) ----
+    def _build_grid(self, rows):
+        while self.grid_lay.count():
+            it = self.grid_lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+        self._flow = []                # (day, widget) 按显示序, 树跳转用
+        if not rows:
             tip = QLabel(t("该鸟点还没有照片 · 在导入页或照片查看器里把照片挂到这个点",
                            "No photos at this spot yet · attach photos on the "
                            "Import page or in the photo viewer"))
             tip.setObjectName("Hint")
-            lay.addWidget(tip)
-        self.body.addWidget(card)
-        self.body.addStretch(1)
+            self.grid_lay.addWidget(tip)
+            self.grid_lay.addStretch(1)
+            return
+        vw = max(420, self.scroll.viewport().width())
+        cols = max(3, vw // (self._tile + 16))
+        ids = [p["id"] for p in rows]
+        by_month = {}
+        for r in rows:
+            ym = (r["taken_at"] or "")[:7] or "—"
+            by_month.setdefault(ym, []).append(r)
+        for ym in sorted(by_month, reverse=True):
+            rs = by_month[ym]
+            head = (t(f"{ym[:4]}年{int(ym[5:7])}月 · {len(rs)} 张",
+                      f"{ym} · {len(rs)}")
+                    if ym != "—" and ym[5:7].isdigit()
+                    else f"{ym} · {len(rs)}")
+            lab = QLabel(head)
+            lab.setStyleSheet(f"font-size:15px;font-weight:700;"
+                              f"color:{theme.LABEL};background:transparent;")
+            self.grid_lay.addWidget(lab)
+            gw = QWidget()
+            grid = QGridLayout(gw)
+            grid.setContentsMargins(0, 0, 0, 6)
+            grid.setSpacing(10)
+            for i, r in enumerate(rs):
+                fh = r.get("file_hash") or self._hash_of(r["id"])
+                tp = ensure_thumbnail(self.lib.root, r["path"], fh,
+                                      max(240, self._tile))
+                pm = QPixmap(str(tp)) if tp else QPixmap()
+                label = (r["taken_at"] or "")[:10]
+                if r["main_code"]:
+                    info = self.lib.species_info(r["main_code"])
+                    if info:
+                        label += "  " + sname(info["cn"], info["en"])
+                item = self._thumb_item(r["id"], pm, label, ids)
+                grid.addWidget(item, i // cols, i % cols)
+                self._flow.append(((r["taken_at"] or "")[:10], item))
+            for c in range(cols):
+                grid.setColumnStretch(c, 1)
+            self.grid_lay.addWidget(gw)
+        self.grid_lay.addStretch(1)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._rz_timer.start()
 
     @staticmethod
     def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
@@ -512,9 +663,11 @@ class SpotDetailDialog(QDialog):
             "SELECT file_hash FROM photos WHERE id=?", (photo_id,)).fetchone()
         return row["file_hash"] if row else ""
 
-    def _thumb_item(self, photo_id: int, pm: QPixmap, label: str, ids: list[int]):
+    def _thumb_item(self, photo_id: int, pm: QPixmap, label: str,
+                    ids: list[int]):
         from ..theme.widgets import PhotoGridItem
-        item = PhotoGridItem(pm if not pm.isNull() else None, label=label)
+        item = PhotoGridItem(pm if not pm.isNull() else None, label=label,
+                             tile=self._tile)
         item.setCursor(Qt.PointingHandCursor)
         item.mousePressEvent = lambda e, pid=photo_id: \
             PhotoViewer(self.lib, self.win, pid, ids).exec()
@@ -679,7 +832,8 @@ class MapPage(QWidget):
         self.popup = QFrame(self.map_holder)
         self.popup.setObjectName("Card")
         self.popup.setVisible(False)
-        self.popup.setFixedWidth(300)
+        self.popup.setMinimumWidth(280)
+        self.popup.setMaximumWidth(400)
 
     # ---- 数据 ----
     def refresh(self):
@@ -818,7 +972,8 @@ class MapPage(QWidget):
             self.popup.deleteLater()
         self.popup = QFrame(self.map_holder)
         self.popup.setObjectName("Card")
-        self.popup.setFixedWidth(300)
+        self.popup.setMinimumWidth(280)
+        self.popup.setMaximumWidth(400)
         lay = QVBoxLayout(self.popup)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(6)

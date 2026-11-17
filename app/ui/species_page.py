@@ -2,11 +2,13 @@
 """鸟种库: 卡片流(首见时间排序) + 搜索 + 鸟种详情(概览/图鉴/文化标签页)。"""
 from __future__ import annotations
 
+import json
+
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+                               QLineEdit, QMessageBox, QPushButton,
+                               QScrollArea, QVBoxLayout, QWidget)
 
 from ..core import regions
 from ..core.birddex import get_dex
@@ -239,7 +241,7 @@ class _ThumbJob(QRunnable):
         for path, fhash in self._items:
             if self._stop.get("stop"):
                 return
-            tp = ensure_thumbnail(self._root, path, fhash, 256)
+            tp = ensure_thumbnail(self._root, path, fhash, 512)
             if tp:
                 self._sig.ready.emit(self._gen, fhash, str(tp))
 
@@ -250,6 +252,13 @@ class SpeciesPage(QWidget):
         self.lib = lib
         self.win = win
         self.current_code = None
+        self._sel_mode = False         # 照片流多选模式(概览/未识别共用)
+        self._sel: set[int] = set()    # 选中的photo_id
+        self._sel_pool: list[int] = [] # 当前照片流全部id(全选用)
+        self._sel_actions: list = []   # [(文案, 回调)], 渲染前设置
+        self._sel_cnt_lbl = None       # 多选工具条控件引用(每次渲染重建)
+        self._sel_all_btn = None
+        self._sel_act_btns: list = []
         self.detail_tab = 0
         self._mode = "list"            # 当前视图(list/detail): 恢复滚动用
         self._list_scroll = 0          # 列表滚动位置(进详情前记住, 返回恢复)
@@ -536,6 +545,10 @@ class SpeciesPage(QWidget):
         if self._mode == "list":
             # 正在列表: 记住位置(时间线/地图跳转进来时列表不在前台, 不覆盖)
             self._list_scroll = self.scroll.verticalScrollBar().value()
+        if code != self.current_code:
+            # 换鸟种: 多选状态作废(残留选中会误伤下一个鸟种)
+            self._sel_mode = False
+            self._sel.clear()
         self.current_code = code
         self.back_btn.setVisible(True)
         self.search.setVisible(False)
@@ -559,12 +572,14 @@ class SpeciesPage(QWidget):
         hv.addWidget(t1)
         t2 = QLabel(t(f"{len(photos)} 张 · 没有识别出鸟种的照片（没检测到鸟、"
                       "或置信度过低不写名，不计入鸟种统计）。低置信但给出了"
-                      "鸟名的在「待复核」页把关；这里可点开照片手工标注。",
+                      "鸟名的在「待复核」页把关；这里可点开照片手工标注，"
+                      "或点「选择」整批标注。",
                       f"{len(photos)} photos · no bird could be named "
                       "(none detected, or confidence below the naming "
                       "threshold; not counted as species). Low-confidence "
-                      "names are handled in \"Pending review\"; you can "
-                      "open a photo here and annotate it manually."))
+                      "names are handled in \"Pending review\"; open a "
+                      "photo to annotate it manually, or use \"Select\" "
+                      "to annotate a batch."))
         t2.setWordWrap(True)
         t2.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};background:transparent;")
         hv.addWidget(t2)
@@ -576,12 +591,17 @@ class SpeciesPage(QWidget):
             self.content_lay.addWidget(empty)
             self.content_lay.addStretch(1)
             return
-        from ..theme.widgets import PhotoGridItem
+        self._sel_pool = [p["photo_id"] for p in photos]
+        self._sel_actions = [(t("标注鸟种…", "Annotate species…"),
+                              self._batch_annotate)]
+        self._render_sel_bar()
+        from ..theme.widgets import PhotoGridItem, grid_tile_of
+        tile = grid_tile_of(self.lib)       # 0.8.5网格档位
         grid_widget = QWidget()
         grid = QGridLayout(grid_widget)
         grid.setContentsMargins(0, 0, 0, 12)
         grid.setSpacing(10)
-        cols = max(4, (self.width() - 80) // 140)
+        cols = max(3, (self.width() - 80) // (tile + 10))
         ids = [p["photo_id"] for p in photos]
         for i, ph in enumerate(photos):
             row = self.lib.conn.execute(
@@ -589,17 +609,25 @@ class SpeciesPage(QWidget):
                 (ph["photo_id"],)).fetchone()
             pm = None
             if row:
-                tp = cached_thumbnail(self.lib.root, row["file_hash"], 256) \
+                tsize = max(256, tile)
+                tp = cached_thumbnail(self.lib.root, row["file_hash"], tsize) \
                     or (ensure_thumbnail(self.lib.root, row["path"],
-                                         row["file_hash"], 256)
+                                         row["file_hash"], tsize)
                         if row["path"] else None)
                 if tp:
                     pm = QPixmap(str(tp))
-            item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10])
-            item.setFixedSize(132, 150)
+            item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10],
+                                 tile=tile)
             item.setCursor(Qt.PointingHandCursor)
-            item.mousePressEvent = lambda e, pid=ph["photo_id"], i2=list(ids): \
-                self._open(pid, i2)
+            pid = ph["photo_id"]
+            if self._sel_mode:
+                # 多选: 点击=翻转选中, 不开查看器
+                item.mousePressEvent = lambda e, p=pid, it=item: \
+                    self._sel_click(p, it)
+            else:
+                item.mousePressEvent = lambda e, p=pid, i2=list(ids): \
+                    self._open(p, i2)
+            item.set_selected(pid in self._sel)
             grid.addWidget(item, i // cols, i % cols)
         grid.setColumnStretch(cols, 1)
         self.content_lay.addWidget(grid_widget)
@@ -656,13 +684,17 @@ class SpeciesPage(QWidget):
         hv.addWidget(t2)
         self.content_lay.addWidget(head)
 
-        # 标签页
-        from ..theme.widgets import SegmentedControl
+        # 标签页(右挂网格档位, 0.8.5)
+        from ..theme.widgets import SegmentedControl, make_grid_tier_control
         seg = SegmentedControl([t("概览", "Overview"), t("图鉴", "Field guide"),
                                 t("文化", "Culture")],
                                current=self.detail_tab)
         seg.changed.connect(self._tab_changed)
-        self.content_lay.addWidget(seg)
+        tab_row = QHBoxLayout()
+        tab_row.addWidget(seg, 1)
+        tab_row.addWidget(make_grid_tier_control(
+            self.lib, lambda: self._show_detail(code, restore=True)))
+        self.content_lay.addLayout(tab_row)
 
         if self.detail_tab == 1:
             self._render_dex(code)
@@ -673,12 +705,193 @@ class SpeciesPage(QWidget):
         if restore:
             self._schedule_restore(self._detail_scroll.get(self.detail_tab, 0))
 
+    # ---------- 照片流多选(概览/未识别共用) ----------
+    def _render_sel_bar(self):
+        """照片流顶部多选工具条: 非多选=右侧一个「选择」; 多选=计数+全选+
+        动作按钮+完成。动作来自 self._sel_actions(渲染前设置)。"""
+        bar = QHBoxLayout()
+        bar.addStretch(1)
+        self._sel_cnt_lbl = None
+        self._sel_all_btn = None
+        self._sel_act_btns = []
+        if self._sel_mode:
+            self._sel_cnt_lbl = QLabel(t(f"已选 {len(self._sel)} 张",
+                                         f"{len(self._sel)} selected"))
+            self._sel_cnt_lbl.setStyleSheet(
+                f"font-size:14px;font-weight:700;color:{theme.BLUE};"
+                "background:transparent;")
+            bar.addWidget(self._sel_cnt_lbl)
+            self._sel_all_btn = QPushButton(t("全选", "Select all"))
+            self._sel_all_btn.setCursor(Qt.PointingHandCursor)
+            self._sel_all_btn.clicked.connect(self._sel_toggle_all)
+            bar.addWidget(self._sel_all_btn)
+            for txt, cb in self._sel_actions:
+                b = QPushButton(txt)
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(cb)
+                bar.addWidget(b)
+                self._sel_act_btns.append(b)
+        done = QPushButton(t("完成", "Done") if self._sel_mode
+                           else t("选择", "Select"))
+        done.setObjectName("Primary")
+        done.setCursor(Qt.PointingHandCursor)
+        done.clicked.connect(self._toggle_sel)
+        bar.addWidget(done)
+        self.content_lay.addLayout(bar)
+        self._sync_sel_bar()
+
+    def _sync_sel_bar(self):
+        n = len(self._sel)
+        if not self._sel_mode or self._sel_cnt_lbl is None:
+            return
+        try:
+            self._sel_cnt_lbl.setText(t(f"已选 {n} 张", f"{n} selected"))
+            self._sel_all_btn.setText(
+                t("全不选", "Deselect all") if n else t("全选", "Select all"))
+            for b in self._sel_act_btns:
+                b.setEnabled(n > 0)
+        except RuntimeError:
+            pass   # 重建间隙的僵尸控件忽略
+
+    def _toggle_sel(self):
+        self._sel_mode = not self._sel_mode
+        self._sel.clear()
+        self.refresh()
+
+    def _sel_click(self, pid: int, item):
+        # 就地翻转选中态, 不重建(重建会让快速连点落在已删除控件上)
+        if pid in self._sel:
+            self._sel.discard(pid)
+        else:
+            self._sel.add(pid)
+        item.set_selected(pid in self._sel)
+        self._sync_sel_bar()
+
+    def _sel_toggle_all(self):
+        if self._sel:
+            self._sel.clear()
+        else:
+            self._sel |= set(self._sel_pool)
+        self.refresh()
+
+    def _batch_change_species(self):
+        """多选批量改判: 选中照片从当前鸟种改到目标鸟种(写人工确认,
+        AI原值不动)。典型场景: 同批同种被识别成两个种, 把错的一半挪过来。"""
+        ids = sorted(self._sel)
+        if not ids:
+            return
+        from .species_pick import SpeciesPickDialog
+        dlg = SpeciesPickDialog(
+            self.lib, t(f"改鸟种 · 已选 {len(ids)} 张",
+                        f"Change species · {len(ids)} selected"), self)
+        dlg.exec()
+        code = dlg.selected_code
+        if not code:
+            return
+        sp = self.lib.species_info(code)
+        name = (sp["cn"] if sp else code)
+        # 候选命中提示: 所选里多少张的top5本就包含目标种(改判更放心)
+        n_hit = self._top5_hit(ids, code)
+        msg = t(
+            f"把所选 {len(ids)} 张照片的鸟种改为「{name}」？\n\n"
+            "将写入人工确认标记（覆盖这些照片现有的人工确认状态）；"
+            "AI识别原值保留，统计与鸟种库随即更新。\n\n"
+            "一图多鸟的照片请到查看器里逐张处理。",
+            f"Change the species of the {len(ids)} selected photos to "
+            f"\"{sp['en'] if sp else code}\"?\n\nA manual confirmation is "
+            "written (overriding any existing one); the AI's raw value is "
+            "kept, and stats & the species library update at once.\n\n"
+            "Photos showing several birds: handle them one by one in "
+            "the viewer.")
+        if n_hit:
+            msg += "\n\n" + t(
+                f"所选中有 {n_hit} 张的候选列表里本就包含目标鸟种（低风险改判）。",
+                f"{n_hit} of them already had the target species among "
+                "their candidates (low-risk correction).")
+        r = QMessageBox.question(self, t("批量改鸟种", "Batch change species"),
+                                 msg, QMessageBox.Yes | QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+        self.lib.set_species_batch(ids, code, from_code=self.current_code)
+        self._sel.clear()
+        self._sel_mode = False
+        self.win.library_changed.emit()
+        self.refresh()
+
+    def _top5_hit(self, ids: list[int], code: str) -> int:
+        """所选照片里生效鸟种=当前鸟种 且 top5候选含目标种的记录数。"""
+        q = ",".join("?" * len(ids))
+        n = 0
+        for r in self.lib.conn.execute(
+                f"SELECT species_code, confirmed_code, top5_json FROM records "
+                f"WHERE photo_id IN ({q})", ids).fetchall():
+            if (r["confirmed_code"] or r["species_code"]) != self.current_code:
+                continue
+            try:
+                top5 = json.loads(r["top5_json"] or "[]")
+            except Exception:
+                top5 = []
+            if any(c.get("code") == code for c in top5):
+                n += 1
+        return n
+
+    def _batch_share_cards(self):
+        """多选批量出分享卡: 所选照片逐张一张(0.8.4)。"""
+        ids = sorted(self._sel)
+        if not ids:
+            return
+        from .batch_share_dialog import BatchShareDialog
+        dlg = BatchShareDialog(self.lib, self.win, photo_ids=ids)
+        dlg.exec()
+
+    def _batch_annotate(self):
+        """未识别照片流多选: 整批手工标注同一个鸟种(无记录照片专用)。"""
+        ids = sorted(self._sel)
+        if not ids:
+            return
+        from .species_pick import SpeciesPickDialog
+        dlg = SpeciesPickDialog(
+            self.lib, t(f"标注鸟种 · 已选 {len(ids)} 张",
+                        f"Annotate species · {len(ids)} selected"), self)
+        dlg.exec()
+        code = dlg.selected_code
+        if not code:
+            return
+        sp = self.lib.species_info(code)
+        name = (sp["cn"] if sp else code)
+        r = QMessageBox.question(
+            self, t("批量标注鸟种", "Batch annotate species"),
+            t(f"把所选 {len(ids)} 张未识别照片手工标注为「{name}」？\n\n"
+              "标注后计入鸟种统计；之后可在查看器里删除该条标注。",
+              f"Manually annotate the {len(ids)} selected unidentified "
+              f"photos as \"{sp['en'] if sp else code}\"?\n\nThey will "
+              "count toward species stats; the annotation can be removed "
+              "later in the viewer."),
+            QMessageBox.Yes | QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+        for pid in ids:
+            self.lib.add_manual_record(pid, code)
+        self._sel.clear()
+        self._sel_mode = False
+        self.win.library_changed.emit()
+        self.refresh()
+
     def _render_overview(self, code: str, li):
         photos = self.lib.photos_of_species(code)
-        if self.lib.get_setting("burst_collapse", "1") == "1":
+        # 多选模式下不折叠连拍: 每张都要能单独选中(同时间线的约定)
+        if not self._sel_mode and \
+                self.lib.get_setting("burst_collapse", "1") == "1":
             # 连拍折叠(0.8-③): 组内美学最高者为封面, 最美照必是封面不会被藏
             from ..core.burst import collapse_bursts
             photos = collapse_bursts(photos, id_key="photo_id")
+        self._sel_pool = [p["photo_id"] for p in photos]
+        self._sel_actions = [(t("改鸟种…", "Change species…"),
+                              self._batch_change_species),
+                             (t("分享卡…", "Share cards…"),
+                              self._batch_share_cards)]
+        if photos:
+            self._render_sel_bar()
         if not photos:
             tip = QLabel(t("库里还没有这个物种的照片 · 去导入页添加后识别即可",
                            "No photos of this species yet · import some and "
@@ -694,12 +907,13 @@ class SpeciesPage(QWidget):
                            "(used for the cover and the year's top 18)"))
             hint.setObjectName("Hint")
             self.content_lay.addWidget(hint)
-        from ..theme.widgets import PhotoGridItem
+        from ..theme.widgets import PhotoGridItem, grid_tile_of
+        tile = grid_tile_of(self.lib)       # 0.8.5网格档位
         grid_widget = QWidget()
         grid = QGridLayout(grid_widget)
         grid.setContentsMargins(0, 0, 0, 12)
         grid.setSpacing(10)
-        cols = max(4, (self.width() - 80) // 140)
+        cols = max(3, (self.width() - 80) // (tile + 10))
         ids = [p["photo_id"] for p in photos]
         gen = self._thumb_gen
         stop = self._thumb_stop = {}     # 新任务的新中断标记
@@ -711,17 +925,25 @@ class SpeciesPage(QWidget):
                 (ph["photo_id"],)).fetchone()
             pm = None
             if row:
-                tp = cached_thumbnail(self.lib.root, row["file_hash"], 256)
+                tp = cached_thumbnail(self.lib.root, row["file_hash"],
+                                      max(256, tile))
                 if tp:
                     pm = QPixmap(str(tp))
             corner = t("★最美", "★ Best") if (ph["photo_id"] == best_pid
                                               and len(photos) > 1) else None
             item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10],
-                                 corner=corner, stack=ph.get("group_n", 0))
-            item.setFixedSize(132, 150)
+                                 corner=corner, stack=ph.get("group_n", 0),
+                                 tile=tile)
             item.setCursor(Qt.PointingHandCursor)
-            item.mousePressEvent = lambda e, pid=ph["photo_id"], i2=list(
-                ph.get("group_ids") or ids): self._open(pid, i2)
+            pid = ph["photo_id"]
+            if self._sel_mode:
+                # 多选: 点击=翻转选中, 不开查看器
+                item.mousePressEvent = lambda e, p=pid, it=item: \
+                    self._sel_click(p, it)
+            else:
+                item.mousePressEvent = lambda e, p=pid, i2=list(
+                    ph.get("group_ids") or ids): self._open(p, i2)
+            item.set_selected(pid in self._sel)
             grid.addWidget(item, i // cols, i % cols)
             if pm is None and row and row["path"]:
                 self._thumb_items[row["file_hash"]] = item

@@ -30,6 +30,19 @@ RADIUS = 60
 
 # 文字区总高(v3): 左列日期/地点/拍摄者三行 + 底部品牌行(produced by+logo)
 TEXT_ZONE_H = 1000
+
+# 固定版式: (设计总高, 照片区高)。竖版3:5文字区790(2026-11-17改:
+# 小红书竖版全屏图文=3:5即9:15, 用户实测+leoon-crop"小红书全屏(3:5)"
+# 预设佐证, 旧9:16偏长会被多裁; 照片区短177px, 文字区布局零改动):
+# **标题区(拼音/中文名/英文名/胶囊/分隔线, 0~428)不压缩**——0.8.3实测
+# drawText会把字形裁到矩形里, 等比压行距=截掉g/q下降部(用户复现);
+# 只压meta行(日期/地点/拍摄者/品牌行, 见render里META_TALL手工表)。
+# 3:4文字区保持1000(照片区0.71×宽已近最优, 压了反而更裁)
+XHS_LAYOUTS = {
+    "3:5": (2667, 1877),
+    "3:4": (2133, 1133),
+}
+BLEED_LOSS = 0.30       # 裁切损失超过30%改用模糊bleed垫底(全景图鸟绝不裁)
 # 右列(机身/镜头/参数)单行高与最大宽(超宽省略号截断; 上限给足——
 # 左列日期/地点/拍摄者实际字宽远小于此)
 EXIF_COL_W = 880
@@ -91,6 +104,80 @@ def _card_path(w: float, h: float, r: float) -> QPainterPath:
     path = QPainterPath()
     path.addRoundedRect(QRectF(0, 0, w, h), r, r)
     return path
+
+
+ADJUST_ZOOM_MAX = 3.0      # 手动缩放上限(再大就是放大像素, 会糊)
+
+
+def resolve_layout(src_w: int, src_h: int, layout: str) -> str | None:
+    """版式key解析(0.8.5单源): "auto"按方向(两版式裁切量取小者,
+    交点h/w=√(两窗口比乘积), 3:5档≈0.91); "classic"→None(自适应);
+    其余原样返回。render_card与ShareDialog交互共用。"""
+    if layout == "classic":
+        return None
+    if layout != "auto":
+        return layout
+    ratio = src_h / max(1, src_w)
+
+    def _loss(pr, wr):
+        return 1 - min(pr, wr) / max(pr, wr)
+
+    l9 = _loss(ratio, XHS_LAYOUTS["3:5"][1] / DESIGN_W)
+    l3 = _loss(ratio, XHS_LAYOUTS["3:4"][1] / DESIGN_W)
+    return "3:5" if l9 <= l3 else "3:4"
+
+
+def photo_placement(src_w: int, src_h: int, zw: int, zh: int,
+                    focus=None, adjust: dict | None = None) -> dict:
+    """固定版式照片定位纯数学(0.8.5手动裁切; 渲染与对话框交互共用单源)。
+
+    返回 {w, h, sx, sy, rx, ry, zoom}:
+      w,h   = 缩放后照片尺寸(物理px)
+      sx,sy = 照片左上角相对窗口偏移(负值=该轴letterbox留边居中)
+      rx,ry = 可平移范围(缩放后-窗口; 0=该轴填满不可平移)
+    照片任一轴小于窗口 → 调用方需先画模糊bleed垫底再叠照片。
+
+    adjust=None → 自动: 全景级损失(>BLEED_LOSS)按fit整图居中;
+      否则cover+焦点对准(眼点→框心, 双向夹紧[0,超出量], 无框居中)。
+    adjust={zoom, ox, oy} → 手动: 缩放=基准×zoom(全景基准fit/普通基准
+      cover, zoom夹[1, ADJUST_ZOOM_MAX]); ox/oy=平移量占可平移范围
+      百分比(与分辨率/版式无关, 换版式构图语义保持); 不足窗口的轴居中。
+    """
+    ratio = src_h / max(1, src_w)
+    wr = zh / max(1, zw)
+    loss = (1 - wr / ratio) if ratio >= wr else (1 - ratio / wr)
+    bleed_mode = loss > BLEED_LOSS
+    fw, fh = zw / max(1, src_w), zh / max(1, src_h)
+    base = min(fw, fh) if bleed_mode else max(fw, fh)
+    zoom = 1.0
+    if adjust:
+        try:
+            zoom = min(ADJUST_ZOOM_MAX,
+                       max(1.0, float(adjust.get("zoom", 1.0) or 1.0)))
+        except (TypeError, ValueError):
+            zoom = 1.0
+    f = base * zoom
+    w = max(1, round(src_w * f))
+    h = max(1, round(src_h * f))
+    rx, ry = max(0, w - zw), max(0, h - zh)
+    if adjust:
+        def _frac(v):
+            try:
+                return min(1.0, max(0.0, float(v)))
+            except (TypeError, ValueError):
+                return 0.5
+        sx = rx * _frac(adjust.get("ox", 0.5)) if w > zw else (zw - w) / 2
+        sy = ry * _frac(adjust.get("oy", 0.5)) if h > zh else (zh - h) / 2
+    elif bleed_mode:
+        sx, sy = (zw - w) / 2, (zh - h) / 2
+    else:
+        sx, sy = rx / 2, ry / 2
+        if focus and focus[0] is not None:
+            fxn, fyn = focus
+            sx = min(max(fxn * w - zw / 2, 0), rx)
+            sy = min(max(fyn * h - zh / 2, 0), ry)
+    return {"w": w, "h": h, "sx": sx, "sy": sy, "rx": rx, "ry": ry,
+            "zoom": zoom}
 
 
 def _draw_bird_logo(p: QPainter, right_x: float, bottom_y: float, s: float):
@@ -155,9 +242,17 @@ def _logo_pixmap() -> QPixmap:
 
 
 def render_card(photo_path: str, info: dict, theme_name: str = "light",
-                width: int | None = None) -> QPixmap:
+                width: int | None = None, layout: str = "classic",
+                adjust: dict | None = None) -> QPixmap:
     """info: {cn, pinyin, en, sci, lifer_no|None, photographer, date, place|None,
-    exif|None: {"body","lens","shot"} 拍摄参数(勾选后; 三段有什么显示什么)}
+    exif|None: {"body","lens","shot"} 拍摄参数(勾选后; 三段有什么显示什么),
+    focus|None: (fx,fy) 归一化鸟心(检测框中心, 固定版式下裁剪窗口对准它)}
+
+    layout: "classic"=原自适应(照片比例钳0.70~1.28, 居中裁剪, 历史行为);
+    "auto"=按方向(横图→3:4 / 竖图方图→3:5); "3:5"/"3:4"=强制档。
+    固定版式下裁剪对准focus; 裁切损失>30%改用模糊bleed垫底(整图可见)。
+    adjust(0.8.5手动裁切, 仅固定版式生效): {zoom 1~3, ox/oy 0~1}=
+    用户手动缩放平移(photo_placement), None=自动定位。
 
     date: "2024-05-12 08:31:00" 或 "2024-05-12"
     """
@@ -181,9 +276,21 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         src.fill(QColor("#D8D8DE"))
 
     ratio = src.height() / max(1, src.width())
-    ph = int(W * min(1.28, max(0.70, ratio)))       # 照片区高(设计坐标)
-    th = TEXT_ZONE_H
-    H = ph + th                                     # 全设计坐标
+    key = "classic"
+    if layout == "classic":
+        ph = int(W * min(1.28, max(0.70, ratio)))   # 照片区高(设计坐标)
+        th = TEXT_ZONE_H
+        H = ph + th                                 # 全设计坐标
+    else:
+        if layout == "auto":
+            # 两版式裁切量取小者(0.8.4): 旧固定阈值0.9是拍的, 交点解析
+            # 单源resolve_layout(0.8.5)——临界比例归3:4更省
+            key = resolve_layout(src.width(), src.height(), "auto")
+        else:
+            key = layout                            # "3:5" / "3:4"
+        H, ph = XHS_LAYOUTS[key]
+        th = H - ph
+    compact = (key == "3:5")
 
     card = QPixmap(round(W * k), round(H * k))
     card.fill(Qt.transparent)
@@ -196,22 +303,62 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
     # 背景与照片(满宽 bleed)。照片按**物理**分辨率缩放, 目标矩形用
     # 设计坐标(画笔放大后恰好1:1物理像素, 无二次重采样)
     p.fillRect(0, 0, W, H, QColor(tc["bg"]))
-    scaled = src.scaled(round(W * k), round(ph * k),
-                        Qt.KeepAspectRatioByExpanding,
-                        Qt.SmoothTransformation)
-    sx = (scaled.width() - round(W * k)) / 2
-    sy = (scaled.height() - round(ph * k)) / 2
-    p.drawPixmap(QRectF(-sx / k, -sy / k,
-                        scaled.width() / k, scaled.height() / k),
-                 scaled,
-                 QRectF(0, 0, scaled.width(), scaled.height()))
+    zw, zh = round(W * k), round(ph * k)
+    # 照片只许出现在照片区: classic居中裁剪底边恰好落在ph(构造安全),
+    # 但框对准会把窗口上移(鸟偏画面上方时), 底边越过ph压到文字区——
+    # 0.8.3用户实测(北红尾鸲卡: 拼音/鸟名画在照片上), 统一裁剪兜底
+    p.save()
+    # IntersectClip: 与整卡圆角路径相交——默认Replace会顶掉圆角裁剪,
+    # 照片把上面两角画成方角(0.8.3用户实测)
+    p.setClipRect(QRectF(0, 0, W, ph), Qt.IntersectClip)
+    if layout == "classic":
+        # 原行为: 居中裁剪(不动历史卡)
+        scaled = src.scaled(zw, zh, Qt.KeepAspectRatioByExpanding,
+                            Qt.SmoothTransformation)
+        sx = (scaled.width() - zw) / 2
+        sy = (scaled.height() - zh) / 2
+        p.drawPixmap(QRectF(-sx / k, -sy / k,
+                            scaled.width() / k, scaled.height() / k),
+                     scaled,
+                     QRectF(0, 0, scaled.width(), scaled.height()))
+    else:
+        # 固定版式: 定位数学单源photo_placement(自动=框对准/全景bleed;
+        # adjust=用户手动缩放平移, 0.8.5)
+        pl = photo_placement(src.width(), src.height(), zw, zh,
+                             info.get("focus"), adjust)
+        scaled = src.scaled(pl["w"], pl["h"], Qt.IgnoreAspectRatio,
+                            Qt.SmoothTransformation)
+        if pl["w"] < zw or pl["h"] < zh:
+            # 垫底(全景bleed/手动未放大到铺满): 缩到指甲盖再放大=廉价
+            # 高斯糊, 上面叠照片(letterbox或部分留白)
+            small = src.scaled(max(2, zw // 32), max(2, zh // 32),
+                               Qt.KeepAspectRatioByExpanding,
+                               Qt.FastTransformation)
+            blur = small.scaled(zw, zh, Qt.KeepAspectRatioByExpanding,
+                                Qt.SmoothTransformation)
+            p.drawPixmap(QRectF(0, 0, zw / k, zh / k), blur,
+                         QRectF(0, 0, blur.width(), blur.height()))
+        p.drawPixmap(QRectF(-pl["sx"] / k, -pl["sy"] / k,
+                            pl["w"] / k, pl["h"] / k),
+                     scaled,
+                     QRectF(0, 0, pl["w"], pl["h"]))
+    p.restore()                                     # 解除照片区裁剪
 
     y = ph  # 文字区起点
+    # 0.8.4: 行距矩形不再等比压缩——实测drawText会把字形裁到矩形里
+    # (56px斜体在59px矩形里g/q下降部少17px), 压行距=截中英文名下半。
+    # 3:5竖版只压meta行(日期/地点/拍摄者/品牌行), 偏移手工表; 其余原高。
+    META_TALL = {462: 452, 100: 82, 482: 472, 62: 58,
+                 580: 540, 84: 64, 594: 554, 60: 56,
+                 676: 606, 690: 620,
+                 790: 676}
+    def o(base: int) -> int:
+        return META_TALL.get(base, base) if compact else base
 
     # ---- 右侧 Life # N 胶囊(与中文名行居中对齐) ----
     lifer = info.get("lifer_no")
-    pill_h = 96
-    pill_y = y + 128
+    pill_h = o(96)
+    pill_y = y + o(128)
     if lifer is not None:
         pill_text = f"Life # {lifer}"
         p.setFont(_font(52, 800))
@@ -256,11 +403,11 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
             p.setPen(QColor(tc["pinyin"]))
             p.setFont(_font(py_size, 600))
             # y+58: 离照片更远(旧44太贴, 用户2026-11-10)
-            p.drawText(QRectF(x + (uw - pw) / 2, y + 58, pw + 8, 66),
+            p.drawText(QRectF(x + (uw - pw) / 2, y + o(58), pw + 8, o(66)),
                        Qt.AlignCenter, py)
         p.setPen(QColor(tc["title"]))
         p.setFont(_font(cn_size, 900))
-        p.drawText(QRectF(x + (uw - cw) / 2, y + 130, cw + 8, 170),
+        p.drawText(QRectF(x + (uw - cw) / 2, y + o(130), cw + 8, o(170)),
                    Qt.AlignCenter, ch)
         x += uw + gap
 
@@ -288,7 +435,7 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         p.setFont(_font(38, 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
         pw, rph = tw + 56, 62
-        px, rpy = W - PAD - pw, y + 329
+        px, rpy = W - PAD - pw, y + o(329)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(bg))
         p.drawRoundedRect(QRectF(px, rpy, pw, rph), rph / 2, rph / 2)
@@ -314,19 +461,19 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         ix = (W - PAD - pw - 24 - iw) if rarity else (W - PAD - iw)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(IUCN_BG.get(iucn, "#1C1C1E")))
-        p.drawRoundedRect(QRectF(ix, y + 329, iw, rph2),
+        p.drawRoundedRect(QRectF(ix, y + o(329), iw, rph2),
                           rph2 / 2, rph2 / 2)
         p.setPen(QColor("white"))
-        p.drawText(QRectF(ix, y + 329, iw, rph2), Qt.AlignCenter, iucn_txt)
+        p.drawText(QRectF(ix, y + o(329), iw, rph2), Qt.AlignCenter, iucn_txt)
     p.setPen(QColor(tc["en"]))
     p.setFont(_font(56, 500, italic=True))
     en_w = (W - PAD * 2) - ((pw + 36) if rarity else 0)            - (iw + 24 if iucn else 0)
-    p.drawText(QRectF(PAD, y + 320, en_w, 80),
+    p.drawText(QRectF(PAD, y + o(320), en_w, o(80)),
                Qt.AlignLeft | Qt.AlignVCenter, info.get("en", ""))
 
     # ---- 分隔线 ----
     p.setPen(QColor(tc["line"]))
-    p.drawLine(PAD, y + 428, W - PAD, y + 428)
+    p.drawLine(PAD, y + o(428), W - PAD, y + o(428))
 
     # ---- 日期 / 地点 / 拍摄者 (左列) + 机身/镜头/参数 (右列同行对齐) ----
     date_raw = (info.get("date") or "")[:10]
@@ -345,34 +492,34 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
     fm68 = p.fontMetrics()
     date_disp = _fit(fm68, date_txt, Qt.ElideRight, left_w) \
         if right_col else date_txt
-    p.drawText(QRectF(PAD, y + 462, left_w, 100),
+    p.drawText(QRectF(PAD, y + o(462), left_w, o(100)),
                Qt.AlignLeft | Qt.AlignVCenter, date_disp)
     if body:
         p.setPen(QColor(tc["meta"]))
         p.setFont(_font(40, 500))
-        p.drawText(QRectF(W - PAD - col_w, y + 482, col_w, 62),
+        p.drawText(QRectF(W - PAD - col_w, y + o(482), col_w, o(62)),
                    Qt.AlignRight | Qt.AlignVCenter,
                    _fit(fm_ex, body, Qt.ElideMiddle, col_w))
 
     p.setPen(QColor(tc["meta"]))
-    p.setFont(_font(54, 500))
-    fm54 = p.fontMetrics()
-    place_disp = _fit(fm54, info.get("place") or "", Qt.ElideRight,
+    p.setFont(_font(44, 500))
+    fm_meta = p.fontMetrics()
+    place_disp = _fit(fm_meta, info.get("place") or "", Qt.ElideRight,
                       left_w) \
         if right_col else (info.get("place") or "")
-    p.drawText(QRectF(PAD, y + 580, left_w, 84),
+    p.drawText(QRectF(PAD, y + o(580), left_w, o(84)),
                Qt.AlignLeft | Qt.AlignVCenter, place_disp)
     if lens:
         p.setFont(_font(40, 500))
-        p.drawText(QRectF(W - PAD - col_w, y + 594, col_w, 60),
+        p.drawText(QRectF(W - PAD - col_w, y + o(594), col_w, o(60)),
                    Qt.AlignRight | Qt.AlignVCenter,
                    _fit(fm_ex, lens, Qt.ElideMiddle, col_w))
 
-    p.setFont(_font(54, 500))
-    photog_disp = _fit(fm54, info.get("photographer") or "",
+    p.setFont(_font(44, 500))
+    photog_disp = _fit(fm_meta, info.get("photographer") or "",
                        Qt.ElideRight, left_w) \
         if right_col else (info.get("photographer") or "")
-    p.drawText(QRectF(PAD, y + 676, left_w, 84),
+    p.drawText(QRectF(PAD, y + o(676), left_w, o(84)),
                Qt.AlignLeft | Qt.AlignVCenter, photog_disp)
     if shot:
         p.setPen(QColor(tc["meta"]))
@@ -384,15 +531,15 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         while p.fontMetrics().horizontalAdvance(shot) > col_w and size > 28:
             size -= 2
             p.setFont(_font(size, 500))
-        p.drawText(QRectF(W - PAD - col_w, y + 690, col_w, 60),
+        p.drawText(QRectF(W - PAD - col_w, y + o(690), col_w, o(60)),
                    Qt.AlignRight | Qt.AlignVCenter,
                    _fit(p.fontMetrics(), shot, Qt.ElideRight, col_w))
 
     # ---- 品牌落款行: produced by BirdTrace(与左列对齐) + 右下角logo ----
     logo = _logo_pixmap()
-    LOGO_H = 150
+    LOGO_H = 80 if compact else 110
     lw = int(logo.width() * LOGO_H / logo.height()) if not logo.isNull() else 108
-    logo_top = y + 790
+    logo_top = y + o(790)
     p.setPen(QColor(tc["meta"]))
     p.setFont(_font(34, 500, italic=True))
     p.drawText(QRectF(PAD, logo_top + (LOGO_H - 48) // 2,

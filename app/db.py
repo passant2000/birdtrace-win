@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS records(
   photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
   species_code TEXT NOT NULL REFERENCES species(code),
   rank INTEGER, confidence REAL, source TEXT, box_json TEXT, top5_json TEXT,
-  reviewed INTEGER DEFAULT 0, confirmed_code TEXT
+  reviewed INTEGER DEFAULT 0, confirmed_code TEXT,
+  eye_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_records_photo ON records(photo_id);
 CREATE INDEX IF NOT EXISTS idx_records_species ON records(species_code);
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS batches(
 CREATE TABLE IF NOT EXISTS spots(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  short_name TEXT DEFAULT '',
   lat REAL, lon REAL,
   note TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now','localtime'))
@@ -88,7 +90,7 @@ _V_RECORDS_DDL = """CREATE VIEW IF NOT EXISTS v_records AS
 SELECT r.id AS record_id, r.photo_id, p.path,
        COALESCE(r.confirmed_code, r.species_code) AS eff_code,
        r.species_code, r.rank, r.confidence, r.source, r.reviewed,
-       r.confirmed_code, r.box_json, r.top5_json,
+       r.confirmed_code, r.box_json, r.top5_json, r.eye_json,
        COALESCE(e.dt_original, p.added_at) AS taken_at,
        substr(COALESCE(e.dt_original, p.added_at), 1, 7) AS ym,
        substr(COALESCE(e.dt_original, p.added_at), 1, 4) AS yr
@@ -134,13 +136,22 @@ class Library:
         # 已建视图无效, 必须显式检测列集后DROP重建
         vcols = {r["name"] for r in self.conn.execute(
             "PRAGMA table_info(v_records)")}
-        if vcols and "top5_json" not in vcols:
+        if vcols and ("top5_json" not in vcols or "eye_json" not in vcols):
             self.conn.executescript(
                 "DROP VIEW IF EXISTS v_records;\n" + _V_RECORDS_DDL)
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(photos)")}
         if "spot_id" not in cols:
             self.conn.execute(
                 "ALTER TABLE photos ADD COLUMN spot_id INTEGER REFERENCES spots(id)")
+        # 鸟点简称(0.8.3): 分享卡地点行显示用, 旧库自动补列
+        scols = {r["name"] for r in self.conn.execute("PRAGMA table_info(spots)")}
+        if "short_name" not in scols:
+            self.conn.execute("ALTER TABLE spots ADD COLUMN short_name TEXT DEFAULT ''")
+        # 眼睛点(0.8.4): 分享卡框对准保头用, 识别路径零改动——首次出卡
+        # 时惰性计算并落库缓存(旧库自动补列, 旧记录NULL=未算过)
+        rcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(records)")}
+        if "eye_json" not in rcols:
+            self.conn.execute("ALTER TABLE records ADD COLUMN eye_json TEXT")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_photos_spot ON photos(spot_id)")
         if "aesthetic" not in cols:
@@ -342,10 +353,11 @@ class Library:
             top5 = [{"code": t["code"], "prob": t["prob"]} for t in r.get("top5", [])]
             self.conn.execute(
                 "INSERT INTO records(photo_id,species_code,rank,confidence,source,"
-                "box_json,top5_json) VALUES(?,?,?,?,?,?,?)",
+                "box_json,top5_json,eye_json) VALUES(?,?,?,?,?,?,?,?)",
                 (photo_id, r["species_code"], i, r.get("confidence", 0),
                  r.get("source", "detect"), json.dumps(r.get("box")),
-                 json.dumps(top5, ensure_ascii=False)))
+                 json.dumps(top5, ensure_ascii=False),
+                 json.dumps(r.get("eye")) if r.get("eye") else None))
         if recs:
             self.conn.execute("UPDATE photos SET cand_json=NULL WHERE id=?",
                               (photo_id,))
@@ -404,6 +416,31 @@ class Library:
         self.conn.commit()
         self._sidecar_touch(record_id=record_id)
 
+    def set_species_batch(self, photo_ids: list[int], to_code: str,
+                          from_code: str | None = None) -> int:
+        """批量改判鸟种(鸟种库多选): 所选照片里生效鸟种=from_code的记录
+        写confirmed_code=to_code并标已复核; from_code=None时不限来源种。
+        只动人工确认值, AI原值(species_code)与top5不动, 统计走eff_code
+        自动跟上。多鸟照片里其他种的记录不受影响。返回改动记录数。"""
+        n = 0
+        for pid in photo_ids:
+            rows = self.conn.execute(
+                "SELECT id, species_code, confirmed_code FROM records "
+                "WHERE photo_id=?", (pid,)).fetchall()
+            for r in rows:
+                eff = r["confirmed_code"] or r["species_code"]
+                if eff == to_code:
+                    continue
+                if from_code is not None and eff != from_code:
+                    continue
+                self.conn.execute(
+                    "UPDATE records SET confirmed_code=?, reviewed=1 "
+                    "WHERE id=?", (to_code, r["id"]))
+                n += 1
+        self.conn.commit()
+        self._sidecar_touch(photo_ids=list(photo_ids))
+        return n
+
     def set_main_record(self, photo_id: int, record_id: int):
         """把某条识别记录设为该照片的rank=1(主鸟), 其余顺延。"""
         rows = self.conn.execute(
@@ -438,9 +475,10 @@ class Library:
         self._sidecar_touch(photo_ids=[pid])
 
     def update_record_box(self, record_id: int, box: list[float]) -> None:
-        """用户在查看器里拖动检测框后写回(仅几何, 不动识别结果)。"""
+        """用户在查看器里拖动检测框后写回(仅几何, 不动识别结果)。
+        框变了眼点缓存即失效, 置空待下次出卡重算(0.8.4保头)。"""
         self.conn.execute(
-            "UPDATE records SET box_json=? WHERE id=?",
+            "UPDATE records SET box_json=?, eye_json=NULL WHERE id=?",
             (json.dumps([round(float(v), 1) for v in box]), record_id))
         self.conn.commit()
         self._sidecar_touch(record_id=record_id)
@@ -452,8 +490,8 @@ class Library:
                 for t in (rec.get("top5") or [])]
         self.conn.execute(
             "UPDATE records SET species_code=?, confidence=?, source=?, "
-            "box_json=?, top5_json=?, reviewed=0, confirmed_code=NULL "
-            "WHERE id=?",
+            "box_json=?, top5_json=?, reviewed=0, confirmed_code=NULL, "
+            "eye_json=NULL WHERE id=?",
             (rec["species_code"], rec.get("confidence", 0),
              rec.get("source", "rebox"),
              json.dumps(rec.get("box")), json.dumps(top5, ensure_ascii=False),
@@ -506,7 +544,8 @@ class Library:
         photo = self.conn.execute(
             "SELECT p.*, e.dt_original, e.make, e.model, e.lens, e.iso, e.exposure, "
             "e.fnum, e.focal_len, e.gps_lat, e.gps_lon, e.artist, "
-            "b.region_id AS region_id, sp.name AS spot_name "
+            "b.region_id AS region_id, sp.name AS spot_name, "
+            "sp.short_name AS spot_short "
             "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
             "LEFT JOIN batches b ON b.id=p.batch_id "
             "LEFT JOIN spots sp ON sp.id=p.spot_id WHERE p.id=?",
@@ -697,16 +736,19 @@ class Library:
 
     def update_spot(self, spot_id: int, name: str | None = None,
                     note: str | None = None, lat: float | None = None,
-                    lon: float | None = None):
+                    lon: float | None = None, short_name: str | None = None):
         cur = self.spot_info(spot_id)
         if not cur:
             return
         self.conn.execute(
-            "UPDATE spots SET name=?, note=?, lat=?, lon=? WHERE id=?",
+            "UPDATE spots SET name=?, note=?, lat=?, lon=?, short_name=? "
+            "WHERE id=?",
             (name if name is not None else cur["name"],
              note if note is not None else cur["note"],
              lat if lat is not None else cur["lat"],
              lon if lon is not None else cur["lon"],
+             (short_name if short_name is not None
+              else (cur["short_name"] if "short_name" in cur.keys() else "")),
              spot_id))
         self.conn.commit()
 
@@ -735,7 +777,8 @@ class Library:
     def spot_photos(self, spot_id: int) -> list[dict]:
         """鸟点内照片(含已识别种数与代表种名), 按拍摄时间倒序。"""
         rows = self.conn.execute(
-            "SELECT p.id, p.path, COALESCE(e.dt_original, p.added_at) AS taken_at, "
+            "SELECT p.id, p.path, p.file_hash, "
+            "  COALESCE(e.dt_original, p.added_at) AS taken_at, "
             "  (SELECT v.eff_code FROM v_records v WHERE v.photo_id=p.id AND v.rank=1 "
             "   ORDER BY v.confidence DESC LIMIT 1) AS main_code, "
             "  (SELECT COUNT(DISTINCT v2.eff_code) FROM v_records v2 "
@@ -1346,6 +1389,23 @@ class Library:
             (group_id,)).fetchall()
         return [r["id"] for r in rows]
 
+    # 分享卡候选行(单卡信息/批量导出共用): rank1记录 + 出卡所需全部字段
+    _CARD_SELECT = (
+        "SELECT v.record_id, v.photo_id, v.eff_code, v.path, "
+        "  p.file_hash AS hash, "
+        "  p.aesthetic, v.confidence, v.box_json, v.eye_json, "
+        "  p.width, p.height, "
+        "  COALESCE(s.cn, s.en, v.eff_code) AS cn, s.en AS en_name, "
+        "  s.sci, v.taken_at, b.region_id AS region_id, "
+        "  sp.name AS spot_name, sp.short_name AS spot_short, "
+        "  e.dt_original, e.make, e.model, e.lens, e.iso, e.exposure, "
+        "  e.fnum, e.focal_len, e.artist "
+        "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+        "LEFT JOIN species s ON s.code=v.eff_code "
+        "LEFT JOIN batches b ON b.id=p.batch_id "
+        "LEFT JOIN spots sp ON sp.id=p.spot_id "
+        "LEFT JOIN exif e ON e.photo_id=p.id ")
+
     def best_share_cards(self, date_from: str, date_to: str,
                          code: str | None = None,
                          per_species: int = 1) -> list[dict]:
@@ -1356,17 +1416,7 @@ class Library:
         含手工标注, 其confidence=1.0) 或 原始置信≥0.5 的rank=1记录——
         待复核里的低置信错名不印进卡。未评分照片不参与。
         """
-        sql = (
-            "SELECT v.photo_id, v.eff_code, v.path, p.file_hash AS hash, "
-            "  p.aesthetic, v.confidence, "
-            "  COALESCE(s.cn, s.en, v.eff_code) AS cn, s.en AS en_name, "
-            "  s.sci, v.taken_at, b.region_id AS region_id, "
-            "  e.dt_original, e.make, e.model, e.lens, e.iso, e.exposure, "
-            "  e.fnum, e.focal_len, e.artist "
-            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
-            "LEFT JOIN species s ON s.code=v.eff_code "
-            "LEFT JOIN batches b ON b.id=p.batch_id "
-            "LEFT JOIN exif e ON e.photo_id=p.id "
+        sql = self._CARD_SELECT + (
             "WHERE v.rank=1 AND p.aesthetic IS NOT NULL "
             "  AND (v.confirmed_code IS NOT NULL OR v.confidence >= 0.5) "
             "  AND substr(v.taken_at,1,10) BETWEEN ? AND ? ")
@@ -1384,6 +1434,18 @@ class Library:
             per[r["eff_code"]] = n + 1
             out.append(dict(r))
         return out
+
+    def share_card_rows(self, photo_ids: list[int]) -> list[dict]:
+        """按所选照片出卡(0.8.4鸟种库/时间线多选入口): 每张一条rank=1行,
+        行结构同 best_share_cards。不做置信/美学门——用户显式选中优先。"""
+        ids = list(dict.fromkeys(photo_ids))
+        if not ids:
+            return []
+        q = ",".join("?" * len(ids))
+        sql = (self._CARD_SELECT +
+               f"WHERE v.rank=1 AND v.photo_id IN ({q}) "
+               "ORDER BY v.taken_at DESC, v.photo_id")
+        return [dict(r) for r in self.conn.execute(sql, ids).fetchall()]
 
     def close(self):
         self.conn.close()

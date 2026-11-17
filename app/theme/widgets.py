@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPointF, Property,
-                            QPropertyAnimation, QRectF, QSize, Qt, Signal)
+                            QPropertyAnimation, QRectF, QSize, Qt, Signal,
+                               QPoint, QRect)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QPainter,
                            QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QCalendarWidget, QComboBox, QDialog,
                                QHeaderView,
                                QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget, QLayout)
 
 from . import theme
 from ..i18n import t
@@ -142,17 +143,31 @@ def badge(text: str, color: str | None = None) -> QLabel:
 
 
 class PhotoGridItem(QWidget):
-    """缩略图网格项: 图片 + 角标(已导入/lifer) + 选中框。"""
+    """缩略图网格项: 图片 + 角标(已导入/lifer) + 选中框。
+    tile=缩略图边长(0.8.5档位, 默认120=历史尺寸; 标签/角标随tile缩放)。"""
 
     def __init__(self, pixmap: QPixmap | None, label: str = "",
-                 corner: str | None = None, parent=None, stack: int = 0):
+                 corner: str | None = None, parent=None, stack: int = 0,
+                 tile: int = 120):
         super().__init__(parent)
-        self.setFixedSize(120, 140)
+        self.tile = max(48, int(tile))
         self.selected = False
         self.pixmap = pixmap
         self.label = label
         self.corner = corner
         self.stack = stack          # 连拍封面: 组内张数(≥2才画 ×N 角标)
+        self._lh = max(18, round(self.tile / 6))    # 标签带高
+        self.setFixedSize(self.tile, self.tile + self._lh)
+        self._disp = self._scaled_disp()
+
+    def _scaled_disp(self):
+        """预缩放显示图(0.8.5: 旧paintEvent每次重采样→只在set时做一次,
+        大档位/整页重绘不再卡; 传入更大缓存(如512)自动降到tile)。"""
+        if self.pixmap and not self.pixmap.isNull():
+            return self.pixmap.scaled(self.tile, self.tile,
+                                      Qt.KeepAspectRatioByExpanding,
+                                      Qt.SmoothTransformation)
+        return None
 
     def set_selected(self, v: bool):
         self.selected = v
@@ -161,70 +176,105 @@ class PhotoGridItem(QWidget):
     def set_pixmap(self, pixmap: QPixmap | None):
         """后台缩略图补齐后更新图片(异步加载场景)。"""
         self.pixmap = pixmap
+        self._disp = self._scaled_disp()
         self.update()
 
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        rect = QRectF(0, 0, 120, 120)
+        s = self.tile
+        rect = QRectF(0, 0, s, s)
         path = QPainterPath()
         path.addRoundedRect(rect, 12, 12)
         p.setClipPath(path)
-        if self.pixmap and not self.pixmap.isNull():
-            scaled = self.pixmap.scaled(
-                120, 120, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            x = (scaled.width() - 120) / 2
-            y = (scaled.height() - 120) / 2
-            p.drawPixmap(QPointF(-x, -y), scaled)
+        if self._disp:
+            x = (self._disp.width() - s) / 2
+            y = (self._disp.height() - s) / 2
+            p.drawPixmap(QPointF(-x, -y), self._disp)
         else:
             p.fillRect(rect, QColor(theme.FILL))
         p.setClipping(False)
+        bh = max(20, s // 8)         # 角标胶囊高(随档位)
         if self.corner:
             p.setPen(Qt.NoPen)
             c = QColor(theme.LABEL_3) if self.corner == t("已导入", "Imported") \
                 else QColor(theme.ORANGE)
             p.setBrush(c)
-            tw = p.fontMetrics().horizontalAdvance(self.corner) + 14
-            pr = QPainterPath()
-            pr.addRoundedRect(QRectF(120 - tw - 6, 6, tw, 20), 10, 10)
-            p.drawPath(pr)
-            p.setPen(QColor("white"))
             f = QFont(self.font())
-            f.setPointSize(7)
+            f.setPointSize(max(7, s // 22))
             f.setBold(True)
             p.setFont(f)
-            p.drawText(QRectF(120 - tw - 6, 6, tw, 20), Qt.AlignCenter, self.corner)
+            tw = p.fontMetrics().horizontalAdvance(self.corner) + 14
+            pr = QPainterPath()
+            pr.addRoundedRect(QRectF(s - tw - 6, 6, tw, bh), bh / 2, bh / 2)
+            p.drawPath(pr)
+            p.setPen(QColor("white"))
+            p.drawText(QRectF(s - tw - 6, 6, tw, bh), Qt.AlignCenter, self.corner)
         if self.stack and self.stack > 1:
             # 连拍封面角标(右下): 叠层小图标 + ×N (0.8-③)
             txt = f"❐ ×{self.stack}"
             f = QFont(self.font())
-            f.setPointSize(7)
+            f.setPointSize(max(7, s // 22))
             f.setBold(True)
             p.setFont(f)
             tw = p.fontMetrics().horizontalAdvance(txt) + 14
+            yb = s - bh - 6
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(0, 0, 0, 150))
             pr = QPainterPath()
-            pr.addRoundedRect(QRectF(120 - tw - 6, 120 - 20 - 6, tw, 20), 10, 10)
+            pr.addRoundedRect(QRectF(s - tw - 6, yb, tw, bh), bh / 2, bh / 2)
             p.drawPath(pr)
             p.setPen(QColor("white"))
-            p.drawText(QRectF(120 - tw - 6, 120 - 20 - 6, tw, 20),
-                       Qt.AlignCenter, txt)
+            p.drawText(QRectF(s - tw - 6, yb, tw, bh), Qt.AlignCenter, txt)
         if self.label:
             p.setPen(QColor(theme.LABEL_2))
             f = QFont(self.font())
-            f.setPointSize(8)
+            f.setPointSize(max(8, s // 20))
             p.setFont(f)
-            p.drawText(QRectF(0, 122, 120, 16), Qt.AlignCenter,
-                       p.fontMetrics().elidedText(self.label, Qt.ElideMiddle, 118))
+            p.drawText(QRectF(0, s + 1, s, self._lh - 2), Qt.AlignCenter,
+                       p.fontMetrics().elidedText(self.label, Qt.ElideMiddle,
+                                                  s - 2))
         if self.selected:
             from PySide6.QtGui import QPen
             pen = QPen(QColor(theme.BLUE), 2.5)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(QRectF(1, 1, 118, 118), 12, 12)
+            p.drawRoundedRect(QRectF(1, 1, s - 2, s - 2), 12, 12)
         p.end()
+
+
+# ---------------- 网格档位(0.8.5: Windows超大图标式缩略图大小) ----------------
+GRID_TIERS = [132, 180, 240, 320]
+
+
+def grid_tile_of(lib) -> int:
+    """全局网格档位: 库设置grid_tile; 非法/未设回退132(≈0.8.4视觉)。"""
+    try:
+        v = int((lib.get_setting("grid_tile", "") or "").strip() or 0)
+        if v in GRID_TIERS:
+            return v
+    except Exception:
+        pass
+    return 132
+
+
+def make_grid_tier_control(lib, on_change):
+    """档位切换控件(小/中/大/特大): 写库持久化+回调刷新所在页面。
+    注意setCurrent不发changed(SegmentedControl既有坑), 初值手动对齐。"""
+    seg = SegmentedControl([t("小图", "S"), t("中图", "M"),
+                            t("大图", "L"), t("特大", "XL")])
+
+    def _apply(idx: int):
+        lib.set_setting("grid_tile", str(GRID_TIERS[idx]))
+        on_change()
+
+    seg.changed.connect(_apply)
+    seg.setCurrent(GRID_TIERS.index(grid_tile_of(lib)))
+    seg.setToolTip(t("缩略图大小（照片网格全局通用，自动记忆）",
+                     "Thumbnail size (shared across photo grids, "
+                     "remembered)"))
+    return seg
 
 
 # ---------------- 日期选择(主题化, 年份/月份都用下拉) ----------------
@@ -481,3 +531,74 @@ class ThemedDateEdit(QPushButton):
 
     def _on_picked(self, qdate: QDate):
         self.setDate(qdate)
+
+
+class FlowLayout(QLayout):
+    """流式布局: 子项按宽度自动换行(鸟种胶囊/标签云用)。
+    Qt经典FlowLayout样例的PySide移植, 精简为只管item几何。"""
+
+    def __init__(self, parent=None, margin=0, spacing=8):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+        self._items: list = []
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def addStretch(self, stretch=0):
+        from PySide6.QtWidgets import QSpacerItem
+        self.addItem(QSpacerItem(0, 0))   # 流式布局里占位无宽, 兼容QBox风格调用
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Horizontal)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._do_layout(QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        x, y = rect.x() + m.left(), rect.y() + m.top()
+        line_h = 0
+        right = rect.right() - m.right()
+        for it in self._items:
+            hint = it.sizeHint()
+            nx = x + hint.width() + self._spacing
+            if nx - self._spacing > right and line_h > 0:
+                x = rect.x() + m.left()
+                y = y + line_h + self._spacing
+                nx = x + hint.width() + self._spacing
+                line_h = 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x = nx
+            line_h = max(line_h, hint.height())
+        m2 = self.contentsMargins()
+        return y + line_h + m2.bottom() - rect.y()

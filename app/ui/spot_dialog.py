@@ -5,7 +5,7 @@
 内置高德Key, 设置页可自填更准)。选中POI直接按其位置建鸟点
 (同名复用), 想精修再到地图上选点。
 - SpotPickDialog: 单张照片挂载
-- BatchSpotDialog: 导入完成后整批挂载
+- BatchSpotDialog: 整批挂载(导入完成后/时间线多选均可), 含整批取消挂载
 回车/双击=应用当前项; 单击只选中(不会误跳地图)。
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QVBoxLayout, QWidget)
 
 from ..core.spots import format_coord
 from .. import theme
@@ -378,6 +378,14 @@ class BatchSpotDialog(QDialog):
         b_new.clicked.connect(self._create_by_name)
         row.addWidget(b_new)
         row.addStretch(1)
+        b_un = QPushButton(t("取消挂载", "Unmount all"))
+        b_un.setCursor(Qt.PointingHandCursor)
+        b_un.setStyleSheet(
+            "QPushButton{color:#FF3B30;background:transparent;"
+            "border:1px solid #FF3B30;border-radius:10px;}"
+            "QPushButton:disabled{color:#FF9F9A;border-color:#FFB3AE;}")
+        b_un.clicked.connect(self._unmount_all)
+        row.addWidget(b_un)
         v.addLayout(row)
 
         btns = QHBoxLayout()
@@ -411,6 +419,23 @@ class BatchSpotDialog(QDialog):
         self.lib.set_photos_spot(self.photo_ids, spot_id)
         self.applied = True
         self.spot_name = name
+        self.accept()
+
+    def _unmount_all(self):
+        """整批解除挂载(照片不删, 只清spot_id), 供时间线多选等场景调用。"""
+        r = QMessageBox.question(
+            self, t("取消挂载", "Unmount all"),
+            t(f"把这 {len(self.photo_ids)} 张照片从各自鸟点上解除挂载？\n\n"
+              "照片与识别记录不受影响，之后可重新挂载。",
+              f"Unmount these {len(self.photo_ids)} photos from their "
+              "spots?\n\nPhotos and recognition records are unaffected; "
+              "you can mount them again later."),
+            QMessageBox.Yes | QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+        self.lib.set_photos_spot(self.photo_ids, None)
+        self.applied = True
+        self.spot_name = None
         self.accept()
 
     def _finish_spot(self, sid: int, name: str):

@@ -202,6 +202,29 @@ def main():
     check(len(got2) == 2 and all(b_name not in f.stem for f in got2),
           f"离线B跳过, 导出其余2张 ({[f.name for f in got2]})")
 
+    print("\n[5] 清单模式同种同日多张: 递增后缀绝不覆盖")
+    # 0.8.4用户实测: 多选5张批量出卡只剩2个文件——旧兜底只拼一次
+    # eff_code, 第3张起同名静默覆盖。回归: 5张同种(日期前缀相同)→5个文件
+    pids = [add_photo(lib, LIB_DIR, f"F_burst{i}", a, 0.8, 0.9)
+            for i in range(5)]
+    out3 = OUT_DIR / "list"
+    out3.mkdir()
+    dlg3 = BatchShareDialog(lib, None, photo_ids=pids)
+    check("5" in dlg3.windowTitle(),
+          f"清单模式标题带张数 («{dlg3.windowTitle()}»)")
+    check("5" in dlg3.count_hint.text(),
+          f"计数提示=逐张出卡 («{dlg3.count_hint.text()}»)")
+    dlg3.dir_edit.setText(str(out3))
+    dlg3._export()
+    got3 = sorted(out3.glob("*.png"))
+    stems = [f.stem for f in got3]
+    check(len(got3) == 5,
+          f"5张各成文件, 零覆盖 (实际{len(got3)}: {stems})")
+    check(all(any(s.endswith(f"_{n}") for s in stems) for n in (2, 3, 4, 5))
+          and sum(1 for s in stems
+                  if not any(s.endswith(f"_{n}") for n in (2, 3, 4, 5))) == 1,
+          f"后缀_2~_5齐全且仅一张无后缀 ({stems})")
+
     print()
     if FAILED["v"]:
         print("FAILED")

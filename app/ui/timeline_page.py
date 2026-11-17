@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog,
 from ..i18n import t, sname
 from ..media import ensure_thumbnail
 from .. import theme
-from ..theme.widgets import PhotoGridItem, ThemedDateEdit
+from ..theme.widgets import (PhotoGridItem, ThemedDateEdit, grid_tile_of,
+                             make_grid_tier_control)
 from .viewer import PhotoViewer
 
 THUMB = 128
@@ -33,6 +34,7 @@ class TimelinePage(QWidget):
         super().__init__()
         self.lib = lib
         self.win = win
+        self._tile = grid_tile_of(lib)   # 网格档位(0.8.5全局持久化)
         self._offline_ids: set[int] = set()
         self._missing_ids: set[int] = set()
         self._group_level = "month"   # 内容区分组级别: month(默认)/day
@@ -89,6 +91,7 @@ class TimelinePage(QWidget):
         self.select_btn.setCursor(Qt.PointingHandCursor)
         self.select_btn.clicked.connect(self._toggle_select)
         head.addWidget(self.select_btn)
+        head.addWidget(make_grid_tier_control(self.lib, self.refresh))
         lay.addLayout(head)
 
         # 多选工具条
@@ -113,6 +116,20 @@ class TimelinePage(QWidget):
         self.date_btn.clicked.connect(self._select_by_date)
         sb.addWidget(self.date_btn)
         sb.addStretch(1)
+        self.spot_btn = QPushButton(t("设置鸟点…", "Set spot…"))
+        self.spot_btn.setCursor(Qt.PointingHandCursor)
+        self.spot_btn.setToolTip(t(
+            "给选中的照片批量挂载同一个鸟点（可搜索/新建/取消挂载）",
+            "Mount the selected photos to one spot "
+            "(search / create / unmount)"))
+        self.spot_btn.clicked.connect(self._batch_set_spot)
+        sb.addWidget(self.spot_btn)
+        self.selshare_btn = QPushButton(t("分享卡…", "Share cards…"))
+        self.selshare_btn.setCursor(Qt.PointingHandCursor)
+        self.selshare_btn.setToolTip(t(
+            "按所选照片逐张导出分享卡", "Export one share card per selected photo"))
+        self.selshare_btn.clicked.connect(self._batch_share_sel)
+        sb.addWidget(self.selshare_btn)
         self.rere_btn = QPushButton(t("重新识别…", "Re-identify…"))
         self.rere_btn.setObjectName("Primary")
         self.rere_btn.setCursor(Qt.PointingHandCursor)
@@ -210,6 +227,8 @@ class TimelinePage(QWidget):
     def _sync_sel_ui(self):
         n = len(self._selected)
         self.sel_count.setText(t(f"已选 {n} 张", f"{n} selected"))
+        self.spot_btn.setEnabled(n > 0)
+        self.selshare_btn.setEnabled(n > 0)
         self.rm_btn.setEnabled(n > 0)
         self.rere_btn.setEnabled(n > 0)
         self.all_btn.setText(t("全不选", "Deselect all") if n >= self.lib.photo_count()
@@ -324,6 +343,26 @@ class TimelinePage(QWidget):
         self._sync_sel_ui()
         if not ids:
             QApplication.beep()
+
+    def _batch_share_sel(self):
+        ids = sorted(self._selected)
+        if not ids:
+            return
+        from .batch_share_dialog import BatchShareDialog
+        dlg = BatchShareDialog(self.lib, self.win, photo_ids=ids)
+        dlg.exec()
+
+    def _batch_set_spot(self):
+        ids = sorted(self._selected)
+        if not ids:
+            return
+        from .spot_dialog import BatchSpotDialog
+        dlg = BatchSpotDialog(self.lib, self.win, ids)
+        dlg.exec()
+        if dlg.applied:
+            # 挂载/取消不改数据签名, refresh会跳过——但查看器/鸟点页的
+            # 信息靠库重查, 发信号让各页跟上即可; 时间线网格不显示鸟点
+            self.win.library_changed.emit()
 
     def _batch_remove(self):
         ids = sorted(self._selected)
@@ -675,8 +714,7 @@ class TimelinePage(QWidget):
             elif ph["id"] in self._missing_ids:
                 corner = t("文件丢失", "File missing")   # 不在原位置
             item = PhotoGridItem(thumb, label="", corner=corner,
-                                 stack=ph.get("group_n", 0))
-            item.setFixedSize(THUMB + 12, THUMB + 12)
+                                 stack=ph.get("group_n", 0), tile=self._tile)
             item.setCursor(Qt.PointingHandCursor)
             item.set_selected(ph["id"] in self._selected)
             def _click(_e, _pid=ph["id"], _it=item,
@@ -711,7 +749,7 @@ class TimelinePage(QWidget):
         滚动条(用户实测最大化也放不下所有列, 2026-11-02)。下限2列:
         加树后窄窗口视口仅400+px, 4列下限本身就会溢出。"""
         w = self.scroll.viewport().width() or self.width()
-        return max(2, (w - 8) // (THUMB + 12 + 10))
+        return max(2, (w - 8) // (self._tile + 10))
 
     # ---------- 时间树(年→月→日导航) ----------
     @staticmethod
@@ -1023,7 +1061,8 @@ class TimelinePage(QWidget):
             "SELECT file_hash FROM photos WHERE id=?", (pid,)).fetchone()
         if not row:
             return None
-        tp = ensure_thumbnail(self.lib.root, ph["path"], row["file_hash"], THUMB * 2)
+        tp = ensure_thumbnail(self.lib.root, ph["path"], row["file_hash"],
+                              max(256, self._tile))
         if tp:
             pm = QPixmap(str(tp))
             self._thumb_cache[pid] = pm
