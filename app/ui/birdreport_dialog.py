@@ -22,10 +22,10 @@ from ..i18n import t
 from ..theme.widgets import ThemedDateEdit
 
 _CLEAN = re.compile(r'[\\/:*?"<>|\r\n]+')
-COLS = ["日期", "鸟种中文名", "英文名", "学名", "地点", "纬度", "经度",
-        "数量", "备注"]
-COLS_EN = ["Date", "Species (CN)", "Species (EN)", "Scientific name",
-           "Location", "Latitude", "Longitude", "Count", "Notes"]
+# CSV 列头=记录中心模板字段(输出数据契约, 双语列头在写入时按界面语言
+# 选 COLS_ZH/COLS_EN——用户拿到的 CSV 列名跟随界面语言)
+COLS_ZH = ["日期", "鸟种中文名", "英文名", "学名", "地点", "纬度", "经度", "数量", "备注"]  # i18n:ok 数据码(记录中心模板字段)
+COLS_EN = ["Date", "Species (CN)", "Species (EN)", "Scientific name", "Location", "Latitude", "Longitude", "Count", "Notes"]  # i18n:ok 同上
 
 
 class BirdReportDialog(QDialog):
@@ -69,9 +69,9 @@ class BirdReportDialog(QDialog):
         fbar.addStretch(1)
         lay.addLayout(fbar)
 
-        self.table = QTableWidget(0, len(COLS))
+        self.table = QTableWidget(0, len(COLS_ZH))
         self.table.setHorizontalHeaderLabels(
-            [t(c, e) for c, e in zip(COLS, COLS_EN)])
+            [t(c, e) for c, e in zip(COLS_ZH, COLS_EN)])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         lay.addWidget(self.table, 1)
@@ -141,7 +141,8 @@ class BirdReportDialog(QDialog):
                                       "No records in this date range."))
 
     def _safe_name(self, s: str) -> str:
-        return _CLEAN.sub("_", s or "").strip() or "未名种"
+        return _CLEAN.sub("_", s or "").strip() or \
+            t("未名种", "unknown")
 
     def _export_csv(self):
         if not self._rows:
@@ -157,7 +158,7 @@ class BirdReportDialog(QDialog):
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
-                w.writerow(COLS)
+                w.writerow([t(c, e) for c, e in zip(COLS_ZH, COLS_EN)])
                 for i, r in enumerate(self._rows):
                     spin = self.table.cellWidget(i, 7)
                     note = self.table.cellWidget(i, 8)
