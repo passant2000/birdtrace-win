@@ -107,6 +107,16 @@ class TimelinePage(QWidget):
         self.export_btn.setCursor(Qt.PointingHandCursor)
         self.export_btn.clicked.connect(self._export_wizard)
         head.addWidget(self.export_btn)
+        self.dup_btn = QPushButton(t("查重…", "Find duplicates…"))
+        self.dup_btn.setCursor(Qt.PointingHandCursor)
+        self.dup_btn.setToolTip(t(
+            "找重复/相似照片候选：完全相同文件（跨月）+画面相似（同月）；"
+            "是否移除由你逐组确认",
+            "Find duplicate/similar photo candidates (identical files "
+            "across months + visually similar within a month); you confirm "
+            "each group before removing"))
+        self.dup_btn.clicked.connect(self._open_dups)
+        head.addWidget(self.dup_btn)
         self.select_btn = QPushButton(t("选择", "Select"))
         self.select_btn.setObjectName("Primary")
         self.select_btn.setCursor(Qt.PointingHandCursor)
@@ -300,6 +310,14 @@ class TimelinePage(QWidget):
         """导出向导(0.8-④): 复制到新位置 / 原地重命名。"""
         from .export_dialog import ExportDialog
         ExportDialog(self.lib, self.win).exec()
+
+    def _open_dups(self):
+        """视觉查重(1.0冲刺③): 两层候选+人工确认移除。"""
+        from .dup_dialog import DupDialog
+        dlg = DupDialog(self.lib, self.win)
+        dlg.exec()
+        if dlg.result():
+            self.refresh(force=True)
 
     # ---------- 多选模式 ----------
     def _toggle_select(self):

@@ -1467,6 +1467,72 @@ class Library:
             "ORDER BY p.id").fetchall()
         return [dict(r) for r in rows]
 
+    def find_duplicates(self, similar_threshold: int = 8) -> dict:
+        """视觉查重(1.0冲刺③, 六专题专题4结论=两层+人工确认, 不做第三层):
+        · exact = 同 file_hash 组(全库跨月, 完全相同文件, 含重复导入);
+        · similar = 同月内 dHash 汉距≤threshold 且 hash 不同的照片对
+          (不同裁切/重新导出的同画面)。只做候选, 移除必须人工确认。
+        月内两两比对 O(月内²): 个人库月内几百张可接受; 跨月相似属
+        第三层语义, 1.0 不做。返回 {"exact": [[ids]..], "similar":
+        [[ids]..], "scanned": 总张数}。"""
+        exact = []
+        for r in self.conn.execute(
+                "SELECT file_hash FROM photos GROUP BY file_hash "
+                "HAVING COUNT(*)>1"):
+            ids = [x["id"] for x in self.conn.execute(
+                "SELECT id FROM photos WHERE file_hash=? ORDER BY id",
+                (r["file_hash"],))]
+            exact.append(ids)
+        n = self.conn.execute("SELECT COUNT(*) c FROM photos").fetchone()["c"]
+        similar: list[list[int]] = []
+        if n > 1:
+            rows = self.conn.execute(
+                "SELECT p.id, p.phash, COALESCE(e.dt_original, p.added_at) "
+                "AS ts, p.file_hash FROM photos p "
+                "LEFT JOIN exif e ON e.photo_id=p.id ORDER BY ts").fetchall()
+            # 懒算缺失phash(有缩略图才可得; 拿不到的跳过不计)
+            items = []
+            for r in rows:
+                ph = r["phash"] or self.phash_of(r["id"])
+                if ph:
+                    items.append((r["id"], ph, r["file_hash"],
+                                  (r["ts"] or "")[:7]))
+            from .core.phash import hamming
+            exact_hashes = {r["file_hash"] for r in self.conn.execute(
+                "SELECT file_hash FROM photos GROUP BY file_hash "
+                "HAVING COUNT(*)>1")}
+            parent = {}
+
+            def find(x):
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+
+            def union(a, b):
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[max(ra, rb)] = min(ra, rb)
+
+            for i, (id1, ph1, h1, m1) in enumerate(items):
+                parent.setdefault(id1, id1)
+                for id2, ph2, h2, m2 in items[i + 1:]:
+                    if m1 != m2 or h1 == h2:
+                        continue
+                    if h1 in exact_hashes and h2 in exact_hashes:
+                        continue   # 同hash族已进exact层
+                    parent.setdefault(id2, id2)
+                    d = hamming(ph1, ph2)
+                    if d is not None and d <= similar_threshold:
+                        union(id1, id2)
+            groups: dict[int, list[int]] = {}
+            for pid in parent:
+                groups.setdefault(find(pid), []).append(pid)
+            similar = sorted(
+                (sorted(g) for g in groups.values() if len(g) >= 2),
+                key=lambda g: g[0])
+        return {"exact": exact, "similar": similar, "scanned": n}
+
     def phash_of(self, photo_id: int) -> str | None:
         """照片感知哈希(dHash 64bit, 16位hex); 缩略图计算+落库缓存。
 

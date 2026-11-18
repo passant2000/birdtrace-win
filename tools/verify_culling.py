@@ -356,6 +356,51 @@ check(all(lib.conn.execute("SELECT COUNT(*) FROM records WHERE photo_id=?",
                            (p,)).fetchone()[0] == 0 for p in pids),
       "全量清空生效")
 
+# ---------- [9] 视觉查重(1.0冲刺③) ----------
+print("[9] 视觉查重")
+# 造重复: 同一张图两份(同hash=层1) + 相似对(同图不同hash=层2)
+dup_src = PROJ / "data/test_images/Ardea_cinerea.jpg"
+bid = lib.conn.execute("SELECT id FROM batches LIMIT 1").fetchone()["id"]
+p_a = D / "dup_a.jpg"
+shutil.copy(dup_src, p_a)
+pa = lib.add_photo(str(p_a), media.file_hash(p_a), p_a.stat().st_size,
+                   p_a.stat().st_mtime, 0, 0, bid)
+lib.conn.execute("INSERT INTO exif(photo_id, dt_original) VALUES(?,?)",
+                 (pa, "2026-05-20 09:00:00"))
+p_b = D / "dup_b.jpg"
+import PIL.Image as _PIL
+img = _PIL.open(dup_src)
+img.save(p_b, quality=88)   # 重压缩: 同画面不同文件(hash不同, phash近)
+pb = lib.add_photo(str(p_b), media.file_hash(p_b), p_b.stat().st_size,
+                   p_b.stat().st_mtime, 0, 0, bid)
+lib.conn.execute("INSERT INTO exif(photo_id, dt_original) VALUES(?,?)",
+                 (pb, "2026-05-20 09:00:01"))
+p_c = D / "dup_c.jpg"
+shutil.copy(dup_src, p_c)   # 原样再拷一份: 与 pa 同 hash = 层1
+pc = lib.add_photo(str(p_c), media.file_hash(p_c), p_c.stat().st_size,
+                   p_c.stat().st_mtime, 0, 0, bid)
+lib.conn.execute("INSERT INTO exif(photo_id, dt_original) VALUES(?,?)",
+                 (pc, "2026-05-20 09:00:02"))
+lib.conn.commit()
+res = lib.find_duplicates()
+exact_ids = {i for g in res["exact"] for i in g}
+sim_ids = {i for g in res["similar"] for i in g}
+check(pa in exact_ids and pc in exact_ids, "层1: 同hash重导入入 exact 组")
+check(pa in sim_ids and pb in sim_ids, "层2: 重压缩副本(同月)入 similar 组")
+check(all(len(g) >= 2 for g in res["similar"]), "similar 组≥2张")
+# UI 冒烟
+from app.ui.dup_dialog import DupDialog
+dd = DupDialog(lib, win)
+check(dd.summary.text() and "2" in dd.summary.text(), "查重对话框扫描+摘要(层1+层2)")
+ids_sel = dd._selected_ids()
+check(ids_sel == [], "默认无选中(人工确认原则)")
+dd.close()
+# 移除一条后重复消失
+lib.remove_photo(pb)
+res2 = lib.find_duplicates()
+check(pb not in {i for g in res2["similar"] for i in g} and
+      pb not in {i for g in res2["exact"] for i in g}, "移除记录后不再列候选")
+
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()
