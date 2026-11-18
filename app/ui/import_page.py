@@ -301,7 +301,7 @@ class ImportPage(QWidget):
             "missing."))
         scan_hint.setWordWrap(True)
         scan_hint.setObjectName("Hint")
-        form_s.addRow(scan_hint)
+        form_s.addWidget(scan_hint)
         lay.addWidget(card_s)
 
         # ---- 预览网格 ----
