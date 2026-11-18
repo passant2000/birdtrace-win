@@ -1533,6 +1533,33 @@ class Library:
                 key=lambda g: g[0])
         return {"exact": exact, "similar": similar, "scanned": n}
 
+    def birdreport_rows(self, date_from: str | None = None,
+                        date_to: str | None = None) -> list[dict]:
+        """观鸟记录中心导出行(1.0冲刺④, 六专题专题6定案=数量临时编辑
+        不落库): rank1生效种按「日期+鸟种+鸟点」聚合——一次出行一鸟种
+        一行(记录语义)。坐标取鸟点, 无鸟点留空不伪造GPS。"""
+        sql = (
+            "SELECT substr(COALESCE(e.dt_original, p.added_at),1,10) AS date, "
+            "  v.eff_code AS code, "
+            "  COALESCE(s.cn, s.en, v.eff_code) AS cn, s.en AS en, "
+            "  s.sci AS sci, sp.name AS spot_name, sp.lat AS lat, "
+            "  sp.lon AS lon, COUNT(DISTINCT v.photo_id) AS photos "
+            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "LEFT JOIN exif e ON e.photo_id=p.id "
+            "LEFT JOIN species s ON s.code=v.eff_code "
+            "LEFT JOIN spots sp ON sp.id=p.spot_id "
+            "WHERE v.rank=1")
+        args: list = []
+        if date_from:
+            sql += " AND substr(COALESCE(e.dt_original, p.added_at),1,10) >= ?"
+            args.append(date_from)
+        if date_to:
+            sql += " AND substr(COALESCE(e.dt_original, p.added_at),1,10) <= ?"
+            args.append(date_to)
+        sql += (" GROUP BY date, v.eff_code, p.spot_id "
+                "ORDER BY date DESC, cn")
+        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
     def phash_of(self, photo_id: int) -> str | None:
         """照片感知哈希(dHash 64bit, 16位hex); 缩略图计算+落库缓存。
 

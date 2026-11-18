@@ -117,6 +117,15 @@ class TimelinePage(QWidget):
             "each group before removing"))
         self.dup_btn.clicked.connect(self._open_dups)
         head.addWidget(self.dup_btn)
+        self.report_btn = QPushButton(t("记录中心…", "Bird report…"))
+        self.report_btn.setCursor(Qt.PointingHandCursor)
+        self.report_btn.setToolTip(t(
+            "按观鸟记录中心(birdreport.cn)导入思路导出上报行 CSV，"
+            "并归集每鸟种最美照配合上传",
+            "Export report rows as CSV for birdreport.cn-style upload, "
+            "plus one best photo per species"))
+        self.report_btn.clicked.connect(self._open_birdreport)
+        head.addWidget(self.report_btn)
         self.select_btn = QPushButton(t("选择", "Select"))
         self.select_btn.setObjectName("Primary")
         self.select_btn.setCursor(Qt.PointingHandCursor)
@@ -318,6 +327,11 @@ class TimelinePage(QWidget):
         dlg.exec()
         if dlg.result():
             self.refresh(force=True)
+
+    def _open_birdreport(self):
+        """观鸟记录中心导出(1.0冲刺④): CSV上报行+最美照归集。"""
+        from .birdreport_dialog import BirdReportDialog
+        BirdReportDialog(self.lib, self.win).exec()
 
     # ---------- 多选模式 ----------
     def _toggle_select(self):

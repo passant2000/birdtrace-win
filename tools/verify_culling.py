@@ -401,6 +401,59 @@ res2 = lib.find_duplicates()
 check(pb not in {i for g in res2["similar"] for i in g} and
       pb not in {i for g in res2["exact"] for i in g}, "移除记录后不再列候选")
 
+
+# ---------- [10] 记录中心导出(1.0冲刺④) ----------
+print("[10] 记录中心导出")
+# [8]全量重置清掉了pids的records+美学本就未跑——重建翠鸟记录与美学分
+for i, pid in enumerate(pids):
+    lib.conn.execute(
+        "INSERT INTO records(photo_id,species_code,rank,confidence,source,"
+        "box_json) VALUES(?,?,?,?,?,?)",
+        (pid, kcode, 1, 0.9 - i * 0.1, "detect", None))
+lib.conn.execute("UPDATE photos SET aesthetic=8.5 WHERE id=?", (pids[0],))
+lib.conn.commit()
+rows = lib.birdreport_rows("2026-05-01", "2026-06-30")
+check(len(rows) >= 1, "聚合行生成")
+r0 = rows[0]
+check(set(r0) >= {"date", "code", "cn", "en", "sci", "spot_name", "lat",
+                  "lon", "photos"}, "行字段齐全")
+check(r0["photos"] >= 1, "行含照片计数")
+# 聚合语义: 同日同种同鸟点=一行(翠鸟4帧同日无鸟点→1行)
+kcode_rows = [r for r in rows if r["code"] == kcode]
+check(len(kcode_rows) == 1, f"同日同种无鸟点聚合为一行(得{len(kcode_rows)})")
+# UI 冒烟: 生成表格+数量默认1+CSV写出
+from app.ui.birdreport_dialog import BirdReportDialog
+br = BirdReportDialog(lib, win)
+br.d1.setDate(__import__("PySide6.QtCore", fromlist=["QDate"]).QDate(2026, 5, 1))
+br.d2.setDate(__import__("PySide6.QtCore", fromlist=["QDate"]).QDate(2026, 6, 30))
+br._build()
+check(br.table.rowCount() == len(rows), "表格行数=聚合行数")
+spin = br.table.cellWidget(0, 7)
+check(spin is not None and spin.value() == 1, "数量默认1(专题6: 不落库)")
+note = br.table.cellWidget(0, 8)
+note.setText("测试备注")
+csv_path = D / "report.csv"
+import csv as _csv
+with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    w = _csv.writer(f)
+    w.writerow(["日期", "鸟种中文名", "英文名", "学名", "地点", "纬度",
+                "经度", "数量", "备注"])
+    for i, r in enumerate(br._rows):
+        sp_ = br.table.cellWidget(i, 7)
+        nt = br.table.cellWidget(i, 8)
+        w.writerow([r["date"], r["cn"], r["en"] or "", r["sci"] or "",
+                    r["spot_name"] or "", "", "", sp_.value(), nt.text()])
+raw = csv_path.read_bytes()
+check(raw[:3] == b"\xef\xbb\xbf", "CSV UTF-8 BOM(Excel中文兼容)")
+txt = raw.decode("utf-8-sig")
+check("测试备注" in txt and "\n" in txt, "备注进CSV")
+cols_r = {r["name"] for r in lib.conn.execute("PRAGMA table_info(records)")}
+check("count" not in cols_r and "note" not in cols_r,
+      "records 无数量/备注列(专题6: 不落库)")
+br.close()
+# 最美照归集查询门(复用best_share_cards: 确认或≥0.5)
+cards = lib.best_share_cards("2026-05-01", "2026-06-30", per_species=1)
+check(len(cards) >= 1, "最美照归集查询有结果(门=确认或≥0.5)")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()
@@ -409,3 +462,4 @@ if FAILED["v"]:
     print("FAILED")
     sys.exit(1)
 print("ALL PASS")
+
