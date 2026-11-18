@@ -2,6 +2,10 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-18（深夜）· **v0.8.6 转正式：实测通过，commit+tag+GitHub 建仓推送**
+
+用户实测确认 → **79d5ea1 committed（23文件 +9710/−7208）+ tag v0.8.6**。GitHub 建仓 **passant2000/birdtrace-win（私有）**：winget 装 gh CLI，OAuth 设备流两轮（第一轮 repo scope 令牌实际可用；gh `auth login --with-token` 硬性要求 read:org，**gh 保持未登录状态不影响使用**）。**网络要点：api.github.com 与 push 直连必须走本地系统代理 127.0.0.1:7897**（shell 无代理环境变量，curl/git 要显式 `-x`/`http.<url>.proxy`）；**push 绕开 gh-proxy**：全局 gitconfig 把 https://github.com/ 重写到 gh-proxy.com（公共镜像，不支持私有库推送）——仓库远端用 `https://github.com:443/…`（`:443` 前缀不匹配 insteadOf 规则）+ 仓内 `http.https://github.com:443.proxy=127.0.0.1:7897`（已配置，随 .git 共享不入库）。已推 main+dev-0.8.0+全部4个tag，default_branch=dev-0.8.0（API PATCH 设置）。令牌临时文件已删；后续 push 首次会弹 GCM 登录，或自行 `gh auth login` 完整登录。无 LICENSE（私有，暂不需要）。旧包 0.8.2/3/4 目录删除仍待指示。
+
 ## 2026-11-18（晚）· **0.8.6 四轮——实测六报全部落地 + 重打包（替换 releases 目录）**
 
 **六轮（同日深夜，用户"连拍一组都识别错咋搞"P1+P2拍板+rebox旧bug修入）**：**用户红线=识别管线冻结**（sp_engine/recognize_sub/engine/RecognizeWorker 一律只读，新功能只调现成接口，已存记忆）。P1 组级改判：时间线**右键连拍封面**菜单+查看器组内按钮行（group_bar，≥2张才显示）→ `burst_actions.change_group_species`（SpeciesPickDialog 一次 → 现成 `set_species_batch` 全组人工确认，自动统一/识别永不覆盖）。P2 整组重识别=多取景全局最优：`GroupRescueWorker(QThread)`（worker.py 新类，只读复用 build_worker_cmd 子进程协议）——每帧两轮：①无框标准识别拿主框 ②带框=多取景最佳（与画框识别同路径），全局最高置信帧×取景结果写整组（source 必须 detect——子进程带框结果带 rebox 会误触人工保护；预算 MAX_FRAMES=8 帧美学降序、EARLY_CONF=0.85 即收；无鸟清空归未识别同批量语义）。rebox 旧 bug：`db.append_record`（追加 rank 末尾，人工记录不删；旧走 add_records 被"人工优先"整组替换语义挡住=同一照片第二只起静默丢弃，v0.8.5 的 verify_rebox 即挂、本会话 stash 实证与本轮改动无关）。验证：新 verify_burst_ops（append/P1直code路径/P2真引擎7秒 comkin1 99.999%/查看器行可见性）全绿+verify_rebox 转绿+timeline_select/chips/viewer/burst/batch_ops/e2e/i18n 全绿。assert_pkg_086 +2 锚点=109项。重打包替换 releases。
