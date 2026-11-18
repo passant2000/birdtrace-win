@@ -103,6 +103,18 @@ class ExportDialog(QDialog):
         rated_row.addStretch(1)
         rated_row.addWidget(self.rated_toggle)
         prow.addLayout(rated_row)
+        # 选片筛选(1.0冲刺⑨): 默认排除拒绝片(通用诉求), 可改为仅保留等
+        pickrow = QHBoxLayout()
+        pickrow.addWidget(QLabel(t("选片", "Pick")))
+        self.pick_combo = QComboBox()
+        self.pick_combo.addItem(t("排除拒绝片", "Exclude rejected"), "!reject")
+        self.pick_combo.addItem(t("全部", "All"), None)
+        self.pick_combo.addItem(t("仅保留", "Keep only"), "keep")
+        self.pick_combo.addItem(t("仅待定", "Pending only"), "pending")
+        self.pick_combo.addItem(t("仅拒绝", "Rejected only"), "reject")
+        self.pick_combo.setCursor(Qt.PointingHandCursor)
+        pickrow.addWidget(self.pick_combo, 1)
+        rc.addLayout(pickrow)
         rc.addLayout(prow)
         self.range_hint = QLabel()
         self.range_hint.setObjectName("Hint")
@@ -202,6 +214,8 @@ class ExportDialog(QDialog):
         self.spot_combo.currentIndexChanged.connect(lambda _i: self._update_preview())
         self.hier_seg.changed.connect(lambda _i: self._update_preview())
         self.rated_toggle.toggled.connect(lambda _v: self._update_preview())
+        self.pick_combo.currentIndexChanged.connect(
+            lambda _v: self._update_preview())
 
     def _apply_quick(self, idx: int):
         # 快捷范围: 今天/近7天/本月/今年/全部(2000-01-01=不限)
@@ -260,7 +274,8 @@ class ExportDialog(QDialog):
         spot_id = self._spot_id()
         return exporter.select_range(
             self.lib, d1, d2, self._species_code, spot_id,
-            rated_only=self.rated_toggle.isChecked())
+            rated_only=self.rated_toggle.isChecked(),
+            pick_filter=self.pick_combo.currentData())
 
     def _template(self):
         # 下拉组合 → 段列表(跳过无); 全空=None(原文件名)

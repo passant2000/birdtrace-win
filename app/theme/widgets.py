@@ -148,7 +148,7 @@ class PhotoGridItem(QWidget):
 
     def __init__(self, pixmap: QPixmap | None, label: str = "",
                  corner: str | None = None, parent=None, stack: int = 0,
-                 tile: int = 120):
+                 tile: int = 120, stars: int = 0, pick: str = ""):
         super().__init__(parent)
         self.tile = max(48, int(tile))
         self.selected = False
@@ -156,6 +156,8 @@ class PhotoGridItem(QWidget):
         self.label = label
         self.corner = corner
         self.stack = stack          # 连拍封面: 组内张数(≥2才画 ×N 角标)
+        self.stars = stars          # 人工评分1~5(1.0冲刺①): 左上★
+        self.pick = pick            # 选片三态(1.0冲刺⑨): keep/pending/reject
         self._lh = max(18, round(self.tile / 6))    # 标签带高
         self.setFixedSize(self.tile, self.tile + self._lh)
         self._disp = self._scaled_disp()
@@ -228,6 +230,35 @@ class PhotoGridItem(QWidget):
             p.drawPath(pr)
             p.setPen(QColor("white"))
             p.drawText(QRectF(s - tw - 6, yb, tw, bh), Qt.AlignCenter, txt)
+        if self.stars and self.stars > 0:
+            # 人工星级角标(左上, 1.0冲刺①): 半透明黑胶囊+金星; 右上被
+            # corner(已导入/lifer)占用, 左上空闲
+            txt = "★" * min(5, int(self.stars))
+            f = QFont(self.font())
+            f.setPointSize(max(7, s // 22))
+            f.setBold(True)
+            p.setFont(f)
+            tw = p.fontMetrics().horizontalAdvance(txt) + 14
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(0, 0, 0, 150))
+            pr = QPainterPath()
+            pr.addRoundedRect(QRectF(6, 6, tw, bh), bh / 2, bh / 2)
+            p.drawPath(pr)
+            p.setPen(QColor("#FFD60A"))
+            p.drawText(QRectF(6, 6, tw, bh), Qt.AlignCenter, txt)
+        if self.pick in ("keep", "pending", "reject"):
+            # 选片三态(1.0冲刺⑨): 左下色点(保留绿/待定橙/拒绝红)+拒绝红框
+            from PySide6.QtGui import QPen
+            dot = {"keep": "#34C759", "pending": "#FF9F0A",
+                   "reject": "#FF453A"}[self.pick]
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(dot))
+            r = max(5, s // 24)
+            p.drawEllipse(QRectF(6, s - r - 6, r, r))
+            if self.pick == "reject":
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(QColor("#FF453A"), 2))
+                p.drawRoundedRect(QRectF(1, 1, s - 2, s - 2), 12, 12)
         if self.label:
             p.setPen(QColor(theme.LABEL_2))
             f = QFont(self.font())

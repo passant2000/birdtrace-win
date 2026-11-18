@@ -291,6 +291,18 @@ def main():
             except Exception as e:
                 check(False, f"导出向导可构造 ({e})")
             try:
+                # 选片工作流(1.0冲刺): 隔离区对话框(带预览段需要库内照片)
+                from app.ui.quarantine_dialog import QuarantineDialog
+                dlgs.append(("quarantine", QuarantineDialog(lib, win)))
+            except Exception as e:
+                check(False, f"隔离区对话框可构造 ({e})")
+            try:
+                # 组内对比: 需要一个≥2张的连拍组, 无组时用单张(仅构造检查)
+                from app.ui.compare_dialog import CompareDialog
+                dlgs.append(("compare", CompareDialog(lib, win, 1)))
+            except Exception as e:
+                check(False, f"组内对比对话框可构造 ({e})")
+            try:
                 dlgs.append(("rebox", ReboxDialog(lib, win, 1)))
             except Exception as e:
                 check(False, f"画框识别可构造 ({e})")
@@ -356,7 +368,11 @@ def main():
                 d.show()
                 app.processEvents()
                 texts = collect_texts(d, skip_lists=(name == "speciespick"))
-                bad = zh_residue(texts, lib_data) if lang == "en" else []
+                # 文件名=用户数据不翻译(方案二节第4条): 库内照片名加入
+                # 豁免(子串匹配), 选片/隔离区对话框显示文件名合法
+                fn_stems = [Path(r["path"]).stem for r in
+                            lib.conn.execute("SELECT path FROM photos")]
+                bad = zh_residue(texts, lib_data + fn_stems) if lang == "en" else []
                 residues[f"{lang}:{name}"] = bad
                 check(not bad, f"对话框[{name}] " + ("无中文残留" if not bad
                                                      else f"残留: {bad[:4]}"))

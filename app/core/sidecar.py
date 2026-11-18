@@ -75,6 +75,7 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
     """本库中位于 folder 的照片 → {hash: entry}。"""
     rows = lib.conn.execute(
         "SELECT p.id, p.path, p.file_hash, p.rating, p.rec_fail, p.aesthetic, "
+        "  p.pick, p.pick_note, "
         "  p.spot_id, s.name AS spot_name, s.lat AS spot_lat, s.lon AS spot_lon, "
         "  s.note AS spot_note "
         "FROM photos p LEFT JOIN spots s ON s.id=p.spot_id").fetchall()
@@ -120,6 +121,11 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
                       "lon": r["spot_lon"], "note": r["spot_note"] or ""}
                      if r["spot_id"] else None),
         }
+        # 选片三态(1.0冲刺⑨): 非空才写, 旧版本读到未知字段会保留不清
+        if r["pick"]:
+            entry["pick"] = r["pick"]
+            if r["pick_note"]:
+                entry["pick_note"] = r["pick_note"]
         out[r["file_hash"]] = entry
     return out
 
@@ -176,10 +182,10 @@ def _resolve_spot(lib, spot: dict) -> int | None:
 def apply_entry(lib, photo_id: int, entry: dict) -> dict:
     """把 sidecar 条目回填到本地照片(已有编辑优先)。返回各字段是否应用。"""
     done = {"records": False, "no_bird": False, "rating": False,
-            "aesthetic": False, "spot": False}
+            "aesthetic": False, "spot": False, "pick": False}
     p = lib.conn.execute(
-        "SELECT rating, rec_fail, aesthetic, spot_id FROM photos WHERE id=?",
-        (photo_id,)).fetchone()
+        "SELECT rating, rec_fail, aesthetic, spot_id, pick FROM photos "
+        "WHERE id=?", (photo_id,)).fetchone()
     if not p:
         return done
     n_local = lib.conn.execute(
@@ -230,6 +236,13 @@ def apply_entry(lib, photo_id: int, entry: dict) -> dict:
         lib.conn.execute("UPDATE photos SET rating=? WHERE id=?",
                          (int(entry["rating"]), photo_id))
         done["rating"] = True
+    # 选片三态(1.0冲刺⑨): 已有编辑优先——本地已标记不动, 空才补
+    # (与rating同款; note只在pick应用时随行)
+    if entry.get("pick") and not (p["pick"] or ""):
+        lib.conn.execute(
+            "UPDATE photos SET pick=?, pick_note=? WHERE id=?",
+            (entry["pick"], entry.get("pick_note") or "", photo_id))
+        done["pick"] = True
     if entry.get("aesthetic") is not None and p["aesthetic"] is None:
         lib.conn.execute("UPDATE photos SET aesthetic=? WHERE id=?",
                          (float(entry["aesthetic"]), photo_id))

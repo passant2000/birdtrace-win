@@ -59,6 +59,24 @@ class TimelinePage(QWidget):
         self._resize_debounce.setInterval(250)
         self._resize_debounce.timeout.connect(self._on_relayout)
         self._build_ui()
+        self._setup_shortcuts()
+
+    def _setup_shortcuts(self):
+        """选片快捷键(1.0冲刺①+⑨, Lightroom式): 1~5打星/0清星,
+        K保留/P待定/X拒绝/U清除——只在多选模式且有选中时生效
+        (handler自查 _select_mode/_selected/isVisible, 时间线页无
+        文本输入框, 单键不与任何输入冲突)。"""
+        from PySide6.QtGui import QKeySequence, QShortcut
+        acts = {"k": lambda: self._mark_apply("keep"),
+                "p": lambda: self._mark_apply("pending"),
+                "x": lambda: self._mark_apply("reject"),
+                "u": lambda: self._mark_apply(""),
+                "0": lambda: self._rate_apply(0)}
+        acts.update({str(i): (lambda _n=i: self._rate_apply(_n))
+                     for i in range(1, 6)})
+        for k, fn in acts.items():
+            sc = QShortcut(QKeySequence(k), self)
+            sc.activated.connect(fn)
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
@@ -96,6 +114,30 @@ class TimelinePage(QWidget):
         head.addWidget(self.select_btn)
         head.addWidget(make_grid_tier_control(self.lib, self._tier_changed))
         lay.addLayout(head)
+
+        # 评分/选片筛选(1.0冲刺①+⑨): 作用于当前树选择范围(与鸟种胶囊
+        # 叠加); 选"全部"即还原
+        from PySide6.QtWidgets import QComboBox
+        fbar = QHBoxLayout()
+        self.rating_filter = QComboBox()
+        self.rating_filter.addItems([
+            t("评分: 全部", "Rating: all"), t("★1+", "★1+"), t("★2+", "★2+"),
+            t("★3+", "★3+"), t("★4+", "★4+"), t("★5", "★5"),
+            t("未评星", "Unrated")])
+        self.rating_filter.setCursor(Qt.PointingHandCursor)
+        self.rating_filter.currentIndexChanged.connect(
+            lambda _: self.refresh(force=True))
+        fbar.addWidget(self.rating_filter)
+        self.pick_filter = QComboBox()
+        self.pick_filter.addItems([
+            t("选片: 全部", "Pick: all"), t("保留", "Keep"), t("待定", "Pending"),
+            t("拒绝", "Reject"), t("未标", "Unmarked")])
+        self.pick_filter.setCursor(Qt.PointingHandCursor)
+        self.pick_filter.currentIndexChanged.connect(
+            lambda _: self.refresh(force=True))
+        fbar.addWidget(self.pick_filter)
+        fbar.addStretch(1)
+        lay.addLayout(fbar)
 
         # 多选工具条
         self.sel_bar = QFrame()
@@ -138,6 +180,37 @@ class TimelinePage(QWidget):
         self.rere_btn.setCursor(Qt.PointingHandCursor)
         self.rere_btn.clicked.connect(self._batch_rerecognize)
         sb.addWidget(self.rere_btn)
+        # 标记菜单(1.0冲刺①+⑨): 三态+星级, 也可用快捷键 K/P/X/U/0-5
+        from PySide6.QtGui import QKeySequence, QShortcut
+        from PySide6.QtWidgets import QMenu
+        self.mark_btn = QPushButton(t("标记…", "Mark…"))
+        self.mark_btn.setCursor(Qt.PointingHandCursor)
+        m = QMenu(self.mark_btn)
+        m.addAction(t("保留 (K)", "Keep (K)"),
+                    lambda: self._mark_apply("keep"))
+        m.addAction(t("待定 (P)", "Pending (P)"),
+                    lambda: self._mark_apply("pending"))
+        m.addAction(t("拒绝 (X)", "Reject (X)"),
+                    lambda: self._mark_apply("reject"))
+        m.addAction(t("清除标记 (U)", "Clear pick (U)"),
+                    lambda: self._mark_apply(""))
+        m.addSeparator()
+        for n in range(1, 6):
+            m.addAction("★" * n, lambda _n=n: self._rate_apply(_n))
+        m.addAction(t("清除星级 (0)", "Clear rating (0)"),
+                    lambda: self._rate_apply(0))
+        self.mark_btn.setMenu(m)
+        sb.addWidget(self.mark_btn)
+        self.quar_btn = QPushButton(t("隔离区…", "Quarantine…"))
+        self.quar_btn.setCursor(Qt.PointingHandCursor)
+        self.quar_btn.setToolTip(t(
+            "把选中的照片移入库目录下的隔离区（可预览清单后确认，随时恢复，"
+            "绝不覆盖同名文件，不提供永久删除）",
+            "Move selected photos into the library quarantine folder "
+            "(preview first, restore anytime; never overwrites existing "
+            "files, no permanent delete)"))
+        self.quar_btn.clicked.connect(self._open_quarantine)
+        sb.addWidget(self.quar_btn)
         self.rm_btn = QPushButton(t("从鸟迹移除…", "Remove from BirdTrace…"))
         self.rm_btn.setStyleSheet(
             "QPushButton{color:#FF3B30;background:transparent;"
@@ -393,6 +466,49 @@ class TimelinePage(QWidget):
         from .batch_share_dialog import BatchShareDialog
         dlg = BatchShareDialog(self.lib, self.win, photo_ids=ids)
         dlg.exec()
+
+    # ---------- 标记/隔离(1.0冲刺①+⑨culling) ----------
+    # 快捷键只在多选模式且有选中时生效(单张打星走查看器); 就地更新
+    # 网格角标避免整页重建(多选模式网格必全展开, _grid_items全覆盖)
+
+    def _mark_apply(self, pick: str):
+        if not self._select_mode or not self._selected or not self.isVisible():
+            return
+        self.lib.set_pick(sorted(self._selected), pick)
+        self._after_mark(pick=pick)
+
+    def _rate_apply(self, n: int):
+        if not self._select_mode or not self._selected or not self.isVisible():
+            return
+        self.lib.set_rating(sorted(self._selected), n)
+        self._after_mark(stars=n)
+
+    def _after_mark(self, pick: str | None = None, stars: int | None = None):
+        """就地刷新选中项角标; 筛选激活时(标记可能让项移出筛选)整页刷。"""
+        if (self.rating_filter.currentIndex() or
+                self.pick_filter.currentIndex()):
+            self.refresh(force=True)
+            return
+        for pid in self._selected:
+            it = self._grid_items.get(pid)
+            if it is None:
+                continue
+            try:
+                if stars is not None:
+                    it.stars = stars
+                if pick is not None:
+                    it.pick = pick
+                it.update()
+            except RuntimeError:
+                pass
+
+    def _open_quarantine(self):
+        ids = sorted(self._selected)
+        from .quarantine_dialog import QuarantineDialog
+        dlg = QuarantineDialog(self.lib, self.win, selected=ids)
+        dlg.exec()
+        if dlg.moved:
+            self.refresh(force=True)
 
     def _batch_set_spot(self):
         ids = sorted(self._selected)
@@ -686,6 +802,26 @@ class TimelinePage(QWidget):
             raw = {ym: [p for p in v if p.get("main_code") == self._tl_sp]
                    for ym, v in raw.items()}
             raw = {ym: v for ym, v in raw.items() if v}
+        # 评分/选片筛选(1.0冲刺①+⑨): 只动视图, 与鸟种胶囊叠加
+        ri = self.rating_filter.currentIndex() if hasattr(self, "rating_filter") else 0
+        pi = self.pick_filter.currentIndex() if hasattr(self, "pick_filter") else 0
+        if ri:
+            if ri == 6:        # 未评星
+                raw = {ym: [p for p in v if not (p.get("rating") or 0)]
+                       for ym, v in raw.items()}
+            else:              # ★ri+
+                raw = {ym: [p for p in v if (p.get("rating") or 0) >= ri]
+                       for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
+        if pi:
+            want = ("", "keep", "pending", "reject", "")[pi]
+            if pi == 4:        # 未标
+                raw = {ym: [p for p in v if not (p.get("pick") or "")]
+                       for ym, v in raw.items()}
+            else:
+                raw = {ym: [p for p in v if (p.get("pick") or "") == want]
+                       for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
         counts = {ym: len(v) for ym, v in raw.items()}
         if self._collapse_on():
             from ..core.burst import collapse_bursts
@@ -844,9 +980,12 @@ class TimelinePage(QWidget):
             elif ph["id"] in self._missing_ids:
                 corner = t("文件丢失", "File missing")   # 不在原位置
             # 0.8.6用户: 缩略图下显示鸟种+鸟点(与鸟点详情的时间+鸟种对偶)
+            # 1.0冲刺①+⑨: 人工星级(左上★)+选片三态(左下色点/拒绝红框)
             item = PhotoGridItem(thumb, label=self._caption(ph),
                                  corner=corner,
-                                 stack=ph.get("group_n", 0), tile=self._tile)
+                                 stack=ph.get("group_n", 0), tile=self._tile,
+                                 stars=ph.get("rating", 0),
+                                 pick=ph.get("pick", ""))
             item.setCursor(Qt.PointingHandCursor)
             item.set_selected(ph["id"] in self._selected)
             def _click(_e, _pid=ph["id"], _it=item,

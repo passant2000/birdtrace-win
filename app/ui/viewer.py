@@ -187,6 +187,15 @@ class PhotoViewer(QDialog):
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.reject)
         QShortcut(QKeySequence("+"), self, lambda: self.view._zoom_by(1.25))
         QShortcut(QKeySequence("-"), self, lambda: self.view._zoom_by(1 / 1.25))
+        # 选片快捷键(1.0冲刺①+⑨): 模态对话框内, 与缩放+/-不冲突
+        for k, fn in [("1", lambda: self._rate(1)), ("2", lambda: self._rate(2)),
+                      ("3", lambda: self._rate(3)), ("4", lambda: self._rate(4)),
+                      ("5", lambda: self._rate(5)), ("0", lambda: self._rate(0)),
+                      ("k", lambda: self._pick("keep")),
+                      ("p", lambda: self._pick("pending")),
+                      ("x", lambda: self._pick("reject")),
+                      ("u", lambda: self._pick(""))]:
+            QShortcut(QKeySequence(k), self, fn)
         self._load()
 
     @property
@@ -231,6 +240,57 @@ class PhotoViewer(QDialog):
         self.records_box = QVBoxLayout()
         self.records_box.setSpacing(8)
         pl.addLayout(self.records_box)
+
+        # 选片块(1.0冲刺①+⑨): 星级/三态/备注——人工值与AI美学互不干扰;
+        # 快捷键 1~5打星 0清星 K保留 P待定 X拒绝 U清除
+        pl.addWidget(QLabel(t("选片", "Culling")))
+        star_row = QHBoxLayout()
+        star_row.setSpacing(4)
+        self.star_btns = []
+        for n in range(1, 6):
+            b = QPushButton("★")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedSize(36, 30)
+            b.setToolTip(t(f"{n} 星（快捷键 {n}）", f"{n} star (shortcut {n})"))
+            b.clicked.connect(lambda _=False, _n=n: self._rate(_n))
+            self.star_btns.append(b)
+            star_row.addWidget(b)
+        self.star_clear = QPushButton(t("清星", "Clear"))
+        self.star_clear.setCursor(Qt.PointingHandCursor)
+        self.star_clear.setToolTip(t("清除星级（快捷键 0）",
+                                     "Clear rating (shortcut 0)"))
+        self.star_clear.clicked.connect(lambda: self._rate(0))
+        star_row.addWidget(self.star_clear)
+        star_row.addStretch(1)
+        pl.addLayout(star_row)
+
+        pick_row = QHBoxLayout()
+        pick_row.setSpacing(4)
+        self.pick_btns = {}
+        for k, lab in [("keep", t("保留 (K)", "Keep (K)")),
+                       ("pending", t("待定 (P)", "Pending (P)")),
+                       ("reject", t("拒绝 (X)", "Reject (X)")),
+                       ("", t("清除 (U)", "Clear (U)"))]:
+            b = QPushButton(lab)
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, _k=k: self._pick(_k))
+            self.pick_btns[k] = b
+            pick_row.addWidget(b)
+        pick_row.addStretch(1)
+        pl.addLayout(pick_row)
+
+        from PySide6.QtWidgets import QLineEdit
+        self.pick_note_edit = QLineEdit()
+        self.pick_note_edit.setPlaceholderText(t(
+            "备注（只记在鸟迹，不碰文件；回车保存）",
+            "Note (stored in BirdTrace only; Enter to save)"))
+        self.pick_note_edit.textEdited.connect(self._note_started)
+        self.pick_note_edit.editingFinished.connect(self._note_commit)
+        pl.addWidget(self.pick_note_edit)
+        self._note_pid = None
+
         pl.addStretch(1)
 
         # 连拍组级操作(0.8.6用户: 连拍一组都识别错): 当前照片属于连拍组
@@ -410,6 +470,70 @@ class PhotoViewer(QDialog):
         self.info.setText("<br/>".join(lines))
 
         self._render_records()
+        self._sync_pick_ui()
+
+    # ---------- 选片(1.0冲刺①+⑨) ----------
+    def _rate(self, n: int):
+        if not self.photo:
+            return
+        pid = self.ids[self.index]
+        self.lib.set_rating([pid], n)
+        self.photo["rating"] = n
+        self._sync_pick_ui()
+
+    def _pick(self, pick: str):
+        if not self.photo:
+            return
+        pid = self.ids[self.index]
+        note = self.pick_note_edit.text().strip() if pick else ""
+        self.lib.set_pick([pid], pick, note)
+        self.photo["pick"] = pick
+        self.photo["pick_note"] = note
+        self._sync_pick_ui()
+
+    def _note_started(self):
+        # 用户真正敲字才记录目标照片; 程序化setText(textChanged)不触发,
+        # 切图时不会把上一张的备注误写进下一张
+        self._note_pid = self.ids[self.index]
+
+    def _note_commit(self):
+        pid = getattr(self, "_note_pid", None)
+        if pid is None or not self.photo or pid != self.ids[self.index]:
+            return
+        self._note_pid = None
+        pick = self.photo.get("pick") or ""
+        self.lib.set_pick([pid], pick, self.pick_note_edit.text().strip())
+        self.photo["pick_note"] = self.pick_note_edit.text().strip()
+
+    def _sync_pick_ui(self):
+        rating = int((self.photo or {}).get("rating") or 0)
+        pick = (self.photo or {}).get("pick") or ""
+        for i, b in enumerate(self.star_btns, 1):
+            b.blockSignals(True)
+            b.setChecked(i <= rating)
+            b.blockSignals(False)
+            b.setStyleSheet(
+                f"QPushButton{{font-size:16px;color:{theme.LABEL_3};"
+                f"background:transparent;border:1px solid {theme.SEP};"
+                f"border-radius:8px;}}"
+                f"QPushButton:checked{{color:#FFD60A;background:transparent;"
+                f"border:1px solid #FFD60A;}}")
+        for k, b in self.pick_btns.items():
+            b.blockSignals(True)
+            b.setChecked(k == pick)
+            b.blockSignals(False)
+            on = {"keep": "#34C759", "pending": "#FF9F0A",
+                  "reject": "#FF453A"}.get(k, theme.BLUE)
+            b.setStyleSheet(
+                "QPushButton{background:transparent;border:1px solid %s;"
+                "border-radius:8px;padding:3px 8px;}"
+                "QPushButton:checked{color:white;background:%s;"
+                "border:1px solid %s;}" % (theme.SEP, on, on))
+        if getattr(self, "_note_pid", None) is None:
+            self.pick_note_edit.blockSignals(True)
+            self.pick_note_edit.setText(
+                (self.photo or {}).get("pick_note") or "")
+            self.pick_note_edit.blockSignals(False)
 
     def _path_clicked(self, link: str):
         """点击路径: 资源管理器打开所在文件夹并选中该文件。"""

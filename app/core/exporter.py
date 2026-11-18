@@ -37,7 +37,8 @@ def fmt_stem(template: str, date: str, name: str, seq: int) -> str:
 
 def select_range(lib, date_from: str | None = None,
                  date_to: str | None = None, code: str | None = None,
-                 spot_id: int | None = None, rated_only: bool = False
+                 spot_id: int | None = None, rated_only: bool = False,
+                 pick_filter: str | None = None
                  ) -> list[dict]:
     """导出范围 → [{photo_id, path, eff_code, name(cn), en, taken_at}] 按时间升序。"""
     sql = (
@@ -66,6 +67,13 @@ def select_range(lib, date_from: str | None = None,
         args.append(spot_id)
     if rated_only:
         sql += " AND p.rating >= 1"
+    # 选片三态筛选(1.0冲刺⑨): '!reject'=排除拒绝(默认导出场景常用),
+    # 其余=仅该态。未标记照片在排除拒绝时不受影响。
+    if pick_filter == "!reject":
+        sql += " AND (p.pick IS NULL OR p.pick <> 'reject')"
+    elif pick_filter in ("keep", "pending", "reject"):
+        sql += " AND p.pick = ?"
+        args.append(pick_filter)
     sql += " ORDER BY taken_at, v.photo_id"
     return [dict(r) for r in lib.conn.execute(sql, args).fetchall()]
 

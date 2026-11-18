@@ -2,7 +2,9 @@
 """照片库: SQLite编目数据库 + DAO。
 
 库位置默认在 文档/BirdTraceWin/, 内含 catalog.db 与 thumbnails/ 缓存。
-设计原则: photos 表只引用文件路径, 绝不移动/修改原文件。
+设计原则: photos 表只引用文件路径, 绝不擅自移动/修改原文件——唯一
+例外=用户显式授权的操作(导出向导"原地重命名"、选片"隔离区", 均
+预览确认+同步更新库path+绝不覆盖同名)。
 
 核心视图 v_records: 每条识别记录 + 生效鸟种(纠正优先) + 拍摄时间。
 一照多鸟 = 多条记录; 同种多鸟在鸟种统计中按照片数去重。
@@ -169,6 +171,36 @@ class Library:
         if "missing" not in cols:
             self.conn.execute(
                 "ALTER TABLE photos ADD COLUMN missing INTEGER DEFAULT 0")
+        # 选片三态/备注/组锁定(1.0冲刺①+⑨culling): pick=''未标/'keep'
+        # 保留/'pending'待定/'reject'拒绝; group_lock=1人工拆合组,
+        # regroup_bursts跳过锁定照片(人工标记不因重跑丢失)
+        if "pick" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN pick TEXT DEFAULT ''")
+        if "pick_note" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN pick_note TEXT DEFAULT ''")
+        if "group_lock" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN group_lock INTEGER DEFAULT 0")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_photos_pick ON photos(pick)")
+        # 拒绝片隔离区(1.0冲刺⑨③): 文件移入<库>/隔离区/<操作编号>/,
+        # 照片记录不删只改path(缩略图/识别/评分全保留), 可恢复原路径
+        # (原路径被占则拒绝, 绝不覆盖); 不提供永久删除
+        if not self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='quarantine'").fetchone():
+            self.conn.execute(
+                "CREATE TABLE quarantine("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "photo_id INTEGER NOT NULL REFERENCES photos(id),"
+                "op_no TEXT NOT NULL,"
+                "quar_path TEXT NOT NULL,"
+                "orig_path TEXT NOT NULL,"
+                "file_hash TEXT NOT NULL,"
+                "moved_at TEXT DEFAULT (datetime('now','localtime')),"
+                "restored_at TEXT)")
         self._dedupe_records()
 
     def _dedupe_records(self):
@@ -441,6 +473,183 @@ class Library:
         self._sidecar_touch(photo_ids=list(photo_ids))
         return n
 
+    # ---------- 选片工作流(1.0冲刺①+⑨culling, 2026-11-18) ----------
+
+    def set_rating(self, photo_ids, rating: int) -> int:
+        """人工星级(0=清星, 1~5)。与AI美学分(aesthetic列)互不干扰:
+        重识别/美学重算永不覆盖人工评分。sidecar随标注走(已有编辑优先)。"""
+        rating = max(0, min(5, int(rating)))
+        ids = list(photo_ids)
+        if not ids:
+            return 0
+        q = ",".join("?" * len(ids))
+        cur = self.conn.execute(
+            f"UPDATE photos SET rating=? WHERE id IN ({q})", [rating] + ids)
+        self.conn.commit()
+        self._sidecar_touch(photo_ids=ids)
+        return cur.rowcount
+
+    def set_pick(self, photo_ids, pick: str, note: str | None = None) -> int:
+        """选片三态: 'keep'保留/'pending'待定/'reject'拒绝/''清除;
+        note=备注(只记库不碰文件)。pick!=''时note才落库(清态即弃注)。"""
+        if pick not in ("", "keep", "pending", "reject"):
+            raise ValueError(f"bad pick: {pick!r}")
+        ids = list(photo_ids)
+        if not ids:
+            return 0
+        q = ",".join("?" * len(ids))
+        if pick:
+            cur = self.conn.execute(
+                f"UPDATE photos SET pick=?, pick_note=? WHERE id IN ({q})",
+                [pick, note or ""] + ids)
+        else:
+            cur = self.conn.execute(
+                f"UPDATE photos SET pick='', pick_note='' WHERE id IN ({q})",
+                ids)
+        self.conn.commit()
+        self._sidecar_touch(photo_ids=ids)
+        return cur.rowcount
+
+    def quarantine_move(self, photo_ids: list[int]) -> dict:
+        """拒绝片隔离(⑨③): 文件移入 <库>/隔离区/<操作编号>/, 库path
+        同步更新, 照片记录/识别/评分全保留(sidecar按file_hash键不受
+        影响)。仅处理文件存在且未隔离的照片; 单文件失败不中断整批
+        (计入failed)。绝不覆盖: 隔离目录为新建空目录, 同批同名冲突
+        加序号(文件名无害变化, 实际位置记入quar_path)。"""
+        import shutil
+        import time
+        import uuid
+        ids = list(photo_ids)
+        op = "Q" + time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+        # 隔离区目录名=用户可见路径, 中文目录名(方案⑨③原文); 不入
+        # 翻译(文件系统路径, 与"鸟迹导出"同类)
+        dest_dir = self.root / t("隔离区", "Quarantine") / op
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        moved, failed = [], []
+        used = set()
+        for pid in ids:
+            r = self.conn.execute(
+                "SELECT path, file_hash FROM photos WHERE id=?", (pid,)).fetchone()
+            if not r:
+                failed.append((pid, t("无记录", "No record")))
+                continue
+            src = Path(r["path"])
+            if not src.is_file():
+                failed.append((pid, t("源文件不存在", "Source file missing")))
+                continue
+            qrows = self.conn.execute(
+                "SELECT 1 FROM quarantine WHERE photo_id=? AND restored_at "
+                "IS NULL", (pid,)).fetchall()
+            if qrows:
+                failed.append((pid, t("已在隔离区", "Already quarantined")))
+                continue
+            dest = dest_dir / src.name
+            k = 1
+            while str(dest) in used or dest.exists():
+                dest = dest_dir / f"{src.stem}_{k}{src.suffix}"
+                k += 1
+            try:
+                shutil.move(str(src), str(dest))
+            except OSError as e:
+                failed.append((pid, t(f"移动失败: {e}", f"Move failed: {e}")))
+                continue
+            used.add(str(dest))
+            self.conn.execute(
+                "UPDATE photos SET path=? WHERE id=?", (str(dest), pid))
+            self.conn.execute(
+                "INSERT INTO quarantine(photo_id, op_no, quar_path, "
+                "orig_path, file_hash) VALUES (?,?,?,?,?)",
+                (pid, op, str(dest), r["path"], r["file_hash"]))
+            moved.append(pid)
+        self.conn.commit()
+        return {"op_no": op, "dest": str(dest_dir), "moved": moved,
+                "failed": failed}
+
+    def quarantine_restore(self, qids: list[int]) -> dict:
+        """从隔离区恢复到原路径。原路径已存在文件时拒绝(绝不覆盖同名),
+        由用户处理后再试; 原目录已不存在则重建目录。"""
+        import shutil
+        restored, failed = [], []
+        for qid in list(qids):
+            q = self.conn.execute(
+                "SELECT q.photo_id, q.quar_path, q.orig_path FROM quarantine q "
+                "WHERE q.id=? AND q.restored_at IS NULL", (qid,)).fetchone()
+            if not q:
+                failed.append((qid, t("无此隔离记录或已恢复",
+                                      "No such quarantine record or restored")))
+                continue
+            orig = Path(q["orig_path"])
+            if orig.exists():
+                failed.append((qid, t(f"原路径已被占用: {orig}",
+                                      f"Original path occupied: {orig}")))
+                continue
+            quar = Path(q["quar_path"])
+            if not quar.is_file():
+                failed.append((qid, t(f"隔离文件缺失: {quar}",
+                                      f"Quarantined file missing: {quar}")))
+                continue
+            try:
+                orig.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(quar), str(orig))
+            except OSError as e:
+                failed.append((qid, t(f"恢复失败: {e}", f"Restore failed: {e}")))
+                continue
+            self.conn.execute(
+                "UPDATE photos SET path=? WHERE id=?",
+                (q["orig_path"], q["photo_id"]))
+            self.conn.execute(
+                "UPDATE quarantine SET restored_at=datetime('now','localtime') "
+                "WHERE id=?", (qid,))
+            restored.append(qid)
+        self.conn.commit()
+        return {"restored": restored, "failed": failed}
+
+    def quarantine_list(self) -> list[dict]:
+        """隔离区未恢复条目(管理对话框: 缩略图/原路径/哈希/时间)。"""
+        rows = self.conn.execute(
+            "SELECT q.id, q.photo_id, q.op_no, q.quar_path, q.orig_path, "
+            "q.file_hash, q.moved_at FROM quarantine q "
+            "WHERE q.restored_at IS NULL ORDER BY q.id").fetchall()
+        return [dict(r) for r in rows]
+
+    def split_from_group(self, photo_ids: list[int]) -> int:
+        """人工拆组(⑨④): 所选照片脱离连拍组(group_id=NULL)并锁定;
+        regroup_bursts跳过锁定照片, 组内其余成员照常自动分组。"""
+        ids = [i for i in photo_ids if i]
+        if not ids:
+            return 0
+        q = ",".join("?" * len(ids))
+        cur = self.conn.execute(
+            f"UPDATE photos SET group_id=NULL, group_lock=1 WHERE id IN ({q})",
+            ids)
+        self.conn.commit()
+        return cur.rowcount
+
+    def merge_into_group(self, photo_ids: list[int]) -> int:
+        """人工合组(⑨④): 所选照片(可跨组/含单张)并成一组, 组号沿用
+        'g<组内最小photo_id>'惯例, 整组锁定防重算打散。"""
+        ids = [i for i in photo_ids if i]
+        if len(ids) < 2:
+            return 0
+        gid = f"g{min(ids)}"
+        q = ",".join("?" * len(ids))
+        cur = self.conn.execute(
+            f"UPDATE photos SET group_id=?, group_lock=1 WHERE id IN ({q})",
+            [gid] + ids)
+        self.conn.commit()
+        return cur.rowcount
+
+    def unlock_group(self, photo_ids: list[int]) -> int:
+        """解除人工锁定, 回到自动分组(下次regroup_bursts自然归位)。"""
+        ids = [i for i in photo_ids if i]
+        if not ids:
+            return 0
+        q = ",".join("?" * len(ids))
+        cur = self.conn.execute(
+            f"UPDATE photos SET group_lock=0 WHERE id IN ({q})", ids)
+        self.conn.commit()
+        return cur.rowcount
+
     def set_main_record(self, photo_id: int, record_id: int):
         """把某条识别记录设为该照片的rank=1(主鸟), 其余顺延。"""
         rows = self.conn.execute(
@@ -592,7 +801,8 @@ class Library:
             "SELECT p.id, p.path, p.group_id, p.aesthetic, "
             "  COALESCE(e.dt_original, p.added_at) AS taken_at, "
             "  v0.eff_code AS main_code, sc.cn AS sp_cn, sc.en AS sp_en, "
-            "  st.name AS spot_name, st.short_name AS spot_short "
+            "  st.name AS spot_name, st.short_name AS spot_short, "
+            "  p.rating, p.pick "
             "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
             "  LEFT JOIN (SELECT photo_id, eff_code FROM v_records "
             "             WHERE rank=1 GROUP BY photo_id) v0 "
@@ -608,7 +818,9 @@ class Library:
                  "group_id": r["group_id"], "aesthetic": r["aesthetic"],
                  "main_code": r["main_code"], "sp_cn": r["sp_cn"],
                  "sp_en": r["sp_en"], "spot_name": r["spot_name"],
-                 "spot_short": r["spot_short"]})
+                 "spot_short": r["spot_short"],
+                 "rating": int(r["rating"] or 0),
+                 "pick": r["pick"] or ""})
         return out
 
     # ---------- 鸟种库 / 成就 ----------
@@ -664,7 +876,8 @@ class Library:
             "SELECT v.photo_id, v.path, v.taken_at, p.aesthetic, p.group_id, "
             "  MAX(confidence) AS confidence, "
             "  MAX(reviewed) AS reviewed, MAX(confirmed_code) AS confirmed_code, "
-            "  st.name AS spot_name, st.short_name AS spot_short "
+            "  st.name AS spot_name, st.short_name AS spot_short, "
+            "  p.rating AS rating, p.pick AS pick "
             "FROM v_records v JOIN photos p ON p.id=v.photo_id "
             "  LEFT JOIN spots st ON st.id=p.spot_id "
             "WHERE v.eff_code=? GROUP BY v.photo_id "
@@ -1329,7 +1542,8 @@ class Library:
             "  (SELECT COALESCE(r.confirmed_code, r.species_code) FROM records r "
             "   WHERE r.photo_id=p.id AND r.rank=1 LIMIT 1) AS code, "
             "  p.group_id "
-            "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id").fetchall()
+            "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
+            "WHERE p.group_lock=0").fetchall()
         mapping = group_bursts(({"id": r["id"], "taken_at": r["taken_at"],
                                  "code": r["code"]} for r in rows),
                                self.phash_of)

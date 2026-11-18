@@ -694,6 +694,32 @@ class SpeciesPage(QWidget):
         tab_row = QHBoxLayout()
         tab_row.addWidget(seg)
         tab_row.addStretch(1)
+        # 评分/选片筛选(1.0冲刺①+⑨): 概览网格内过滤, 状态跨鸟种保持
+        from PySide6.QtWidgets import QComboBox
+        if not hasattr(self, "sp_rating_filter"):
+            self.sp_rating_filter = QComboBox()
+            self.sp_rating_filter.addItems([
+                t("评分: 全部", "Rating: all"), t("★1+", "★1+"), t("★2+", "★2+"),
+                t("★3+", "★3+"), t("★4+", "★4+"), t("★5", "★5"),
+                t("未评星", "Unrated")])
+            self.sp_pick_filter = QComboBox()
+            self.sp_pick_filter.addItems([
+                t("选片: 全部", "Pick: all"), t("保留", "Keep"), t("待定", "Pending"),
+                t("拒绝", "Reject"), t("未标", "Unmarked")])
+            self.sp_rating_filter.currentIndexChanged.connect(
+                lambda _: self._show_detail(code, restore=True))
+            self.sp_pick_filter.currentIndexChanged.connect(
+                lambda _: self._show_detail(code, restore=True))
+            self.sp_rating_filter.setCursor(Qt.PointingHandCursor)
+            self.sp_pick_filter.setCursor(Qt.PointingHandCursor)
+            self.sp_rating_filter.setToolTip(t(
+                "只显示达到星级的照片（作用于概览网格）",
+                "Show only photos at or above the stars (overview grid)"))
+            self.sp_pick_filter.setToolTip(t(
+                "只显示所选选片状态的照片（作用于概览网格）",
+                "Show only photos in the picked state (overview grid)"))
+        tab_row.addWidget(self.sp_rating_filter)
+        tab_row.addWidget(self.sp_pick_filter)
         tab_row.addWidget(make_grid_tier_control(
             self.lib, lambda: self._show_detail(code, restore=True)))
         # 宿主widget: 本页清理循环只deleteLater(it.widget()), 裸layout会整行
@@ -883,8 +909,28 @@ class SpeciesPage(QWidget):
         self.win.library_changed.emit()
         self.refresh()
 
+    def _apply_sp_filters(self, photos: list[dict]) -> list[dict]:
+        """鸟种概览的评分/选片过滤(1.0冲刺①+⑨); 筛选在下拉上, 状态跨鸟种保持。"""
+        out = photos
+        if getattr(self, "sp_rating_filter", None) and \
+                self.sp_rating_filter.currentIndex():
+            i = self.sp_rating_filter.currentIndex()
+            if i == 6:      # 未评星
+                out = [p for p in out if not (p.get("rating") or 0)]
+            else:           # ★i+
+                out = [p for p in out if (p.get("rating") or 0) >= i]
+        if getattr(self, "sp_pick_filter", None) and \
+                self.sp_pick_filter.currentIndex():
+            i = self.sp_pick_filter.currentIndex()
+            if i == 4:      # 未标
+                out = [p for p in out if not (p.get("pick") or "")]
+            else:
+                out = [p for p in out if
+                       (p.get("pick") or "") == ("keep", "pending", "reject")[i - 1]]
+        return out
+
     def _render_overview(self, code: str, li):
-        photos = self.lib.photos_of_species(code)
+        photos = self._apply_sp_filters(self.lib.photos_of_species(code))
         # 多选模式下不折叠连拍: 每张都要能单独选中(同时间线的约定)
         if not self._sel_mode and \
                 self.lib.get_setting("burst_collapse", "1") == "1":
@@ -939,7 +985,8 @@ class SpeciesPage(QWidget):
                                               and len(photos) > 1) else None
             item = PhotoGridItem(pm, label=self._cap_date_spot(ph),
                                  corner=corner, stack=ph.get("group_n", 0),
-                                 tile=tile)
+                                 tile=tile, stars=ph.get("rating", 0),
+                                 pick=ph.get("pick", ""))
             item.setCursor(Qt.PointingHandCursor)
             pid = ph["photo_id"]
             if self._sel_mode:

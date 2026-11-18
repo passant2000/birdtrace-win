@@ -147,7 +147,8 @@ def reidentify_group(lib, win, parent, photo_id: int,
 
 
 def make_group_menu(lib, win, photo_id: int, parent_widget, global_pos):
-    """连拍封面/组内右键菜单: 整组改鸟种 / 整组重新识别。无组不弹。"""
+    """连拍封面/组内右键菜单: 整组改鸟种 / 整组重新识别 / 组内对比选片 /
+    拆组(当前照片脱组) / 合组(同时间链邻帧并组) / 恢复自动分组。无组不弹。"""
     ids = group_photo_ids(lib, photo_id)
     if len(ids) < 2:
         return False
@@ -156,9 +157,72 @@ def make_group_menu(lib, win, photo_id: int, parent_widget, global_pos):
     a1 = menu.addAction(t("整组改鸟种…", "Change species for whole burst…"))
     a2 = menu.addAction(t("整组重新识别（多取景）…",
                           "Re-identify burst (multi-crop)…"))
+    menu.addSeparator()
+    a3 = menu.addAction(t("组内对比选片…", "Compare & pick in burst…"))
+    lock_row = lib.conn.execute(
+        "SELECT group_lock FROM photos WHERE id=?", (photo_id,)).fetchone()
+    locked = bool(lock_row and lock_row["group_lock"])
+    a4 = menu.addAction(t("把这张拆出连拍组", "Split this photo out of burst"))
+    a4.setEnabled(not locked)
+    a5 = menu.addAction(t("合并同鸟种相邻帧到本组…",
+                          "Merge adjacent same-species frames…"))
+    a5.setEnabled(not locked)
+    a6 = menu.addAction(t("恢复自动分组", "Restore auto grouping"))
+    a6.setEnabled(locked)
     act = menu.exec(global_pos)
     if act == a1:
         change_group_species(lib, win, parent_widget, photo_id)
     elif act == a2:
         reidentify_group(lib, win, parent_widget, photo_id)
+    elif act == a3:
+        from .compare_dialog import CompareDialog
+        dlg = CompareDialog(lib, win, photo_id)
+        dlg.exec()
+    elif act == a4:
+        lib.split_from_group([photo_id])
+        _after_change(lib, win)
+    elif act == a5:
+        _merge_adjacent(lib, win, parent_widget, photo_id)
+    elif act == a6:
+        lib.unlock_group(ids)
+        from ..db import Library
+        lib.regroup_bursts()
+        _after_change(lib, win)
     return True
+
+
+def _merge_adjacent(lib, win, parent_widget, photo_id: int):
+    """人工合组(⑨④): 把与当前照片同鸟种、拍摄时间相邻(≤2s链)但不在
+    本组的帧并入(通常=曾拆组/哈希链断开的同批帧), 整组锁定。"""
+    row = lib.conn.execute(
+        "SELECT group_id FROM photos WHERE id=?", (photo_id,)).fetchone()
+    gid = row["group_id"] if row else None
+    if not gid:
+        return
+    members = group_photo_ids(lib, photo_id)
+    rows = lib.conn.execute(
+        "SELECT p.id, p.group_id FROM photos p "
+        "LEFT JOIN exif e ON e.photo_id=p.id "
+        "WHERE p.group_id IS NOT NULL AND p.group_id<>? AND p.group_lock=0 "
+        "  AND (SELECT COALESCE(r.confirmed_code, r.species_code) FROM records r "
+        "       WHERE r.photo_id=p.id AND r.rank=1 LIMIT 1) = "
+        "  (SELECT COALESCE(r.confirmed_code, r.species_code) FROM records r "
+        "   WHERE r.photo_id=? AND r.rank=1 LIMIT 1) "
+        "ORDER BY p.id", (gid, photo_id)).fetchall()
+    cands = [r["id"] for r in rows if r["id"] not in members]
+    if not cands:
+        QMessageBox.information(
+            parent_widget, t("合并相邻帧", "Merge adjacent frames"),
+            t("没有找到与当前组鸟种相同、可并入的相邻帧。",
+              "No adjacent same-species frames found to merge."))
+        return
+    if QMessageBox.question(
+            parent_widget, t("合并相邻帧", "Merge adjacent frames"),
+            t(f"把 {len(cands)} 张同鸟种相邻帧并入本组（共 {len(members)+len(cands)}"
+              " 张，整组锁定防重算打散）？",
+              f"Merge {len(cands)} adjacent same-species frame(s) into "
+              f"this burst ({len(members)+len(cands)} total, locked)?")
+            ) != QMessageBox.Yes:
+        return
+    lib.merge_into_group(members + cands)
+    _after_change(lib, win)
