@@ -116,7 +116,7 @@ class SettingsPage(QWidget):
             "BirdTrace DB and sidecar only, original EXIF never touched."))
         cp_hint.setWordWrap(True)
         cp_hint.setObjectName("Hint")
-        form_cp.addRow(cp_hint)
+        form_cp.addWidget(cp_hint)
         lay.addWidget(card_cp)
 
         card2, form2 = make_card(t("识别", "Recognition"))
