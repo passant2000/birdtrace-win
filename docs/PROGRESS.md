@@ -8,6 +8,8 @@
 
 **总纲评议定案（同日）**：ChatGPT 外部总纲全文评议，用户拍板"选择性吸收"并二次修正（外审作者确认误当绿地项目，以 PROGRESS+后续开发方案为准）。**吸收 6 项**：产品定位成文（方案〇节）、自定义标签+专题收藏+常用目录增量扫描（0.9.x 第 14-16 条）、年度摄影年鉴（1.0 主打）、工程纪律成文（DB 渐进迁移七条+便携边界测试清单+1.0 验收清单）。**不采纳 4 项（〇节"勿再提"）**：PhotoSpecies/Sighting/ObservationSession 重构（records 表已同语义：photo×species 多对多+rank/source/confirmed_code/box_json）、repositories/services 分层重构、按外审 P0→P2 顺序重排（其大部已实现）、RAW 收缩出库（与用户 DxO DNG+JPG 工作流冲突；边界改七点精确表述）。后续开发方案.md：新增〇节+基线表刷新至 0.8.6/GitHub/6fa83cd+GitHub 小节标已完成+RAW/DNG 七点边界+现有能力保护段+0.9.x 吸收项 14-16（约束=复用现有体系不引入架构重构）+1.0 方向（年鉴+验收清单收官）；**0.9.0 原序不动**；文档修订=增补不覆盖。
 
+**1.0 冲刺模式（同日用户拍板）**：连续开发 0.9.0→0.9.x→1.0，不再逐版 test 实测（开发快/真机实测慢，最后 1.0-test 大包一并实测、bug 集中修，0.8.6 六轮模式）；**0.8.7 不单独出包**（6fa83cd 四预修+导入失败回滚全部随 1.0-test）；每项功能落地照旧功能级 verify+全量回归绿+commit；动库迁移即时自测、动管线/新依赖项（RAW成对/视频）合成库加压自测。执行模式+开发顺序（①+⑨→②→③→④→⑤→⑥→⑦→⑧→⑩→⑪→⑫→⑬→⑭→⑮→⑯→年鉴）已写入方案四节"1.0 冲刺模式"。
+
 ## 2026-11-18（深夜）· **v0.8.6 转正式：实测通过，commit+tag+GitHub 建仓推送**
 
 用户实测确认 → **79d5ea1 committed（23文件 +9710/−7208）+ tag v0.8.6**。GitHub 建仓 **passant2000/birdtrace-win（私有）**：winget 装 gh CLI，OAuth 设备流两轮（第一轮 repo scope 令牌实际可用；gh `auth login --with-token` 硬性要求 read:org，**gh 保持未登录状态不影响使用**）。**网络要点：api.github.com 与 push 直连必须走本地系统代理 127.0.0.1:7897**（shell 无代理环境变量，curl/git 要显式 `-x`/`http.<url>.proxy`）；**push 绕开 gh-proxy**：全局 gitconfig 把 https://github.com/ 重写到 gh-proxy.com（公共镜像，不支持私有库推送）——仓库远端用 `https://github.com:443/…`（`:443` 前缀不匹配 insteadOf 规则）+ 仓内 `http.https://github.com:443.proxy=127.0.0.1:7897`（已配置，随 .git 共享不入库）。已推 main+dev-0.8.0+全部4个tag，default_branch=dev-0.8.0（API PATCH 设置）。令牌临时文件已删；后续 push 首次会弹 GCM 登录，或自行 `gh auth login` 完整登录。无 LICENSE（私有，暂不需要）。旧包 0.8.2/3/4 目录删除仍待指示。
