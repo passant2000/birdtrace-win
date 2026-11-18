@@ -674,6 +674,45 @@ check(res4["changed"] == [] and res4["meta_only"] >= 1,
 # 错误根: 不误标
 res5 = scan_increment(lib, D / "nonexist_dir")
 check(not res5["ok"] and res5["error"], "根不可访问→error不误标missing")
+
+
+# ---------- [16] RAW/DNG成对编目(1.0冲刺⑧) ----------
+print("[16] RAW成对")
+pair_dir = D / "pairlib"
+pair_dir.mkdir(exist_ok=True)
+import PIL.Image as _PIL3
+def _fresh(src: Path, dst: Path):
+    # RAW位扩展(.dng/.arw)PIL不认——按JPEG编码后落目标名(内容无关, 只要hash新)
+    import io as _io
+    buf = _io.BytesIO()
+    _PIL3.open(src).save(buf, "JPEG", quality=90)
+    dst.write_bytes(buf.getvalue())
+pj = pair_dir / "DSC00001.jpg"
+_fresh(PROJ / "data/test_images/Anas_platyrhynchos.jpg", pj)
+pr = pair_dir / "DSC00001.dng"
+_fresh(PROJ / "data/test_images/Alcedo_atthis.jpg", pr)   # RAW位用图充(内容无关)
+po = pair_dir / "DSC00002.arw"   # 只有RAW无JPG→RAW自己做主文件
+_fresh(PROJ / "data/test_images/Passer_montanus.jpg", po)
+res_i = _if(lib, [pj, pr, po], mode="ref")  # scan_sources收RAW扩展
+check(res_i["added"] == 3, "成对导入3文件全入库(合并前)")
+n_pair = res_i.get("pairs", 0)
+check(n_pair == 1, f"成对合并1组(得{n_pair})")
+jr = lib.conn.execute(
+    "SELECT raw_path, raw_hash FROM photos WHERE path=?",
+    (str(pj.resolve()),)).fetchone()
+check(jr and jr["raw_path"] == str(pr.resolve()), "JPG主文件挂附属RAW路径")
+check(lib.conn.execute(
+    "SELECT COUNT(*) FROM photos WHERE path=?",
+    (str(pr.resolve()),)).fetchone()[0] == 0, "附属RAW独立记录已删(时间线不重复)")
+check(lib.conn.execute(
+    "SELECT COUNT(*) FROM photos WHERE path=?",
+    (str(po.resolve()),)).fetchone()[0] == 1, "纯RAW无JPG→自己当主文件保留")
+# 幂等: 重跑合并不重复
+from app.core.importer import _merge_pairs as _mp
+check(_mp(lib) == 0, "幂等: 已挂raw_path跳过")
+# 全库photo计数=导入数-1对
+check(lib.photo_count() == lib.conn.execute(
+    "SELECT COUNT(*) FROM photos").fetchone()[0], "photo_count口径一致")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

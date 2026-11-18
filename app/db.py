@@ -193,6 +193,13 @@ class Library:
         if "cp_json" not in cols:
             self.conn.execute(
                 "ALTER TABLE photos ADD COLUMN cp_json TEXT")
+        # RAW/DNG附属文件(1.0冲刺⑧): 同名成对(JPG+RAW/DNG)导入时JPG做
+        # 主文件参与识别/美学, RAW挂附属(路径+hash), 识别/美学跳过;
+        # 只有RAW无JPG时RAW自己做主文件照常识别(0.9.0第8条拍板)
+        if "raw_path" not in cols:
+            self.conn.execute("ALTER TABLE photos ADD COLUMN raw_path TEXT")
+        if "raw_hash" not in cols:
+            self.conn.execute("ALTER TABLE photos ADD COLUMN raw_hash TEXT")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_photos_pick ON photos(pick)")
         # 拒绝片隔离区(1.0冲刺⑨③): 文件移入<库>/隔离区/<操作编号>/,

@@ -484,6 +484,12 @@ class PhotoViewer(QDialog):
         if photo.get("gps_lat") is not None and photo.get("gps_lon") is not None:
             lines.append(t(f"GPS：{photo['gps_lat']:.4f}, {photo['gps_lon']:.4f}",
                            f"GPS: {photo['gps_lat']:.4f}, {photo['gps_lon']:.4f}"))
+        # RAW/DNG附属(1.0冲刺⑧): 成对编目后主文件行显示附属位置
+        rp = (photo.get("raw_path") or "").strip()
+        if rp:
+            lines.append(t(
+                f"附属RAW/DNG：{Path(rp).name}",
+                f"Attached RAW/DNG: {Path(rp).name}"))
         self.info.setText("<br/>".join(lines))
 
         self._render_records()

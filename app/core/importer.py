@@ -17,6 +17,12 @@ from PIL import Image, ImageOps
 
 from ..db import Library
 from ..exif import SUPPORTED_EXTS, read_exif
+from .exporter import RAW_EXTS
+
+# 主导入链可收的扩展名=成品图 + RAW/DNG(1.0冲刺⑧成对编目:
+# 同名对JPG做主文件, RAW挂附属; 纯RAW自己当主文件照常识别)
+_IMPORT_EXTS = SUPPORTED_EXTS | RAW_EXTS
+
 from ..i18n import t
 from ..media import ensure_thumbnail, file_hash
 
@@ -29,7 +35,7 @@ def scan_sources(paths: list[Path], recursive: bool = True) -> list[Path]:
     for p in paths:
         p = Path(p).resolve()
         if p.is_file():
-            if p.suffix.lower() in SUPPORTED_EXTS:
+            if p.suffix.lower() in _IMPORT_EXTS:
                 key = str(p).lower()
                 if key not in seen:
                     seen.add(key)
@@ -37,7 +43,7 @@ def scan_sources(paths: list[Path], recursive: bool = True) -> list[Path]:
         elif p.is_dir():
             it = p.rglob("*") if recursive else p.iterdir()
             for f in it:
-                if f.is_file() and f.suffix.lower() in SUPPORTED_EXTS:
+                if f.is_file() and f.suffix.lower() in _IMPORT_EXTS:
                     key = str(f).lower()
                     if key not in seen:
                         seen.add(key)
@@ -163,4 +169,53 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
         stats["sidecar"] = {"restored": 0, "spots": 0, "folders": 0}
     for _pid, _fh, _src in imported:
         lib._sidecar_touch(photo_ids=[_pid])
+    try:
+        stats["pairs"] = _merge_pairs(lib)
+    except Exception:
+        stats["pairs"] = 0
     return stats
+
+
+def _merge_pairs(lib) -> int:
+    """RAW/DNG同名成对编目(1.0冲刺⑧, 0.9.0第8条拍板): 本次导入的新照片
+    里 同目录同stem的 JPG主文件+RAW附属(DxO降噪DNG/相机RAW) → JPG做主
+    文件(识别/美学/缩略图照常, 时间线显示一次), RAW挂 raw_path/raw_hash
+    (附属, 不独立参与识别); 只有RAW无JPG时RAW自己当主文件照常识别。
+    历史库不受影响(只处理本次导入, 幂等: raw_path已挂的跳过)。"""
+    raw_exts = {".arw", ".cr2", ".cr3", ".nef", ".raf", ".orf", ".rw2",
+                ".dng", ".pef", ".srw", ".kdc", ".dcr"}
+    img_exts = {".jpg", ".jpeg"}
+    # 扫全库未挂raw且成对的(jpg侧)——幂等安全(已挂raw_path的jpg跳过)
+    rows = lib.conn.execute(
+        "SELECT id, path, file_hash FROM photos WHERE raw_path IS NULL").fetchall()
+    by_key = {}
+    for r in rows:
+        p = Path(r["path"])
+        by_key.setdefault((str(p.parent).lower(), p.stem.lower(), p.suffix.lower()),
+                          r)
+    n = 0
+    used_raw = set()
+    for (d, stem, ext), r in by_key.items():
+        if ext not in img_exts:
+            continue
+        for rext in raw_exts:
+            mate = by_key.get((d, stem, rext))
+            if mate and mate["id"] not in used_raw:
+                lib.conn.execute(
+                    "UPDATE photos SET raw_path=?, raw_hash=? WHERE id=?",
+                    (mate["path"], mate["file_hash"], r["id"]))
+                # 附属行删除: 识别记录/EXIF/标签/作品集关联显式清(与
+                # remove_photo同口径), 避免时间线重复出现
+                for sql in ("DELETE FROM records WHERE photo_id=?",
+                            "DELETE FROM exif WHERE photo_id=?",
+                            "DELETE FROM photo_tags WHERE photo_id=?",
+                            "DELETE FROM collection_photos WHERE photo_id=?",
+                            "DELETE FROM photos WHERE id=?"):
+                    lib.conn.execute(sql, (mate["id"],))
+                lib._sidecar_touch(photo_ids=[r["id"]])
+                used_raw.add(mate["id"])
+                n += 1
+                break
+    if n:
+        lib.conn.commit()
+    return n
