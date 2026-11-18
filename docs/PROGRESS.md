@@ -2,6 +2,20 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-18（深夜冲刺开跑）· **1.0冲刺①+⑨：选片工作流（culling）全套落地，commit e688bde**
+
+**数据层（只加不改，〇节迁移纪律）**：photos 加 pick(''/keep/pending/reject)/pick_note/group_lock 三列（_migrate 自动补列+idx_photos_pick）+新 quarantine 表（photo_id/op_no/quar_path/orig_path/file_hash/moved_at/restored_at）；set_rating（0~5 越界夹取不抛）/set_pick（非法值 ValueError、清态同清备注）/quarantine_move·restore·list/split_from_group·merge_into_group·unlock_group 七方法；**隔离区=<库>/隔离区(目录名走t())/Q<时间戳>-<rand>/**，文件移动+库path同步+识别评分标注全保留（sidecar 按hash键天然不受影响）；restore 原路径被占**拒绝绝不覆盖**、目录缺失自动重建、无永久删除；db.py 头部"绝不移动原文件"原则更新=唯一例外为用户显式授权操作（原地重命名+隔离区先例）。**group_lock 防重算打散**：regroup_bursts SELECT WHERE group_lock=0（锁定照片完全退出重算），人工拆合组跨重跑持久。
+
+**sidecar**：build_entries 非空才写 pick/pick_note；apply_entry 已有编辑优先同 rating 款（本地已标不动/空才补）；旧格式（无 pick 字段）读回不崩。
+
+**UI**：①时间线头部两下拉（评分★1+~★5/未评星 × 选片全部/保留/待定/拒绝/未标——只动视图与鸟种胶囊叠加）+多选工具条「标记…」QMenu（三态+星级1~5+清除）+「隔离区…」（QuarantineDialog=顶部待移入预览清单含SHA-256前段+确认→移入；下方已隔离列表+恢复所选；部分失败逐条报原因）；快捷键 1~5/0/K/P/X/U 绑 _setup_shortcuts（handler 自查 _select_mode+_selected+isVisible——时间线无文本输入框单键安全；标记后**就地更新网格角标**避整页重建，筛选激活时才 force refresh）。②PhotoGridItem 加 stars/pick 参数：左上★金星胶囊（右上被已导入/首见占用）、左下三态色点（keep绿#34C759/pending橙#FF9F0A/reject红#FF453A）+reject红边框。③查看器右栏「选片」块=星级钮行(36px checked金星)+三态钮行(checked彩底)+备注QLineEdit（**textEdited 记 _note_pid→editingFinished 提交——程序化 setText 触发 textChanged 不触发 textEdited，切图不误写**）+快捷键同时间线；photo_detail 的 p.* 天然带新列。④CompareDialog 组内对比：左右 ZoomableView 并排（滚轮缩放/双击复位独立）、A格=浏览帧（←→）B格=推荐序席、推荐三档模式（**稳妥=框高比极差>0.5 不荐交人工/辅助=顺序+风险提示（无识别/低置信）/宽松=荐3须复核**；因子=美学×置信；**推荐永不自动写标注**）；打星/三态作用于 A 格。⑤组菜单（make_group_menu）加：组内对比选片…/把这张拆出连拍组/合并同鸟种相邻帧…（同种+他组未锁→确认并入整组锁定）/恢复自动分组（锁定组才enable）。⑥导出向导选片下拉（**默认"排除拒绝片"**/全部/仅保留/仅待定/仅拒绝——exporter.select_range 加 pick_filter 参数 '!reject' 语义=pick<>'reject' 含未标）+鸟种概览 tab_row 两个筛选下拉（_apply_sp_filters，状态跨鸟种保持）。verify_i18n 注册 quarantine/compare 两对话框+**豁免机制扩展=库内照片文件名 stem 加入数据白名单（文件名=用户数据不翻译，方案二节第4条）**。
+
+**验证**：新 tools/verify_culling.py **70+断言 ALL PASS**（迁移幂等/评分三态/越界夹取/非法拒绝/sidecar导出+已有编辑优先+旧格式/隔离区移动恢复绝不覆盖+记录保留/拆合组+重算锁定保护/exporter四态/UI冒烟含 compare 推荐三档触发）；**全量回归24项绿**（sidecar/export/batch_ops/burst_ops/burst/count_logic/timeline_select(-u)/chips/cols/grid_tiers/spot_detail/offline/relink(exit0静默型)/share_dialog/batch_share/best18/multibird/rebox/concurrent(scroll_restore)/nav_drag/import_confirm/rerecog_region/rarity_score/dex_features/feedback2/e2e）+i18n两道 CLEAN+smoke EXIT=0。
+
+**坑五枚**：①verify 数据同图×4=同 file_hash→sidecar 按 hash 键被末条覆盖，断言挂——**实现没错测试数据错**，换 4 张不同图（识别记录手工插不依赖图片内容）；②add_photo 相对路径→dirname 空串→sidecar 标脏"."写到工作目录——verify 数据一律 .resolve()；③theme.LINE 不存在（是 SEP）——py_compile 不查属性名，**引用新 theme 常量先 grep**；④QShortcut 单键绑页面级需 handler 自查 isVisible（QStackedWidget 隐藏页）；⑤quarantine_restore 传 int 非 list——**新 API 签名约定 photo_ids/qids 一律 list**。
+
+**未做（如实标注）**：①对比对话框的 50/100/200% 定比档位按钮——滚轮+双击复位已达"原像素并排对比"语义，定比档属增强，1.0 冻结候选版不带；②隔离区照片在时间线的显示态无特殊角标（path 有效不算 missing，语义=仍在库）；③verify 稳妥模式未造出 box_ratio 极差>0.5 的真 varied 触发（手工 box 高 800→1700/图高差未过阈）——降级分支代码在、宽松/辅助分支已验，varied 真触发待真实数据。
+
 ## 2026-11-18（深夜）· **0.8.7 预修条目补录（commit 6fa83cd 已在）+ 总纲评议定案**
 
 **0.8.7 预修（ChatGPT 外审采纳，6fa83cd 已推 dev-0.8.0；本条补录）**：外审审 sidecar/导入/DB 数据流，5 条核验=4 属实 1 加固——①`flush_sidecars` 失败一律保留脏标记（旧逻辑只在目录不存在时保留，只读盘/权限/杀软拦截下静默丢标记）+`export_folder` 空内容改成功空操作（旧返回 None 会被新 flush 当失败→脏标记死循环）；②`set_aesthetic` 补 commit——**全库唯一漏 commit 方法**（db.py connect 无 isolation_level=python sqlite3 默认延迟事务，美学 worker 独立线程独立连接，不 commit 退出即回滚丢分）；③`update_spot` 补 sidecar 同步（改鸟点名/坐标后 sidecar 留旧值，换机导入回填旧信息；delete_spot 早有同款）；④`_write_atomic` 唯一临时名 uuid8（加固；现行 flush 已被 _sc_lock 串行化，非现行 bug）。verify_sidecar 新增[7]六断言（monkeypatch 写失败→脏标记保留/恢复后清零/set_aesthetic 关库重开仍在/update_spot 标脏/**spot 字段是字典非字符串**）+viewer/batch_ops/e2e 回归绿。**延后项：导入失败回滚 0.8.7 做（copy/move 先物理后登记，登记失败无回滚，move 源已失联需导入事务设计）；sidecar 冲突策略 0.9 设计（两机同改同 hash 条目=最后写入覆盖，可加编辑来源+冲突提示；updated_at 字段已存在）。注意：正在上传的 0.8.6 zip=修复前构建不含四点，随 0.8.7 出包。**
