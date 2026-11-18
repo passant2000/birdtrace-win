@@ -435,6 +435,8 @@ class ImportPage(QWidget):
             QMessageBox.information(
                 self, t("扫描完成", "Scan done"),
                 t("没有发现变化。", "Nothing changed."))
+
+    def _load_spots(self):
         """刷新鸟点下拉, 尽量保持当前选择。"""  # i18n:ok docstring
         cur = self.spot_combo.currentData()
         self.spot_combo.blockSignals(True)
