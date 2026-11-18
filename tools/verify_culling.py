@@ -454,6 +454,69 @@ br.close()
 # 最美照归集查询门(复用best_share_cards: 确认或≥0.5)
 cards = lib.best_share_cards("2026-05-01", "2026-06-30", per_species=1)
 check(len(cards) >= 1, "最美照归集查询有结果(门=确认或≥0.5)")
+
+
+# ---------- [11] 标签/作品集(1.0冲刺⑭⑮) ----------
+print("[11] 标签/作品集")
+tid = lib.tag_create("飞行")
+tid2 = lib.tag_create("逆光")
+check(tid != tid2, "建标签")
+check(lib.tag_create("飞行") == tid, "同名建标签幂等")
+lib.photo_tags_set(pids[0], ["飞行", "逆光"])
+check(sorted(lib.tags_of(pids[0])) == ["逆光", "飞行"], "打标两枚")
+lib.photo_tags_set(pids[0], ["飞行"])
+check(lib.tags_of(pids[0]) == ["飞行"], "差量同步: 未列的标签被移除")
+tl2 = lib.tags_list()
+name_map = {x["name"]: x["n"] for x in tl2}
+check(name_map["飞行"] == 1 and name_map["逆光"] == 0, "使用计数正确")
+# sidecar 导出含 tags + 读回回填(本地无标签才吃)
+lib._sc_dirty = set()
+lib._sidecar_touch(photo_ids=[pids[0]])
+lib.flush_sidecars()
+from app.core import sidecar as _sc
+h0 = lib.conn.execute("SELECT file_hash FROM photos WHERE id=?",
+                      (pids[0],)).fetchone()["file_hash"]
+sc2 = _sc.read_sidecar(str(D))
+check(sc2[h0].get("tags") == ["飞行"], "sidecar 导出含 tags")
+lib.photo_tags_set(pids[0], [])
+check(lib.tags_of(pids[0]) == [], "本地清空")
+done = _sc.apply_entry(lib, pids[0], sc2[h0])
+check(done.get("tags") and lib.tags_of(pids[0]) == ["飞行"],
+      "sidecar 读回回填 tags(本地空才吃)")
+lib.photo_tags_set(pids[0], ["飞行"])
+done = _sc.apply_entry(lib, pids[0], {**sc2[h0], "tags": ["虚构标"]})
+check(lib.tags_of(pids[0]) == ["飞行"], "本地已有标签→不覆盖(已有编辑优先)")
+# 作品集
+cid = lib.collection_create("猛禽作品集")
+check(lib.collection_create("猛禽作品集") == cid, "同名建集幂等")
+mem = lib.collection_photos_of(cid)
+lib.collection_set_photos(cid, mem + pids[:2])
+check(set(lib.collection_photos_of(cid)) >= {pids[0], pids[1]},
+      "加入作品集")
+check([c["name"] for c in lib.collections_of(pids[0])] == ["猛禽作品集"],
+      "照片→作品集反查")
+lib.collection_set_photos(cid, [p for p in mem if p not in pids[:2]])
+check(pids[0] not in lib.collection_photos_of(cid), "移出作品集")
+# 删除照片时关联表清干净(线程连接无PRAGMA, 级联不可靠→显式删)
+lib.photo_tags_set(pids[0], ["飞行"])
+lib.remove_photo(pids[0])
+check(not lib.conn.execute(
+    "SELECT 1 FROM photo_tags WHERE photo_id=?", (pids[0],)).fetchone(),
+    "移除照片后 photo_tags 清干净")
+check(not lib.conn.execute(
+    "SELECT 1 FROM collection_photos WHERE photo_id=?",
+    (pids[0],)).fetchone(), "移除照片后 collection_photos 清干净")
+# UI 冒烟
+from app.ui.tag_pick_dialog import TagPickDialog
+tp = TagPickDialog(lib, win, pids[1])
+check(len(tp.tag_checks) >= 1, "标签勾选列表")
+check(len(tp.col_checks) >= 1, "作品集勾选列表")
+tp.close()
+tl3 = TimelinePage(lib, win)
+tl3.refresh(force=True)
+check(tl3.tag_filter.count() >= 2,
+      "时间线标签筛选下拉(refresh后填充标签项)")
+tl3.close()
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

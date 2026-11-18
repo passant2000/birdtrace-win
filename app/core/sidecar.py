@@ -126,6 +126,13 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
             entry["pick"] = r["pick"]
             if r["pick_note"]:
                 entry["pick_note"] = r["pick_note"]
+        # 自定义标签(1.0冲刺⑭): 随文件夹走(多机互通); 作品集是库内
+        # 策展语义不进sidecar(两机同改冲突面大, 1.0不跨机)
+        tags = [t2["name"] for t2 in lib.conn.execute(
+            "SELECT t.name FROM tags t JOIN photo_tags pt ON pt.tag_id=t.id "
+            "WHERE pt.photo_id=? ORDER BY t.name", (r["id"],)).fetchall()]
+        if tags:
+            entry["tags"] = tags
         out[r["file_hash"]] = entry
     return out
 
@@ -182,7 +189,7 @@ def _resolve_spot(lib, spot: dict) -> int | None:
 def apply_entry(lib, photo_id: int, entry: dict) -> dict:
     """把 sidecar 条目回填到本地照片(已有编辑优先)。返回各字段是否应用。"""
     done = {"records": False, "no_bird": False, "rating": False,
-            "aesthetic": False, "spot": False, "pick": False}
+            "aesthetic": False, "spot": False, "pick": False, "tags": False}
     p = lib.conn.execute(
         "SELECT rating, rec_fail, aesthetic, spot_id, pick FROM photos "
         "WHERE id=?", (photo_id,)).fetchone()
@@ -243,6 +250,17 @@ def apply_entry(lib, photo_id: int, entry: dict) -> dict:
             "UPDATE photos SET pick=?, pick_note=? WHERE id=?",
             (entry["pick"], entry.get("pick_note") or "", photo_id))
         done["pick"] = True
+    # 标签(1.0冲刺⑭): 本地无标签时才回填(已有编辑优先——本地已打标
+    # 的照片不吃机器B的标签集)
+    if entry.get("tags") and not lib.conn.execute(
+            "SELECT 1 FROM photo_tags WHERE photo_id=? LIMIT 1",
+            (photo_id,)).fetchone():
+        for name in entry["tags"]:
+            tid = lib.tag_create(str(name))
+            lib.conn.execute(
+                "INSERT OR IGNORE INTO photo_tags(photo_id, tag_id) "
+                "VALUES(?,?)", (photo_id, tid))
+        done["tags"] = True
     if entry.get("aesthetic") is not None and p["aesthetic"] is None:
         lib.conn.execute("UPDATE photos SET aesthetic=? WHERE id=?",
                          (float(entry["aesthetic"]), photo_id))

@@ -201,6 +201,40 @@ class Library:
                 "file_hash TEXT NOT NULL,"
                 "moved_at TEXT DEFAULT (datetime('now','localtime')),"
                 "restored_at TEXT)")
+        # 自定义标签/作品集(1.0冲刺⑭⑮, 外部总纲吸收项): 照片↔标签/
+        # 照片↔作品集双多对多; 标签扁平无层级无颜色(拍板), 作品集名
+        # 避开星级"收藏"撞名(拍板)
+        if not self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='tags'").fetchone():
+            self.conn.execute(
+                "CREATE TABLE tags("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "name TEXT NOT NULL UNIQUE)")
+            self.conn.execute(
+                "CREATE TABLE photo_tags("
+                "photo_id INTEGER NOT NULL REFERENCES photos(id) "
+                "  ON DELETE CASCADE,"
+                "tag_id INTEGER NOT NULL REFERENCES tags(id) "
+                "  ON DELETE CASCADE,"
+                "PRIMARY KEY(photo_id, tag_id))")
+        if not self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='collections'").fetchone():
+            self.conn.execute(
+                "CREATE TABLE collections("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "name TEXT NOT NULL UNIQUE,"
+                "created_at TEXT DEFAULT (datetime('now','localtime')))")
+            self.conn.execute(
+                "CREATE TABLE collection_photos("
+                "collection_id INTEGER NOT NULL REFERENCES collections(id) "
+                "  ON DELETE CASCADE,"
+                "photo_id INTEGER NOT NULL REFERENCES photos(id) "
+                "  ON DELETE CASCADE,"
+                "sort_order INTEGER DEFAULT 0,"
+                "added_at TEXT DEFAULT (datetime('now','localtime')),"
+                "PRIMARY KEY(collection_id, photo_id))")
         self._dedupe_records()
 
     def _dedupe_records(self):
@@ -455,6 +489,124 @@ class Library:
             "SELECT 1 FROM records WHERE photo_id=? AND (reviewed=1 OR "
             "confirmed_code IS NOT NULL) LIMIT 1", (photo_id,)).fetchone()
         return bool(row)
+
+    # ---------- 标签/作品集(1.0冲刺⑭⑮) ----------
+
+    def tags_list(self) -> list[dict]:
+        """全部标签+使用计数(名称升序; 用户数据名不翻译)。"""
+        rows = self.conn.execute(
+            "SELECT t.id, t.name, COUNT(pt.photo_id) AS n FROM tags t "
+            "LEFT JOIN photo_tags pt ON pt.tag_id=t.id "
+            "GROUP BY t.id ORDER BY t.name").fetchall()
+        return [dict(r) for r in rows]
+
+    def tag_create(self, name: str) -> int:
+        """建标签(同名幂等, 返回tag_id)。"""
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("empty tag name")
+        self.conn.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (name,))
+        self.conn.commit()
+        return self.conn.execute(
+            "SELECT id FROM tags WHERE name=?", (name,)).fetchone()["id"]
+
+    def tag_delete(self, tag_id: int):
+        """删标签(关联随ON DELETE CASCADE; 主连接才可靠, 显式双删)。"""
+        self.conn.execute("DELETE FROM photo_tags WHERE tag_id=?", (tag_id,))
+        self.conn.execute("DELETE FROM tags WHERE id=?", (tag_id,))
+        self.conn.commit()
+
+    def tags_of(self, photo_id: int) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT t.name FROM tags t JOIN photo_tags pt ON pt.tag_id=t.id "
+            "WHERE pt.photo_id=? ORDER BY t.name", (photo_id,)).fetchall()
+        return [r["name"] for r in rows]
+
+    def photo_tags_set(self, photo_id: int, names: list[str]):
+        """整批设置照片标签(差量同步; 标签名不存在则顺手建)。"""
+        want = [n.strip() for n in (names or []) if n.strip()]
+        have = {r["tag_id"]: r["name"] for r in self.conn.execute(
+            "SELECT t.id AS tag_id, t.name FROM tags t "
+            "JOIN photo_tags pt ON pt.tag_id=t.id WHERE pt.photo_id=?",
+            (photo_id,)).fetchall()}
+        for name in want:
+            tid = self.tag_create(name)
+            if tid not in have:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO photo_tags(photo_id, tag_id) "
+                    "VALUES(?,?)", (photo_id, tid))
+        want_names = set(want)
+        for tid, name in have.items():
+            if name not in want_names:
+                self.conn.execute(
+                    "DELETE FROM photo_tags WHERE photo_id=? AND tag_id=?",
+                    (photo_id, tid))
+        self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
+
+    def collections_list(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT c.id, c.name, c.created_at, "
+            "  COUNT(cp.photo_id) AS n FROM collections c "
+            "LEFT JOIN collection_photos cp ON cp.collection_id=c.id "
+            "GROUP BY c.id ORDER BY c.created_at DESC, c.id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+    def collection_create(self, name: str) -> int:
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("empty collection name")
+        self.conn.execute(
+            "INSERT OR IGNORE INTO collections(name) VALUES(?)", (name,))
+        self.conn.commit()
+        return self.conn.execute(
+            "SELECT id FROM collections WHERE name=?", (name,)).fetchone()["id"]
+
+    def collection_delete(self, collection_id: int):
+        """删作品集(成员关系随删, 照片记录不受影响)。"""
+        self.conn.execute(
+            "DELETE FROM collection_photos WHERE collection_id=?",
+            (collection_id,))
+        self.conn.execute("DELETE FROM collections WHERE id=?",
+                          (collection_id,))
+        self.conn.commit()
+
+    def collection_photos_of(self, collection_id: int) -> list[int]:
+        rows = self.conn.execute(
+            "SELECT photo_id FROM collection_photos WHERE collection_id=? "
+            "ORDER BY sort_order, photo_id", (collection_id,)).fetchall()
+        return [r["photo_id"] for r in rows]
+
+    def collections_of(self, photo_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT c.id, c.name FROM collections c "
+            "JOIN collection_photos cp ON cp.collection_id=c.id "
+            "WHERE cp.photo_id=? ORDER BY c.name", (photo_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def collection_set_photos(self, collection_id: int, photo_ids: list[int]):
+        """整批重设作品集成员(差量同步; 追加的sort_order=当前max+序)。"""
+        have = {r["photo_id"] for r in self.conn.execute(
+            "SELECT photo_id FROM collection_photos WHERE collection_id=?",
+            (collection_id,)).fetchall()}
+        nxt = self.conn.execute(
+            "SELECT IFNULL(MAX(sort_order),0)+1 FROM collection_photos "
+            "WHERE collection_id=?", (collection_id,)).fetchone()[0]
+        want = list(dict.fromkeys(photo_ids or []))
+        for pid in want:
+            if pid not in have:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO collection_photos(collection_id,"
+                    "photo_id,sort_order) VALUES(?,?,?)",
+                    (collection_id, pid, nxt))
+                nxt += 1
+        want_set = set(want)
+        for pid in have:
+            if pid not in want_set:
+                self.conn.execute(
+                    "DELETE FROM collection_photos WHERE collection_id=? "
+                    "AND photo_id=?", (collection_id, pid))
+        self.conn.commit()
 
     def set_confirmed(self, record_id: int, code: str | None):
         """人工确认/纠正: 写confirmed_code并标记已复核。"""
@@ -771,6 +923,9 @@ class Library:
         # 外键级联依赖PRAGMA(连接级), 显式删干净
         self.conn.execute("DELETE FROM records WHERE photo_id=?", (photo_id,))
         self.conn.execute("DELETE FROM exif WHERE photo_id=?", (photo_id,))
+        self.conn.execute("DELETE FROM photo_tags WHERE photo_id=?", (photo_id,))
+        self.conn.execute("DELETE FROM collection_photos WHERE photo_id=?",
+                          (photo_id,))
         self.conn.execute("DELETE FROM photos WHERE id=?", (photo_id,))
         self.conn.commit()
         d = self.root / "thumbnails" / fhash[:2]

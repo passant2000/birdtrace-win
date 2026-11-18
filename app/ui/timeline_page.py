@@ -155,6 +155,12 @@ class TimelinePage(QWidget):
         self.pick_filter.currentIndexChanged.connect(
             lambda _: self.refresh(force=True))
         fbar.addWidget(self.pick_filter)
+        self.tag_filter = QComboBox()
+        self.tag_filter.addItem(t("标签: 全部", "Tags: all"), None)
+        self.tag_filter.setCursor(Qt.PointingHandCursor)
+        self.tag_filter.currentIndexChanged.connect(
+            lambda _: self.refresh(force=True))
+        fbar.addWidget(self.tag_filter)
         fbar.addStretch(1)
         lay.addLayout(fbar)
 
@@ -230,6 +236,16 @@ class TimelinePage(QWidget):
             "files, no permanent delete)"))
         self.quar_btn.clicked.connect(self._open_quarantine)
         sb.addWidget(self.quar_btn)
+        # 加入作品集(1.0冲刺⑮): 选中集追加, 也可现场新建
+        self.col_btn = QPushButton(t("加入作品集…", "Add to collection…"))
+        self.col_btn.setCursor(Qt.PointingHandCursor)
+        self.col_btn.setToolTip(t(
+            "把选中的照片加入一个作品集（猛禽专题/某次旅行…自建），"
+            "可现场新建；一个作品可属于多个作品集",
+            "Add selected photos to a collection (create on the fly); "
+            "one photo can belong to many"))
+        self.col_btn.clicked.connect(self._add_to_collection)
+        sb.addWidget(self.col_btn)
         self.rm_btn = QPushButton(t("从鸟迹移除…", "Remove from BirdTrace…"))
         self.rm_btn.setStyleSheet(
             "QPushButton{color:#FF3B30;background:transparent;"
@@ -332,6 +348,55 @@ class TimelinePage(QWidget):
         """观鸟记录中心导出(1.0冲刺④): CSV上报行+最美照归集。"""
         from .birdreport_dialog import BirdReportDialog
         BirdReportDialog(self.lib, self.win).exec()
+
+    # ---------- 标签/作品集(1.0冲刺⑭⑮) ----------
+    def _refresh_tag_filter(self):
+        """标签下拉重填(保留当前选中; refresh 前调用)。"""
+        cur = self.tag_filter.currentData()
+        self.tag_filter.blockSignals(True)
+        self.tag_filter.clear()
+        self.tag_filter.addItem(t("标签: 全部", "Tags: all"), None)
+        for tg in self.lib.tags_list():
+            self.tag_filter.addItem(f"{tg['name']} ({tg['n']})", tg["id"])
+        idx = self.tag_filter.findData(cur)
+        self.tag_filter.setCurrentIndex(idx if idx >= 0 else 0)
+        self.tag_filter.blockSignals(False)
+
+    def _add_to_collection(self):
+        ids = sorted(self._selected)
+        if not ids:
+            return
+        from PySide6.QtWidgets import QInputDialog, QMenu
+        m = QMenu(self.col_btn)
+        cols = self.lib.collections_list()
+        for c in cols[:12]:
+            m.addAction(f"{c['name']} ({c['n']})",
+                        lambda _c=c: self._apply_collection(_c["id"], ids))
+        if cols:
+            m.addSeparator()
+        m.addAction(t("新建作品集…", "New collection…"),
+                    lambda: self._apply_collection(None, ids))
+        m.exec(self.col_btn.mapToGlobal(
+            self.col_btn.rect().bottomLeft()))
+
+    def _apply_collection(self, col_id, ids):
+        from PySide6.QtWidgets import QInputDialog
+        if col_id is None:
+            name, ok = QInputDialog.getText(
+                self, t("新建作品集", "New collection"),
+                t("作品集名称：", "Collection name:"))
+            if not ok or not name.strip():
+                return
+            col_id = self.lib.collection_create(name)
+        name = next((c["name"] for c in self.lib.collections_list()
+                     if c["id"] == col_id), "?")
+        mem = self.lib.collection_photos_of(col_id)
+        self.lib.collection_set_photos(col_id, mem + ids)
+        n_added = len([i for i in ids if i not in mem])
+        QMessageBox.information(
+            self, t("加入作品集", "Add to collection"),
+            t(f"已把 {n_added} 张加入「{name}」。",
+              f"Added {n_added} photo(s) to {name}."))
 
     # ---------- 多选模式 ----------
     def _toggle_select(self):
@@ -836,6 +901,8 @@ class TimelinePage(QWidget):
     def refresh(self, force: bool = False):
         if not force and self._tl_sig == self._data_sig():
             return
+        if hasattr(self, "tag_filter"):
+            self._refresh_tag_filter()
         # 重建前记住位置: 识别完成/库变化刷新时用户可能正浏览, 不跳顶
         self._keep_scroll = self.scroll.verticalScrollBar().value()
         self._grid_items = {}
@@ -873,6 +940,15 @@ class TimelinePage(QWidget):
             else:
                 raw = {ym: [p for p in v if (p.get("pick") or "") == want]
                        for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
+        # 标签筛选(1.0冲刺⑭): 批量map避免逐张查询
+        ti = self.tag_filter.currentIndex() if hasattr(self, "tag_filter") else 0
+        if ti:
+            tag_id = self.tag_filter.itemData(ti)
+            tagged = {r["photo_id"] for r in self.lib.conn.execute(
+                "SELECT photo_id FROM photo_tags WHERE tag_id=?", (tag_id,))}
+            raw = {ym: [p for p in v if p["id"] in tagged]
+                   for ym, v in raw.items()}
             raw = {ym: v for ym, v in raw.items() if v}
         counts = {ym: len(v) for ym, v in raw.items()}
         if self._collapse_on():

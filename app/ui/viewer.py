@@ -291,6 +291,23 @@ class PhotoViewer(QDialog):
         pl.addWidget(self.pick_note_edit)
         self._note_pid = None
 
+        # 标签/作品集(1.0冲刺⑭⑮): 一行展示+编辑入口(勾选式编辑器)
+        tag_row = QHBoxLayout()
+        self.tags_lab = QLabel("")
+        self.tags_lab.setWordWrap(True)
+        self.tags_lab.setStyleSheet(f"font-size:12px;color:{theme.LABEL_2};"
+                                    "background:transparent;")
+        tag_row.addWidget(self.tags_lab, 1)
+        self.tag_edit_btn = QPushButton(t("标签/作品集…", "Tags…"))
+        self.tag_edit_btn.setCursor(Qt.PointingHandCursor)
+        self.tag_edit_btn.setToolTip(t(
+            "编辑本照片的自定义标签(飞行/捕食/逆光…自建)与所属作品集",
+            "Edit custom tags (flight/hunting/backlight…) and collections "
+            "for this photo"))
+        self.tag_edit_btn.clicked.connect(self._edit_tags)
+        tag_row.addWidget(self.tag_edit_btn)
+        pl.addLayout(tag_row)
+
         pl.addStretch(1)
 
         # 连拍组级操作(0.8.6用户: 连拍一组都识别错): 当前照片属于连拍组
@@ -471,6 +488,7 @@ class PhotoViewer(QDialog):
 
         self._render_records()
         self._sync_pick_ui()
+        self._sync_tags_lab()
 
     # ---------- 选片(1.0冲刺①+⑨) ----------
     def _rate(self, n: int):
@@ -534,6 +552,27 @@ class PhotoViewer(QDialog):
             self.pick_note_edit.setText(
                 (self.photo or {}).get("pick_note") or "")
             self.pick_note_edit.blockSignals(False)
+
+    def _edit_tags(self):
+        if not self.photo:
+            return
+        from .tag_pick_dialog import TagPickDialog
+        pid = self.ids[self.index]
+        dlg = TagPickDialog(self.lib, self.win, pid)
+        dlg.exec()
+        self._sync_tags_lab()
+
+    def _sync_tags_lab(self):
+        pid = self.ids[self.index]
+        tags = self.lib.tags_of(pid)
+        cols = [c["name"] for c in self.lib.collections_of(pid)]
+        parts = []
+        if tags:
+            parts.append(t("标签: ", "Tags: ") + "、".join(tags))
+        if cols:
+            parts.append(t("作品集: ", "Collections: ") + "、".join(cols))
+        self.tags_lab.setText("\n".join(parts) or
+                              t("（未打标签）", "(no tags)"))
 
     def _path_clicked(self, link: str):
         """点击路径: 资源管理器打开所在文件夹并选中该文件。"""
