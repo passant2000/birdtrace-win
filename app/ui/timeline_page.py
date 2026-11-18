@@ -679,12 +679,14 @@ class TimelinePage(QWidget):
         r = QMessageBox.question(
             self, t("批量重新识别", "Batch re-identify"),
             t(f"对选中的 {len(ids)} 张照片重新识别？\n\n"
-              "现有的识别结果（包括人工确认/改过的鸟种）会被覆盖，"
-              "按照片导入时的地区重新识别。",
+              "下一步可选识别范围：增量模式只跑未识别/待复核/低置信，"
+              "人工确认过的完全不动；全量模式会覆盖包括人工确认在内的"
+              "全部识别结果，按照片导入时的地区重新识别。",
               f"Re-identify the {len(ids)} selected photos?\n\n"
-              "Existing recognition results (including manually confirmed or "
-              "corrected species) will be overwritten and re-identified using "
-              "the region recorded when each photo was imported."),
+              "Scope is chosen next: incremental runs only unidentified/"
+              "pending/low-confidence photos and never touches manually "
+              "confirmed ones; full re-run overwrites all results including "
+              "manual confirmations, using each photo's import region."),
             QMessageBox.Yes | QMessageBox.No)
         if r != QMessageBox.Yes:
             return
@@ -694,6 +696,15 @@ class TimelinePage(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle(t("识别地区与鸟点", "Region & spot"))
         form = QFormLayout(dlg)
+        # 识别范围(1.0冲刺②): 默认增量=不动人工确认(安全默认);
+        # 全量=旧行为(覆盖人工确认, 确认框已警告)
+        scope_combo = QComboBox()
+        scope_combo.addItem(t("增量：只跑未识别/待复核/低置信",
+                              "Incremental: unidentified/pending/low conf only"),
+                            "pending")
+        scope_combo.addItem(t("全量：覆盖全部（含人工确认）",
+                              "Full: overwrite all (incl. manual)"), "all")
+        form.addRow(t("识别范围", "Scope"), scope_combo)
         regions_mod = __import__("app.core.regions", fromlist=["regions"])
         reg_combo = QComboBox()
         q2 = ",".join("?" * len(ids))
@@ -745,11 +756,20 @@ class TimelinePage(QWidget):
             self.lib.conn.commit()
         if spot_choice != "keep":
             self.lib.set_photos_spot(ids, spot_choice)
-        self.lib.reset_recognition(ids)
+        scope = scope_combo.currentData() or "pending"
+        reset_ids = self.lib.reset_recognition(ids, scope=scope)
+        if scope == "pending" and len(reset_ids) < len(ids):
+            QMessageBox.information(
+                self, t("增量重识别", "Incremental re-identify"),
+                t(f"{len(ids)} 张中 {len(reset_ids)} 张进入识别队列——"
+                  "其余有人工确认痕迹，已跳过（识别永不覆盖人工结果）。",
+                  f"{len(reset_ids)} of {len(ids)} queued — the rest have "
+                  "manual confirmations and were skipped."))
         self._selected.clear()
         self.win.library_changed.emit()
         self.refresh()
-        self.win.start_recognition()
+        if reset_ids:
+            self.win.start_recognition()
 
     # ---------- 列表 ----------
     def _data_sig(self):

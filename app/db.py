@@ -430,15 +430,31 @@ class Library:
         self.conn.commit()
         self._sidecar_touch(photo_ids=[photo_id])
 
-    def reset_recognition(self, photo_ids: list[int]):
-        """批量重新识别: 清空识别记录并复位失败计数(人工确认一并清除)。"""
-        for pid in photo_ids:
+    def reset_recognition(self, photo_ids: list[int], scope: str = "all"):
+        """批量重新识别前清记录。scope='all'=全量(人工确认一并清除,
+        旧行为); scope='pending'=增量(1.0冲刺②)——只处理**无人工痕迹**
+        的照片(未识别/待复核/低置信都在其中), 人工确认过的照片完全不
+        动(识别永不覆盖人工结果)。返回实际重置的photo_id列表。"""
+        ids = list(photo_ids)
+        if scope == "pending":
+            ids = [pid for pid in ids if not self._has_human_edit(pid)]
+        for pid in ids:
             self.conn.execute("DELETE FROM records WHERE photo_id=?", (pid,))
             self.conn.execute(
                 "UPDATE photos SET rec_fail=0, cand_json=NULL WHERE id=?",
                 (pid,))
-        self.conn.commit()
-        self._sidecar_touch(photo_ids=list(photo_ids))
+        if ids:
+            self.conn.commit()
+            self._sidecar_touch(photo_ids=ids)
+        return ids
+
+    def _has_human_edit(self, photo_id: int) -> bool:
+        """照片识别记录里是否有人工痕迹(reviewed=1或confirmed_code)。
+        与core.sidecar._has_human_edit同语义(库侧单源)。"""
+        row = self.conn.execute(
+            "SELECT 1 FROM records WHERE photo_id=? AND (reviewed=1 OR "
+            "confirmed_code IS NOT NULL) LIMIT 1", (photo_id,)).fetchone()
+        return bool(row)
 
     def set_confirmed(self, record_id: int, code: str | None):
         """人工确认/纠正: 写confirmed_code并标记已复核。"""

@@ -329,6 +329,33 @@ check(qd.preview_tree is not None and qd.preview_tree.topLevelItemCount() == 1,
 check(qd.tree.topLevelItemCount() >= 0, "已隔离列表渲染")
 qd.close()
 
+# ---------- [8] 增量重识别(1.0冲刺②) ----------
+print("[8] 增量重识别")
+# 造人工痕迹: pids[1] 写 confirmed(此前各段只动 pick/rating, 不动records)
+lib.conn.execute(
+    "UPDATE records SET confirmed_code=species_code, reviewed=1 "
+    "WHERE photo_id=?", (pids[1],))
+lib.conn.commit()
+check(lib._has_human_edit(pids[1]), "人工痕迹判定: confirmed 记录命中")
+check(not lib._has_human_edit(pids[0]), "无人工痕迹判定")
+before = {pid: lib.conn.execute(
+    "SELECT COUNT(*) FROM records WHERE photo_id=?", (pid,)).fetchone()[0]
+    for pid in pids}
+reset = lib.reset_recognition(pids, scope="pending")
+check(pids[1] not in reset, "增量: 人工确认照片跳过")
+after = {pid: lib.conn.execute(
+    "SELECT COUNT(*) FROM records WHERE photo_id=?", (pid,)).fetchone()[0]
+    for pid in pids}
+check(after[pids[1]] == before[pids[1]] and after[pids[1]] > 0,
+      "人工确认记录原样保留")
+check(all(after[p] == 0 for p in pids if p in reset),
+      "无人工痕迹照片记录已清(进识别队列)")
+reset2 = lib.reset_recognition(pids, scope="all")
+check(set(reset2) == set(pids), "全量: 全部重置(旧行为)")
+check(all(lib.conn.execute("SELECT COUNT(*) FROM records WHERE photo_id=?",
+                           (p,)).fetchone()[0] == 0 for p in pids),
+      "全量清空生效")
+
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()
