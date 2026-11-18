@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import html as _html
+
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -345,4 +347,45 @@ class StatsPage(QWidget):
         else:
             lifer_recent.setText(t("识别完成后, 这里会展示你的新鸟收录动态",
                                    "Recent lifers will appear here after identifications"))
+
+        # 装备榜+出片时段(1.0冲刺⑥, 数据全在exif表)
+        gear = self.lib.gear_stats()
+        if gear["body"] or gear["lens"]:
+            gear_card = QFrame()
+            gear_card.setObjectName("Card")
+            glay = QVBoxLayout(gear_card)
+            glay.setContentsMargins(20, 16, 20, 16)
+            gh = QLabel(t("装备榜  ·  出片数", "Gear ranking  ·  photo counts"))
+            gh.setObjectName("CardTitle")
+            glay.addWidget(gh)
+            grow = QHBoxLayout()
+            for lab_key, items in ((t("机身", "Bodies"), gear["body"]),
+                                   (t("镜头", "Lenses"), gear["lens"])):
+                txt = "<br>".join(
+                    f"{i + 1}. {_html.escape(name)} — {n}" for i, (name, n)
+                    in enumerate(items[:6])) or \
+                    t("（暂无该类数据）", "(no data)")
+                gl2 = QLabel(f"<b>{lab_key}</b><br>{txt}")
+                gl2.setWordWrap(True)
+                gl2.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};"
+                                  "background:transparent;")
+                grow.addWidget(gl2, 1)
+            glay.addLayout(grow)
+            self.content_lay.addWidget(gear_card)
+
+        hours = self.lib.hour_stats()
+        if any(h["total"] for h in hours):
+            hour_card = QFrame()
+            hour_card.setObjectName("Card")
+            hv = QVBoxLayout(hour_card)
+            hv.setContentsMargins(20, 16, 20, 16)
+            hh = QLabel(t("出片时段  ·  按拍摄小时(0~23点)",
+                          "Shooting hours  ·  by hour of day (0-23)"))
+            hh.setObjectName("CardTitle")
+            hv.addWidget(hh)
+            hour_chart = BarChart()
+            hour_chart.setMinimumHeight(160)
+            hour_chart.set_series(hours)
+            hv.addWidget(hour_chart, 1)
+            self.content_lay.addWidget(hour_card)
         self.content_lay.addStretch(1)

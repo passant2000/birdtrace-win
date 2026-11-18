@@ -972,10 +972,11 @@ class Library:
             "SELECT p.id, p.path, p.group_id, p.aesthetic, "
             "  COALESCE(e.dt_original, p.added_at) AS taken_at, "
             "  v0.eff_code AS main_code, sc.cn AS sp_cn, sc.en AS sp_en, "
+            "  v0.confidence AS main_conf, "
             "  st.name AS spot_name, st.short_name AS spot_short, "
             "  p.rating, p.pick "
             "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
-            "  LEFT JOIN (SELECT photo_id, eff_code FROM v_records "
+            "  LEFT JOIN (SELECT photo_id, eff_code, confidence FROM v_records "
             "             WHERE rank=1 GROUP BY photo_id) v0 "
             "    ON v0.photo_id=p.id "
             "  LEFT JOIN species sc ON sc.code=v0.eff_code "
@@ -990,6 +991,7 @@ class Library:
                  "main_code": r["main_code"], "sp_cn": r["sp_cn"],
                  "sp_en": r["sp_en"], "spot_name": r["spot_name"],
                  "spot_short": r["spot_short"],
+                 "main_conf": r["main_conf"],
                  "rating": int(r["rating"] or 0),
                  "pick": r["pick"] or ""})
         return out
@@ -1687,6 +1689,29 @@ class Library:
                 (sorted(g) for g in groups.values() if len(g) >= 2),
                 key=lambda g: g[0])
         return {"exact": exact, "similar": similar, "scanned": n}
+
+    def gear_stats(self) -> dict:
+        """装备榜(1.0冲刺⑥): 机身/镜头出片数(数据全在exif表)。
+        返回 {"body": [(名称, 数)..desc], "lens": [...]}。"""
+        out = {}
+        for key, col in (("body", "make||' '||model"), ("lens", "lens")):
+            rows = self.conn.execute(
+                f"SELECT {col} AS name, COUNT(*) AS n FROM exif e "
+                "JOIN photos p ON p.id=e.photo_id "
+                "WHERE TRIM(COALESCE(" + col + ",''))<>'' "
+                "GROUP BY name ORDER BY n DESC LIMIT 8").fetchall()
+            out[key] = [(r["name"], r["n"]) for r in rows]
+        return out
+
+    def hour_stats(self) -> list[dict]:
+        """出片时段分布(1.0冲刺⑥): 按EXIF拍摄小时计数(0~23)。"""
+        rows = self.conn.execute(
+            "SELECT CAST(substr(COALESCE(e.dt_original, p.added_at),12,2) "
+            "AS INTEGER) AS hr, COUNT(*) AS n FROM exif e "
+            "JOIN photos p ON p.id=e.photo_id GROUP BY hr").fetchall()
+        counts = {r["hr"]: r["n"] for r in rows if r["hr"] is not None}
+        return [{"year": f"{h:02d}", "new": counts.get(h, 0),
+                 "total": counts.get(h, 0)} for h in range(24)]
 
     def birdreport_rows(self, date_from: str | None = None,
                         date_to: str | None = None) -> list[dict]:

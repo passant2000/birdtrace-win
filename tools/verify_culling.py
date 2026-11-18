@@ -517,6 +517,41 @@ tl3.refresh(force=True)
 check(tl3.tag_filter.count() >= 2,
       "时间线标签筛选下拉(refresh后填充标签项)")
 tl3.close()
+
+
+# ---------- [12] 组合筛选+装备/时段统计(1.0冲刺⑤⑥) ----------
+print("[12] 组合筛选+装备时段")
+# 造EXIF数据: 时段/装备
+for pid, hr, mk, md, lens in ((pids[0], 7, "Sony", "ILCE-7CM2", "300mm F2.8"),
+                              (pids[1], 7, "Sony", "ILCE-7CM2", "300mm F2.8"),
+                              (pids[2], 15, "Canon", "R5", "RF 600mm"),
+                              (pids[3], 15, "Canon", "R5", None)):
+    lib.conn.execute(
+        "UPDATE exif SET dt_original=?, make=?, model=?, lens=? "
+        "WHERE photo_id=?",
+        (f"2026-05-20 {hr:02d}:00:0{(pid % 9)}", mk, md, lens, pid))
+lib.conn.commit()
+gs = lib.gear_stats()
+body_map = dict(gs["body"])
+# pids[0] 已在[11]移除(清关联测试)——存活 pids[1]=Sony pids[2,3]=Canon
+check(body_map.get("Sony ILCE-7CM2") == 1 and body_map.get("Canon R5") == 2,
+      "装备榜机身计数( Sony1/Canon2)")
+check(dict(gs["lens"]).get("RF 600mm") == 1, "装备榜镜头计数(pids[3]镜头为空被空值门排除)")
+hs = lib.hour_stats()
+check(sum(h["total"] for h in hs) >= 4, "时段分布总数")
+check(hs[7]["total"] == 1 and hs[15]["total"] == 2, "时段计数按小时")
+# 筛选下拉: 鸟点/置信度在 refresh 过滤
+tl4 = TimelinePage(lib, win)
+tl4.refresh(force=True)
+check(tl4.spot_filter.count() >= 1 and tl4.conf_filter.count() == 5,
+      "鸟点/置信度筛选下拉存在")
+tl4.conf_filter.setCurrentIndex(4)   # 无识别
+check(sum(len(v) for v in tl4._raw) >= 0, "置信度筛选切换不崩")
+tl4.close()
+from app.ui.stats_page import StatsPage
+sp = StatsPage(lib, win)
+sp.refresh()
+sp.close()
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

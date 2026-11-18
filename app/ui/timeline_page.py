@@ -161,6 +161,23 @@ class TimelinePage(QWidget):
         self.tag_filter.currentIndexChanged.connect(
             lambda _: self.refresh(force=True))
         fbar.addWidget(self.tag_filter)
+        # 鸟点/置信度(1.0冲刺⑤组合筛选: 五维下拉叠加=鸟种胶囊×日期树×
+        # 评分×选片×标签×鸟点×置信度, 全部只动视图)
+        self.spot_filter = QComboBox()
+        self.spot_filter.addItem(t("鸟点: 全部", "Spot: all"), None)
+        self.spot_filter.setCursor(Qt.PointingHandCursor)
+        self.spot_filter.currentIndexChanged.connect(
+            lambda _: self.refresh(force=True))
+        fbar.addWidget(self.spot_filter)
+        self.conf_filter = QComboBox()
+        self.conf_filter.addItems([
+            t("置信: 全部", "Conf: all"), t("待复核(<50%)", "Pending (<50%)"),
+            t("≥50%", "≥50%"), t("≥80%", "≥80%"),
+            t("无识别", "Unidentified")])
+        self.conf_filter.setCursor(Qt.PointingHandCursor)
+        self.conf_filter.currentIndexChanged.connect(
+            lambda _: self.refresh(force=True))
+        fbar.addWidget(self.conf_filter)
         fbar.addStretch(1)
         lay.addLayout(fbar)
 
@@ -361,6 +378,19 @@ class TimelinePage(QWidget):
         idx = self.tag_filter.findData(cur)
         self.tag_filter.setCurrentIndex(idx if idx >= 0 else 0)
         self.tag_filter.blockSignals(False)
+
+    def _refresh_spot_filter(self):
+        """鸟点下拉重填(保留当前选中; refresh 前调用)。"""
+        cur = self.spot_filter.currentText()
+        self.spot_filter.blockSignals(True)
+        self.spot_filter.clear()
+        self.spot_filter.addItem(t("鸟点: 全部", "Spot: all"), None)
+        for sp in self.lib.spots_overview():
+            self.spot_filter.addItem(f"{sp['name']} ({sp.get('n', '?')})"
+                                     if sp.get("n") else sp["name"])
+        idx = self.spot_filter.findText(cur)
+        self.spot_filter.setCurrentIndex(idx if idx >= 0 else 0)
+        self.spot_filter.blockSignals(False)
 
     def _add_to_collection(self):
         ids = sorted(self._selected)
@@ -903,6 +933,7 @@ class TimelinePage(QWidget):
             return
         if hasattr(self, "tag_filter"):
             self._refresh_tag_filter()
+            self._refresh_spot_filter()
         # 重建前记住位置: 识别完成/库变化刷新时用户可能正浏览, 不跳顶
         self._keep_scroll = self.scroll.verticalScrollBar().value()
         self._grid_items = {}
@@ -949,6 +980,32 @@ class TimelinePage(QWidget):
                 "SELECT photo_id FROM photo_tags WHERE tag_id=?", (tag_id,))}
             raw = {ym: [p for p in v if p["id"] in tagged]
                    for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
+        # 鸟点筛选(1.0冲刺⑤)
+        si = self.spot_filter.currentIndex() if hasattr(self, "spot_filter") else 0
+        if si:
+            spot_name = self.spot_filter.currentText()
+            spot_name = spot_name.split(" (")[0] if " (" in spot_name else spot_name
+            raw = {ym: [p for p in v
+                        if (p.get("spot_name") or "") == spot_name]
+                   for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
+        # 置信度筛选(1.0冲刺⑤): 待复核<0.5即既有语义
+        ci = self.conf_filter.currentIndex() if hasattr(self, "conf_filter") else 0
+        if ci:
+            if ci == 1:
+                raw = {ym: [p for p in v if p.get("main_conf") is not None
+                            and p["main_conf"] < 0.5]
+                       for ym, v in raw.items()}
+            elif ci == 2:
+                raw = {ym: [p for p in v if (p.get("main_conf") or 0) >= 0.5]
+                       for ym, v in raw.items()}
+            elif ci == 3:
+                raw = {ym: [p for p in v if (p.get("main_conf") or 0) >= 0.8]
+                       for ym, v in raw.items()}
+            else:            # 无识别
+                raw = {ym: [p for p in v if p.get("main_conf") is None]
+                       for ym, v in raw.items()}
             raw = {ym: v for ym, v in raw.items() if v}
         counts = {ym: len(v) for ym, v in raw.items()}
         if self._collapse_on():
