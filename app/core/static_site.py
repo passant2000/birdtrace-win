@@ -10,98 +10,63 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..i18n import t
+from ..i18n import t, current_lang
 
-_TMPL = """<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="utf-8">
+_TMPL_PATH = Path(__file__).resolve().parents[2] / "assets" / "templates" / "site_index.html"
+
+
+def i18n_cur_zh() -> bool:
+    from .. import i18n
+    return i18n.lang() != "en"
+
+# 模板缺失时的自愈底稿(全英文占位, 文案由 build_site 按界面语言注入;
+# 底稿不含硬编码文案)。完整样式版=打包内 assets/templates/site_index.html
+_FALLBACK_TMPL = """<!DOCTYPE html>
+<html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BirdTrace Gallery</title>
-<style>
-:root{--bg:#F7F8FA;--card:#fff;--tx:#20252B;--tx2:#68727D;--line:#E7EBEF;--ac:#527C70;}
-@media(prefers-color-scheme:dark){:root{--bg:#111820;--card:#1B2630;--tx:#F3F5F7;--tx2:#A6B0BA;--line:#303C47;--ac:#83B5A2;}}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--tx);font:15px/1.5 "Segoe UI","Microsoft YaHei",sans-serif}
-header{padding:48px 20px 28px;text-align:center}
-header h1{font-size:30px;letter-spacing:.5px}
-header .sub{color:var(--tx2);font-size:13px;margin-top:6px}
-.stats{display:flex;gap:28px;justify-content:center;margin:18px 0 8px;flex-wrap:wrap}
-.stats b{font-size:26px;display:block}
-.stats span{color:var(--tx2);font-size:12px}
-nav{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:12px}
-nav button{border:1px solid var(--line);background:var(--card);color:var(--tx);
-  padding:7px 16px;border-radius:999px;cursor:pointer;font-size:14px}
-nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
-#q{display:block;margin:10px auto;max-width:320px;width:90%;padding:9px 14px;
-  border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--tx)}
-main{max-width:1180px;margin:0 auto;padding:16px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
-.card{background:var(--card);border-radius:12px;overflow:hidden;border:1px solid var(--line)}
-.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--line)}
-.card .cap{padding:8px 10px}
-.card .cap b{font-size:14px;display:block}
-.card .cap span{color:var(--tx2);font-size:12px}
-.tl{border-left:2px solid var(--line);margin-left:10px;padding-left:18px}
-.tl .item{margin:0 0 14px}
-.tl .item b{font-size:14px}
-.tl .item span{color:var(--tx2);font-size:12px;margin-left:8px}
-.empty{text-align:center;color:var(--tx2);padding:48px 0}
-footer{text-align:center;color:var(--tx2);font-size:12px;padding:28px 12px}
-</style>
-</head>
-<body>
-<header>
-  <h1>BirdTrace 图库</h1>
-  <div class="sub">__SUB__</div>
-  <div class="stats">
-    <div><b>__NP__</b><span>作品</span></div>
-    <div><b>__NS__</b><span>鸟种</span></div>
-    <div><b>__NM__</b><span>月份</span></div>
-  </div>
-</header>
-<nav id="tabs">
-  <button data-v="species" class="on">鸟种</button>
-  <button data-v="time">时间轴</button>
-  <button data-v="region">地区</button>
-</nav>
-<input id="q" placeholder="搜索鸟种名 / 拼音缩写">
-<main id="view"></main>
-<footer>__FOOT__</footer>
-<script>
-const G = __G__;
-const im = (h,s)=>`images/${h}.${s}.webp`;
+<title>__TITLE__</title><style>:root{--bg:#F7F8FA;--card:#fff;--tx:#20252B;--tx2:#68727D;--line:#E7EBEF;--ac:#527C70}
+@media(prefers-color-scheme:dark){:root{--bg:#111820;--card:#1B2630;--tx:#F3F5F7;--tx2:#A6B0BA;--line:#303C47;--ac:#83B5A2}}
+*{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);color:var(--tx);font:15px/1.5 "Segoe UI","Microsoft YaHei",sans-serif}
+header{padding:48px 20px 28px;text-align:center}header h1{font-size:30px}.sub{color:var(--tx2);font-size:13px;margin-top:6px}
+.stats{display:flex;gap:28px;justify-content:center;margin:18px 0 8px;flex-wrap:wrap}.stats b{font-size:26px;display:block}.stats span{color:var(--tx2);font-size:12px}
+nav{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:12px}nav button{border:1px solid var(--line);background:var(--card);color:var(--tx);padding:7px 16px;border-radius:999px;cursor:pointer}
+nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}#q{display:block;margin:10px auto;max-width:320px;width:90%;padding:9px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--tx)}
+main{max-width:1180px;margin:0 auto;padding:16px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+.card{background:var(--card);border-radius:12px;overflow:hidden;border:1px solid var(--line)}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--line)}
+.card .cap{padding:8px 10px}.card .cap b{font-size:14px;display:block}.card .cap span{color:var(--tx2);font-size:12px}
+.tl{border-left:2px solid var(--line);margin-left:10px;padding-left:18px}.tl .item{margin:0 0 14px}.tl .item b{font-size:14px}.tl .item span{color:var(--tx2);font-size:12px;margin-left:8px}
+.empty{text-align:center;color:var(--tx2);padding:48px 0}footer{text-align:center;color:var(--tx2);font-size:12px;padding:28px 12px}</style></head>
+<body><header><h1>__TITLE__</h1><div class="sub">__SUB__</div>
+<div class="stats"><div><b>__NP__</b><span>__L_PHOTOS__</span></div><div><b>__NS__</b><span>__L_SPECIES__</span></div><div><b>__NM__</b><span>__L_MONTHS__</span></div></div></header>
+<nav id="tabs"><button data-v="species" class="on">__L_TAB_SPECIES__</button><button data-v="time">__L_TAB_TIME__</button><button data-v="region">__L_TAB_REGION__</button></nav>
+<input id="q" placeholder="__L_SEARCH__"><main id="view"></main><footer>__FOOT__</footer>
+<script>const G=__G__;const im=(h,s)=>`images/${h}.${s}.webp`;
 function esc(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
-let view="species";
-function render(){
-  const q=(document.getElementById("q").value||"").toLowerCase().trim();
-  const v=document.getElementById("view");
-  if(view==="species"){
-    const list=G.species.filter(s=>!q||(s.cn+s.en+s.code).toLowerCase().includes(q));
-    v.innerHTML = list.length ? `<div class="grid">`+list.map(s=>`
-      <div class="card"><img loading="lazy" src="${im(s.best,256)}" alt="${esc(s.cn)}">
-      <div class="cap"><b>${esc(s.cn)}</b><span>${esc(s.en)} · ${s.count} 张</span></div></div>`).join("")+`</div>`
-      : `<div class="empty">没有匹配的鸟种</div>`;
-  } else if(view==="time"){
-    v.innerHTML = `<div class="tl">`+G.months.map(m=>`
-      <div class="item"><b>${esc(m.ym)}</b><span>${m.n} 张</span></div>`).join("")+`</div>`;
-  } else {
-    v.innerHTML = `<div class="grid">`+G.regions.map(r=>`
-      <div class="card"><div class="cap" style="padding:22px 14px">
-      <b>${esc(r.region||"未知地区")}</b><span>${r.n} 张作品</span></div></div>`).join("")+`</div>`;
-  }
-}
-document.getElementById("tabs").addEventListener("click",e=>{
-  if(e.target.dataset.v){view=e.target.dataset.v;
-    document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b===e.target));
-    render();}
-});
-document.getElementById("q").addEventListener("input",render);
-render();
-</script>
-</body>
-</html>
+let view="species";function render(){const q=(document.getElementById("q").value||"").toLowerCase().trim();const v=document.getElementById("view");
+if(view==="species"){const list=G.species.filter(s=>!q||(s.cn+s.en+s.code).toLowerCase().includes(q));
+v.innerHTML=list.length?`<div class="grid">`+list.map(s=>`<div class="card"><img loading="lazy" src="${im(s.best,256)}" alt="${esc(s.cn)}"><div class="cap"><b>${esc(s.cn)}</b><span>${esc(s.en)} · ${s.count} __L_N_PHOTOS__</span></div></div>`).join("")+`</div>`:`<div class="empty">__EMPTY__</div>`}
+else if(view==="time"){v.innerHTML=`<div class="tl">`+G.months.map(m=>`<div class="item"><b>${esc(m.ym)}</b><span>${m.n} __L_N_PHOTOS__</span></div>`).join("")+`</div>`}
+else{v.innerHTML=`<div class="grid">`+G.regions.map(r=>`<div class="card"><div class="cap" style="padding:22px 14px"><b>${esc(r.region||"")}</b><span>${r.n} __L_N_PHOTOS__</span></div></div>`).join("")+`</div>`}}
+document.getElementById("tabs").addEventListener("click",e=>{if(e.target.dataset.v){view=e.target.dataset.v;document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b===e.target));render()}});
+document.getElementById("q").addEventListener("input",render);render();</script></body></html>
 """
+
+
+def _template() -> str:
+    """HTML 模板: 优先 assets/templates/site_index.html(可自定义样式),
+    缺失时用内置英文占位底稿并自动写出(自愈, fresh clone 也有)。"""
+    if _TMPL_PATH.is_file():
+        try:
+            return _TMPL_PATH.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        _TMPL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _TMPL_PATH.write_text(_FALLBACK_TMPL, encoding="utf-8")
+    except OSError:
+        pass
+    return _FALLBACK_TMPL
+
 
 
 def build_site(lib, dest: Path) -> dict:
@@ -145,8 +110,20 @@ def build_site(lib, dest: Path) -> dict:
         foot = t(f"© {m['creator']} · 由 BirdTrace 生成",
                  f"© {m['creator']} · Generated by BirdTrace")
     sub = t("记录 · 发现 · 分享", "Record · Explore · Share")
-    html = (_TMPL
+    html = (_template()
             .replace("__G__", json.dumps(data, ensure_ascii=False))
+            .replace("__TITLE__", t("BirdTrace 图库", "BirdTrace Gallery"))
+            .replace("__EMPTY__", t("没有匹配的鸟种", "No matching species"))
+            .replace("__LANG__", "zh" if i18n_cur_zh() else "en")
+            .replace("__L_PHOTOS__", t("作品", "Photos"))
+            .replace("__L_SPECIES__", t("鸟种", "Species"))
+            .replace("__L_MONTHS__", t("月份", "Months"))
+            .replace("__L_TAB_SPECIES__", t("鸟种", "Species"))
+            .replace("__L_TAB_TIME__", t("时间轴", "Timeline"))
+            .replace("__L_TAB_REGION__", t("地区", "Regions"))
+            .replace("__L_SEARCH__", t("搜索鸟种名 / 拼音缩写",
+                                       "Search species / pinyin"))
+            .replace("__L_N_PHOTOS__", t("张", "photos"))
             .replace("__SUB__", sub)
             .replace("__NP__", str(m["photos"]))
             .replace("__NS__", str(m["species"]))
