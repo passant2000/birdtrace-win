@@ -2,6 +2,18 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-19（凌晨）· **1.0冲刺收官：14项功能全部落地+打包 1.0.0-test1（功能冻结候选版），待用户实测**
+
+**冲刺执行**（按方案四节 1.0 冲刺模式连续开发，commit 链 e688bde→f711ed0→74308a8→ea85f30→b09112f→19c8040→bd9f34c→20756af→32fbaf6→92ad27b→be23c45→d0f5b3a→2a8ff94→108e2a9+补正ca452cc/4daa831/0ea67c1/2cfac86/7e02112）：
+**已落地 14 项**（每项功能级 verify+全量回归+commit）：①+⑨选片工作流（打星/三态/备注/隔离区/组内对比三档推荐/拆合组锁）②增量重识别（scope参数,人工确认永不覆盖）③视觉查重（两层+人工确认）④记录中心导出（CSV BOM+最美照归集+数量临时编辑不落库）⑤组合筛选（鸟点+置信度=六维叠加）⑥装备榜+出片时段 ⑫三小件（{confidence}段/机镜别名/鸟点city+卡地点行=市·鸟点名）⑭标签 ⑮作品集 ⑯增量扫描（四情形矩阵）⑰版权（三态+effective_copyright单源）⑧RAW/DNG成对编目 ⑩静态站v1（三视图/隐私/两档图/schema预留）。
+**本轮不做（如实标注）**：⑪XMP写回（需新依赖piexif或exiftool二进制——红线"不引入未确认外部依赖"待用户确认）、⑬视频归档（4-5天估,下轮专项,ffmpeg打包链单独冻结验证）、年度年鉴（1.0主打大件,值得独立冲刺,避免糙做）。
+
+**打包链全绿**：全量回归37项+e2e+smoke全绿（4异常已修：rarity_score=effective_copyright None防御/rerecog_region=verify适配scope下拉/scroll_restore=timeline refresh末尾content.adjustSize强制几何重算[offscreen下QScrollArea收不到LayoutRequest致content被viewport压塌,真实GUI无害]/species_map_fix=筛选下拉现场重建blockSignals防递归+verify改append_record[0.8.6语义后该断言从未真跑过]）；**assert_pkg_100 109/109**（086全量+27新锚,版本锚点已更新1.0.0-test1）；**frozen_check_100 14/14**（中文路径库识别全链路15s+新功能数据路径:渐进迁移新列/quarantine/tags/选片/版权/查重/记录中心/静态站生成5种）；发布目录 **releases/鸟迹BirdTrace-1.0.0-test1**（1.19GB,使用说明在包内,母本packaging/使用说明-1.0.0-test1-母本.txt）；冒烟 PASS（exe 18s存活+窗口标题）。
+
+**打包坑六枚（本轮新增）**：①robocopy中文开关//NFL在Git Bash双斜杠失效——用单斜杠/NFL ②发布目录复制必须robocopy（cp把中文exe名复制成乱码楦熻抗）③frozen_check插入段在close后→重开Library ④frozen统计行heredoc转义\n两连坑——**改用Edit工具**（PROGRESS旧坑第4次复发）⑤taskkill清场误杀了正在跑的frozen实例（PID匹配自证）——**清场必须等frozen跑完** ⑥release目录使用说明放根目录（0.8.5+惯例）。
+
+**待用户**：真实照片/真实目录/真机实测 1.0-test1（重点=新14项+既有全功能回归）；实测反馈后修 bug；修完 bump 1.0.0 正式。**push 待指示**（本地 dev-0.8.0 领先远端 25+ commits）。
+
 ## 2026-11-18（深夜冲刺开跑）· **1.0冲刺①+⑨：选片工作流（culling）全套落地，commit e688bde**
 
 **数据层（只加不改，〇节迁移纪律）**：photos 加 pick(''/keep/pending/reject)/pick_note/group_lock 三列（_migrate 自动补列+idx_photos_pick）+新 quarantine 表（photo_id/op_no/quar_path/orig_path/file_hash/moved_at/restored_at）；set_rating（0~5 越界夹取不抛）/set_pick（非法值 ValueError、清态同清备注）/quarantine_move·restore·list/split_from_group·merge_into_group·unlock_group 七方法；**隔离区=<库>/隔离区(目录名走t())/Q<时间戳>-<rand>/**，文件移动+库path同步+识别评分标注全保留（sidecar 按hash键天然不受影响）；restore 原路径被占**拒绝绝不覆盖**、目录缺失自动重建、无永久删除；db.py 头部"绝不移动原文件"原则更新=唯一例外为用户显式授权操作（原地重命名+隔离区先例）。**group_lock 防重算打散**：regroup_bursts SELECT WHERE group_lock=0（锁定照片完全退出重算），人工拆合组跨重跑持久。
