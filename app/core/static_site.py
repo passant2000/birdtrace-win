@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..i18n import t, current_lang
+from ..i18n import t
 
 _TMPL_PATH = Path(__file__).resolve().parents[2] / "assets" / "templates" / "site_index.html"
 
