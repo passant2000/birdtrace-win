@@ -615,6 +615,65 @@ from app.ui.share_dialog import ShareDialog
 # 构造重(需photo_id有效)——用轻量函数级验证: effective_copyright已是单源
 check(lib.effective_copyright(pids[3])["creator"] == "张三",
       "单源接口可被三处消费")
+
+
+# ---------- [15] 增量扫描(1.0冲刺⑯) ----------
+print("[15] 增量扫描")
+from app.core.scan import scan_roots_get, scan_roots_set, scan_increment
+scan_roots_set(lib, [])
+check(scan_roots_get(lib) == [], "scan_roots 读写")
+scan_dir = D / "scanlib"
+scan_dir.mkdir(exist_ok=True)
+f1 = scan_dir / "s1.jpg"
+shutil.copy(PROJ / "data/test_images/Upupa_epops.jpg", f1)
+f2 = scan_dir / "s2.jpg"
+import PIL.Image as _PIL2
+_PIL2.open(PROJ / "data/test_images/Upupa_epops.jpg").save(
+    f2, quality=92)   # 重压缩: 库内无此hash(Upupa原图仅引用过不同hash文件?)
+# 新导入一张(引用)进库
+from app.core.importer import import_files as _if
+_if(lib, [f1], mode="ref")
+res = scan_increment(lib, scan_dir)
+check(res["ok"] and len(res["new"]) == 1 and res["new"][0]["path"] == str(f2),
+      "情形①: 库外新文件→new候选")
+# moved: f1移走→missing语义→hash命中
+lib.conn.execute("UPDATE photos SET missing=1 WHERE path=?", (str(f1.resolve()),))
+lib.conn.commit()
+f1.rename(scan_dir / "s1_renamed.jpg")
+res2 = scan_increment(lib, scan_dir)
+check(len(res2["moved"]) == 1 and
+      res2["moved"][0].get("relink_photo_ids"), "情形④: 移动→hash命中missing→relink候选")
+n = lib.relink_one(res2["moved"][0]["relink_photo_ids"][0],
+                   res2["moved"][0]["path"], res2["moved"][0]["hash"])
+check(n == 1, "relink_one: hash校验通过改path")
+check(lib.conn.execute("SELECT missing FROM photos WHERE path=?",
+                       (res2["moved"][0]["path"],)).fetchone()["missing"] == 0,
+      "relink后missing清零")
+# changed: 同路径重写内容(s2须先在库——引用导入)
+_if(lib, [f2.resolve()], mode="ref")
+f2.write_bytes(f2.read_bytes() + b"\x00extra")
+lib.conn.execute("UPDATE photos SET mtime=1.0, size=1 WHERE path=?",
+                 (str(f2.resolve()),))
+lib.conn.commit()
+res3 = scan_increment(lib, scan_dir)
+check(len(res3["changed"]) == 1, "情形②: 同路径内容变→changed候选")
+# meta_only: 仅mtime变hash同——changed场景只提示不写库, 库hash仍是
+# import版; 直接把库记录的hash/size对齐盘上内容(模拟"内容已同步,
+# 只有mtime陈旧"), 再只动mtime
+disk_hash = media.file_hash(f2.resolve())
+st2 = f2.stat()
+lib.conn.execute("UPDATE photos SET file_hash=?, size=? WHERE path=?",
+                 (disk_hash, st2.st_size, str(f2.resolve())))
+import os as _os
+_os.utime(f2, (18000.0, 18000.0))
+lib.conn.execute("UPDATE photos SET mtime=1.0 WHERE path=?", (str(f2.resolve()),))
+lib.conn.commit()
+res4 = scan_increment(lib, scan_dir)
+check(res4["changed"] == [] and res4["meta_only"] >= 1,
+      "仅元数据变化hash同→meta_only不误判")
+# 错误根: 不误标
+res5 = scan_increment(lib, D / "nonexist_dir")
+check(not res5["ok"] and res5["error"], "根不可访问→error不误标missing")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

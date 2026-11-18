@@ -1776,6 +1776,22 @@ class Library:
         return [{"year": f"{h:02d}", "new": counts.get(h, 0),
                  "total": counts.get(h, 0)} for h in range(24)]
 
+    def relink_one(self, photo_id: int | None, new_path: str,
+                   expect_hash: str) -> int:
+        """单条按内容重链(1.0冲刺⑯): 校验hash一致才改path并清missing,
+        防错配; photo_id为None或记录不存在返回0。绝不移动文件。"""
+        if photo_id is None:
+            return 0
+        r = self.conn.execute(
+            "SELECT file_hash FROM photos WHERE id=?", (photo_id,)).fetchone()
+        if not r or r["file_hash"] != expect_hash:
+            return 0
+        self.conn.execute(
+            "UPDATE photos SET path=?, missing=0 WHERE id=?",
+            (new_path, photo_id))
+        self.conn.commit()
+        return 1
+
     def birdreport_rows(self, date_from: str | None = None,
                         date_to: str | None = None) -> list[dict]:
         """观鸟记录中心导出行(1.0冲刺④, 六专题专题6定案=数量临时编辑

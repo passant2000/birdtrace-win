@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
 
 from ..core import regions
 from ..core.importer import import_files, scan_sources
+from ..core.scan import scan_roots_get, scan_roots_set
 from ..db import Library
 from ..i18n import t
 from ..media import ensure_thumbnail, file_hash
@@ -255,6 +256,54 @@ class ImportPage(QWidget):
         form4.addWidget(self.spot_hint)
         lay.addWidget(card4)
 
+        # ---- 常用目录增量扫描(1.0冲刺⑯): 手动触发, 不做后台监控 ----
+        card_s, form_s = make_card(t("常用目录增量扫描", "Scan library folders"))
+        srow = QHBoxLayout()
+        self.scan_list = QListWidget()
+        self.scan_list.setMaximumHeight(88)
+        for r in scan_roots_get(self.lib):
+            self.scan_list.addItem(r)
+        srow.addWidget(self.scan_list, 1)
+        sbtns = QVBoxLayout()
+        b_add = QPushButton(t("添加目录…", "Add folder…"))
+        b_add.setCursor(Qt.PointingHandCursor)
+        b_add.clicked.connect(self._scan_add)
+        sbtns.addWidget(b_add)
+        b_rm = QPushButton(t("移除所选", "Remove selected"))
+        b_rm.setCursor(Qt.PointingHandCursor)
+        b_rm.clicked.connect(self._scan_remove)
+        sbtns.addWidget(b_rm)
+        sbtns.addStretch(1)
+        srow.addLayout(sbtns)
+        form_s.addLayout(srow)
+        srow2 = QHBoxLayout()
+        b_scan = QPushButton(t("扫描增量", "Scan for changes"))
+        b_scan.setObjectName("Primary")
+        b_scan.setCursor(Qt.PointingHandCursor)
+        b_scan.setToolTip(t(
+            "手动扫描常用目录：新文件/疑似移动/内容变化三类候选；"
+            "绝不自动改库或移动文件，导入/重链由你确认",
+            "Manually scan library folders for new / moved / changed "
+            "candidates; nothing is written until you confirm"))
+        b_scan.clicked.connect(self._scan_run)
+        srow2.addWidget(b_scan)
+        self.scan_status = QLabel("")
+        self.scan_status.setObjectName("Hint")
+        srow2.addWidget(self.scan_status, 1)
+        form_s.addLayout(srow2)
+        scan_hint = QLabel(t(
+            "说明：只对登记的目录手动扫描（分层判定，同路径同大小同修改时间"
+            "的文件不重复算哈希）；文件消失不在这里处理——由离线/丢失机制管，"
+            "扫描根不可访问时不会误标丢失。",
+            "Manual scan only (layered checks; unchanged files are not "
+            "re-hashed). Missing files are handled by the offline/missing "
+            "mechanism, not here — an unreachable root never marks anything "
+            "missing."))
+        scan_hint.setWordWrap(True)
+        scan_hint.setObjectName("Hint")
+        form_s.addRow(scan_hint)
+        lay.addWidget(card_s)
+
         # ---- 预览网格 ----
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -286,7 +335,106 @@ class ImportPage(QWidget):
     NONE = "__none__"
     NEW = "__new__"
 
-    def _load_spots(self):
+    # ---------- 常用目录增量扫描(1.0冲刺⑯) ----------
+    def _scan_add(self):
+        d = QFileDialog.getExistingDirectory(
+            self, t("添加常用目录", "Add library folder"))
+        if not d:
+            return
+        roots = scan_roots_get(self.lib)
+        if d not in roots:
+            roots.append(d)
+            scan_roots_set(self.lib, roots)
+        self.scan_list.clear()
+        for r in scan_roots_get(self.lib):
+            self.scan_list.addItem(r)
+
+    def _scan_remove(self):
+        for it in self.scan_list.selectedItems():
+            roots = scan_roots_get(self.lib)
+            if it.text() in roots:
+                roots.remove(it.text())
+                scan_roots_set(self.lib, roots)
+        self.scan_list.clear()
+        for r in scan_roots_get(self.lib):
+            self.scan_list.addItem(r)
+
+    def _scan_run(self):
+        roots = scan_roots_get(self.lib)
+        if not roots:
+            QMessageBox.information(
+                self, t("扫描增量", "Scan"),
+                t("先添加要扫描的目录。", "Add a folder to scan first."))
+            return
+        from ..core.scan import scan_increment
+        new_entries, moved, changed, errs = [], [], [], []
+        for r in roots:
+            res = scan_increment(self.lib, r)
+            if not res["ok"]:
+                errs.append(f"{r}: {res['error']}")
+                continue
+            new_entries += res["new"]
+            moved += res["moved"]
+            changed += res["changed"]
+        self._last_scan = {"new": new_entries, "moved": moved,
+                           "changed": changed}
+        self.scan_status.setText(t(
+            f"新增 {len(new_entries)} · 疑似移动/改名 {len(moved)} · "
+            f"内容变化 {len(changed)}"
+            + (f" · {len(errs)} 个目录出错" if errs else ""),
+            f"New {len(new_entries)} · moved {len(moved)} · "
+            f"changed {len(changed)}"
+            + (f" · {len(errs)} folder error(s)" if errs else "")))
+        if errs:
+            QMessageBox.warning(self, t("部分目录出错", "Folder errors"),
+                                "\n".join(errs))
+        # 候选处理(全部人工确认, 绝不自动写库)
+        if moved:
+            q = QMessageBox.question(
+                self, t("疑似移动/改名", "Moved or renamed"),
+                t(f"发现 {len(moved)} 个文件疑似移动/改名（内容哈希与库内"
+                  "记录一致）。按内容重新链接这些记录？",
+                  f"{len(moved)} file(s) look moved/renamed (content hash "
+                  "matches a library record). Relink these records by "
+                  "content?"))
+            if q == QMessageBox.Yes:
+                n = 0
+                for e in moved:
+                    n += self.lib.relink_one(e["relink_photo_ids"][0]
+                                             if e.get("relink_photo_ids")
+                                             else None, e["path"],
+                                             e["hash"]) or 0
+                self.scan_status.setText(self.scan_status.text() +
+                                         t(f" · 已重链 {n}", f" · relinked {n}"))
+                if hasattr(self.win, "library_changed"):
+                    self.win.library_changed.emit()
+        if new_entries:
+            q = QMessageBox.question(
+                self, t("新增文件", "New files"),
+                t(f"发现 {len(new_entries)} 张新照片。按引用模式导入"
+                  "（文件不动）？",
+                  f"Found {len(new_entries)} new photo(s). Import by "
+                  "reference (files stay in place)?"))
+            if q == QMessageBox.Yes:
+                from ..core.importer import import_files
+                import_files(self.lib,
+                             [Path(e["path"]) for e in new_entries],
+                             mode="ref")
+                if hasattr(self.win, "library_changed"):
+                    self.win.library_changed.emit()
+        if changed:
+            QMessageBox.information(
+                self, t("内容变化", "Changed"),
+                t(f"{len(changed)} 个文件内容与入库时不同（同路径已重算哈希"
+                  "不一致）——不自动覆盖。清单已写入状态栏，如确认是重修版"
+                  "请先移除旧记录再导入。",
+                  f"{len(changed)} file(s) differ from their library record "
+                  "(re-hashed at same path) — not overwritten. Remove the "
+                  "old record first if this is a re-export."))
+        if not (new_entries or moved or changed):
+            QMessageBox.information(
+                self, t("扫描完成", "Scan done"),
+                t("没有发现变化。", "Nothing changed."))
         """刷新鸟点下拉, 尽量保持当前选择。"""
         cur = self.spot_combo.currentData()
         self.spot_combo.blockSignals(True)
