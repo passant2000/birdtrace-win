@@ -54,7 +54,9 @@ def _hide(path: Path):
 
 
 def _write_atomic(path: Path, text: str):
-    tmp = path.with_name(path.name + ".tmp")
+    # 唯一临时名(0.8.7加固): 固定".tmp"在并发写同目录时会互相覆盖
+    import uuid
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(text, encoding="utf-8")
     # 隐藏文件 os.replace 在 Windows 上可能报 PermissionError: 先去隐藏再替换
     if os.name == "nt" and path.exists():
@@ -124,7 +126,9 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
 
 def export_folder(lib, folder: str | Path) -> Path | None:
     """写出/更新 folder 的 sidecar(合并既有文件中本库不认识的条目)。
-    文件夹不可写/盘离线 → None(调用方保留脏标记)。"""
+    文件夹不可写/盘离线/写入失败 → None(调用方保留脏标记, 0.8.7起调用方
+    对一切失败保留, 不再区分目录是否存在)。无可写内容 → folder(成功空
+    操作, 0.8.7改: 旧返回None会被flush当失败, 脏标记永不消)。"""
     folder = Path(folder)
     if not folder.is_dir():
         return None
@@ -133,7 +137,7 @@ def export_folder(lib, folder: str | Path) -> Path | None:
     merged = {h: e for h, e in existing.items() if h not in mine}
     merged.update(mine)
     if not merged:
-        return None
+        return folder
     from ..version import VERSION
     doc = {"format": FORMAT, "app": f"BirdTrace {VERSION}",
            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

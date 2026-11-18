@@ -217,6 +217,45 @@ def main():
     e4 = next(e for e in doc6["photos"].values() if e["file"] == "DSC004.jpg")
     check(e4["spot"] is None, "解挂后sidecar里spot为None")
 
+    print("\n[7] 0.8.7外审修复三件套")
+    # (a) 写入失败→脏标记保留(monkeypatch _write_atomic 抛OSError)
+    sid7 = lib.create_spot("外审测试点", 30.9, 122.0)
+    import app.core.sidecar as sc
+    orig_write = sc._write_atomic
+    sc._write_atomic = lambda path, text: (_ for _ in ()).throw(OSError("模拟只读盘"))
+    lib.set_photo_spot(p4, sid7)         # 标脏
+    n_dirty = lib.sidecar_dirty_count()
+    n_ok = lib.flush_sidecars()
+    check(n_dirty > 0 and lib.sidecar_dirty_count() == n_dirty,
+          f"写入失败后脏标记保留({n_dirty}) 不再静默丢失")
+    sc._write_atomic = orig_write
+    n_ok = lib.flush_sidecars()
+    check(n_ok >= n_dirty and lib.sidecar_dirty_count() == 0,
+          f"恢复写入后flush成功且脏标记清零({n_ok}, dirty={lib.sidecar_dirty_count()})")
+    # (b) set_aesthetic 落库(commit修复): 关库重开还在
+    lib.set_aesthetic(p4, 8.8)
+    lib.close()
+    lib = Library(BASE / "lib")
+    v = lib.conn.execute(
+        "SELECT aesthetic FROM photos WHERE id=?", (p4,)).fetchone()[0]
+    check(v is not None and abs(v - 8.8) < 1e-6,
+          f"set_aesthetic 重开库后仍在({v})")
+    # (c) update_spot → sidecar 同步新名字
+    lib.update_spot(sid7, name="南汇东滩改名后")
+    check(lib.sidecar_dirty_count() > 0, "update_spot 标脏(外审P1)")
+    lib.flush_sidecars()
+    doc7 = json.loads((folder2 / ".birdtrace.json").read_text(encoding="utf-8"))
+    e7 = next(e for e in doc7["photos"].values() if e["file"] == "DSC004.jpg")
+    sp7 = e7.get("spot")
+    sp7_name = sp7.get("name") if isinstance(sp7, dict) else sp7
+    check(sp7_name == "南汇东滩改名后",
+          f"改名后sidecar同步新名字({sp7_name})")
+    # (d) 无可写内容的目录 flush 后脏标记消(不再死循环脏)
+    lib.set_photo_spot(p4, None)
+    _ = lib.flush_sidecars()
+    lib.flush_sidecars()
+    check(lib.sidecar_dirty_count() == 0, "空内容目录flush后脏标记正常消")
+
     print()
     if FAILED["v"]:
         print("FAILED")

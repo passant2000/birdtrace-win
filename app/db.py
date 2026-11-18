@@ -792,6 +792,9 @@ class Library:
               else (cur["short_name"] if "short_name" in cur.keys() else "")),
              spot_id))
         self.conn.commit()
+        # 0.8.7修(外审采纳): 鸟点名称/坐标/备注写进每张照片的sidecar,
+        # 改点后必须让相关目录变脏, 否则换电脑导入会回填旧信息
+        self._sidecar_touch(spot_id=spot_id)
 
     def delete_spot(self, spot_id: int):
         """删点不删照片, 挂载自动解除。"""
@@ -1030,8 +1033,9 @@ class Library:
 
     def flush_sidecars(self) -> int:
         """把脏目录的 sidecar 写出; 返回写成功的目录数。
-        目录不可达(盘离线)保留脏标记, 挂回后再写。"""
-        import os
+        目录不可达(盘离线)或写入失败(只读盘/权限/杀软拦截)一律保留脏标记,
+        挂回/恢复后再写(0.8.7修: 旧逻辑只在目录不存在时保留, 其余失败
+        会被静默丢标记)。"""
         lock = getattr(self, "_sc_lock", None)
         if lock is None:
             return 0
@@ -1043,9 +1047,13 @@ class Library:
         from .core.sidecar import export_folder
         n = 0
         for d in dirs:
-            if export_folder(self, d) is not None:
+            try:
+                ok = export_folder(self, d) is not None
+            except Exception:
+                ok = False
+            if ok:
                 n += 1
-            elif not os.path.isdir(d):
+            else:
                 with lock:
                     self._sc_dirty.add(d)
         return n
@@ -1216,6 +1224,9 @@ class Library:
     def set_aesthetic(self, photo_id: int, score: float):
         self.conn.execute("UPDATE photos SET aesthetic=? WHERE id=?",
                           (score, photo_id))
+        # 0.8.7修(外审采纳): 连接是延迟事务模式, 此前不commit=美学worker
+        # 线程(独立连接)上挂未提交事务, 无后续提交则退出时回滚丢分
+        self.conn.commit()
         self._sidecar_touch(photo_ids=[photo_id])
 
     def pending_aesthetic(self) -> list[dict]:
