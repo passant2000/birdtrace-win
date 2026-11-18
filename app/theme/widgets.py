@@ -245,6 +245,20 @@ class PhotoGridItem(QWidget):
         p.end()
 
 
+# ---------------- 面板自适应宽(0.8.6用户: 别按语言硬编码) ----------------
+def panel_width_of(host: QWidget, lo: int = 320, hi: int = 520,
+                   pad: int = 26) -> int:
+    """信息面板宽度=内容sizeHint推导(文字/语言/DPI变了自动跟), 只夹宽松界。
+
+    0.8.6英文界面实测: 固定宽(368/340)下分段按钮与底部动作钮两端裁切
+    ("Orig…"/"reate share car")。为什么不是完全自由: ①可换行QLabel的
+    sizeHint不可靠(会报很窄的宽, 把面板压扁); ②不设上限时宽内容会吃掉
+    左侧预览。QLayout聚合取各控件行的max——分段/按钮/输入框的文字宽度
+    才是宽度真来源, 换行标签hint偏小不影响结果。pad=滚动条+边框余量。
+    """
+    return max(lo, min(hi, host.sizeHint().width() + pad))
+
+
 # ---------------- 网格档位(0.8.5: Windows超大图标式缩略图大小) ----------------
 GRID_TIERS = [132, 180, 240, 320]
 

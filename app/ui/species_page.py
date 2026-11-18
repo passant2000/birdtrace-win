@@ -616,7 +616,7 @@ class SpeciesPage(QWidget):
                         if row["path"] else None)
                 if tp:
                     pm = QPixmap(str(tp))
-            item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10],
+            item = PhotoGridItem(pm, label=self._cap_date_spot(ph),
                                  tile=tile)
             item.setCursor(Qt.PointingHandCursor)
             pid = ph["photo_id"]
@@ -937,7 +937,7 @@ class SpeciesPage(QWidget):
                     pm = QPixmap(str(tp))
             corner = t("★最美", "★ Best") if (ph["photo_id"] == best_pid
                                               and len(photos) > 1) else None
-            item = PhotoGridItem(pm, label=(ph["taken_at"] or "")[:10],
+            item = PhotoGridItem(pm, label=self._cap_date_spot(ph),
                                  corner=corner, stack=ph.get("group_n", 0),
                                  tile=tile)
             item.setCursor(Qt.PointingHandCursor)
@@ -1029,6 +1029,15 @@ class SpeciesPage(QWidget):
         self.content_lay.addWidget(card)
         self.content_lay.addStretch(1)
 
+    @staticmethod
+    def _cap_date_spot(ph: dict) -> str:
+        """缩略图说明=日期·鸟点(0.8.6用户: 与鸟点详情的时间+鸟种对偶)。"""
+        parts = [(ph.get("taken_at") or "")[:10]]
+        spot = ph.get("spot_short") or ph.get("spot_name") or ""
+        if spot:
+            parts.append(spot)
+        return " · ".join(p for p in parts if p)
+
     def _best_photo_widget(self, photos: list[dict]) -> QWidget:
         """图鉴页顶部「我的最美照片」: 美学评分最高一张, 点击进查看器。"""
         from ..theme.widgets import PhotoGridItem
@@ -1054,7 +1063,7 @@ class SpeciesPage(QWidget):
                                       row["file_hash"], 256)
             if tp:
                 pm = QPixmap(str(tp))
-        item = PhotoGridItem(pm, label=(best["taken_at"] or "")[:10],
+        item = PhotoGridItem(pm, label=self._cap_date_spot(best),
                              corner=t("★最美", "★ Best"))
         item.setCursor(Qt.PointingHandCursor)
         item.mousePressEvent = lambda e, pid=best["photo_id"], i2=list(ids): \

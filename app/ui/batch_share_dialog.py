@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog,
 
 from .. import theme
 from ..core import regions
-from ..core.sharecard import render_card
+from ..core.sharecard import auto_text_scale, render_card, resolve_layout
 from ..i18n import t, sname
 from ..theme.widgets import (SegmentedControl, ThemedDateEdit, ToggleSwitch,
                              make_card)
@@ -47,11 +47,14 @@ def _safe_name(s: str) -> str:
 
 
 class BatchShareDialog(QDialog):
-    def __init__(self, lib, win, photo_ids: list[int] | None = None):
+    def __init__(self, lib, win, photo_ids: list[int] | None = None,
+                 preset: tuple[str, str] | None = None):
         super().__init__(win)
         self.lib = lib
         self.win = win
         self._photo_ids = list(photo_ids) if photo_ids else None
+        self._preset = preset          # (d1,d2)初始日期范围(0.8.6
+                                      # 时间线: 默认=当前选中日期非今天)
         self._exported: list[Path] = []
         self.setWindowTitle(t("批量分享卡", "Batch share cards")
                             if not self._photo_ids else
@@ -60,6 +63,8 @@ class BatchShareDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(560)
         self._build_ui()
+        if self._preset:
+            self.quick_seg.setCurrent(-1)   # 已带日期范围, 快捷段不点亮
         self._update_count()
 
     # ---------- UI ----------
@@ -84,11 +89,17 @@ class BatchShareDialog(QDialog):
         # 日期控件=ThemedDateEdit: 弹层里年份/月份都是下拉一点直达,
         # 配色跟随主题。此前日期旁还有"年份…"下拉, 与控件年份重复且
         # 常驻显示单一库年份=看着像坏的(用户2026-11-05反馈), 已移除。
-        self.from_date = ThemedDateEdit(today)
+        d1 = QDate.fromString(self._preset[0], "yyyy-MM-dd") if self._preset else None
+        d2 = QDate.fromString(self._preset[1], "yyyy-MM-dd") if self._preset else None
+        if self._preset and (not d1.isValid() or not d2.isValid()):
+            d1 = d2 = None            # 非法预设回落今天
+        if d1 and d2 and d1 > d2:
+            d1, d2 = d2, d1
+        self.from_date = ThemedDateEdit(d1 or today)
         drow.addWidget(self.from_date)
         drow.addSpacing(12)
         drow.addWidget(QLabel(t("到", "to")))
-        self.to_date = ThemedDateEdit(today)
+        self.to_date = ThemedDateEdit(d2 or today)
         drow.addWidget(self.to_date)
         drow.addStretch(1)
         rc.addLayout(drow)
@@ -138,6 +149,18 @@ class BatchShareDialog(QDialog):
         theme_row.addWidget(self.theme_seg, 1)
         sc.addLayout(theme_row)
 
+        # 圆角卡片开关(0.8.6用户; 与单卡共用库设置card_rounded)
+        round_row = QHBoxLayout()
+        round_row.addWidget(QLabel(t("圆角卡片", "Rounded corners")))
+        round_row.addStretch(1)
+        self.round_toggle = ToggleSwitch(
+            self.lib.get_setting("card_rounded", "1") == "1")
+        self.round_toggle.toggled.connect(
+            lambda on: self.lib.set_setting("card_rounded",
+                                             "1" if on else "0"))
+        round_row.addWidget(self.round_toggle)
+        sc.addLayout(round_row)
+
         # 分辨率档位(与单卡同款, 2026-11-10用户; 0.8.3加原图档)
         res_row = QHBoxLayout()
         res_row.addWidget(QLabel(t("分辨率", "Resolution")))
@@ -156,9 +179,10 @@ class BatchShareDialog(QDialog):
         # 版式(与单卡同款; 2026-11-17竖版改3:5即9:15): 自动=横3:4/竖3:5
         lay_row = QHBoxLayout()
         lay_row.addWidget(QLabel(t("版式", "Layout")))
+        # 0.8.6: 英文段名缩短(3:5/3:4), 长英文挤溢出窄面板
         self.lay_seg = SegmentedControl(
-            [t("自动", "Auto"), t("竖 3:5", "Tall 3:5"),
-             t("横 3:4", "Wide 3:4"), t("经典", "Classic")])
+            [t("自动", "Auto"), t("竖 3:5", "3:5"),
+             t("横 3:4", "3:4"), t("经典", "Classic")])
         self.lay_seg.setToolTip(t(
             "自动：每张照片按方向选版式（横图3:4，竖图/方图3:5）。\n"
             "3:5（=9:15）=小红书竖版全屏图文；3:4=信息流预览完整；"
@@ -304,6 +328,8 @@ class BatchShareDialog(QDialog):
         focus = focus_point(self.lib, row, row)
         return {
             "cn": title,
+            "cn_raw": row["cn"] or "",
+            "en_raw": row["en_name"] or "",
             "pinyin": pys,
             "en": row["en_name"] or "",
             "sci": row["sci"] or "",
@@ -377,8 +403,19 @@ class BatchShareDialog(QDialog):
                 w = 3000 if self.res_seg.currentIndex() == 1 else 2000
             layout = ("auto", "3:5", "3:4", "classic")[
                 self.lay_seg.currentIndex()]
+            # 0.8.6: 自动默认分界线=无裁切线(与单卡ShareDialog同源;
+            # 按每张原图比例算, 批量不做逐卡手动, 全走自动默认)
+            ts = 1.0
+            try:
+                rw, rh = int(row["width"]), int(row["height"])
+                if rw > 0 and rh > 0:
+                    key = resolve_layout(rw, rh, layout)
+                    ts = auto_text_scale(rw, rh, key)
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
             pm = render_card(row["path"], self._card_info(row), theme_name,
-                             width=w, layout=layout)
+                             width=w, layout=layout, text_scale=ts,
+                             rounded=self.round_toggle.isChecked())
             dst = out_dir / f"{name}.png"
             pm.save(str(dst), "PNG")
             self._exported.append(dst)

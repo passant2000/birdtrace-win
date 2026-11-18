@@ -39,6 +39,9 @@ class TimelinePage(QWidget):
         self._missing_ids: set[int] = set()
         self._group_level = "month"   # 内容区分组级别: month(默认)/day
         self._group_day = None        # day级别下聚焦的日期(YYYY-MM-DD)
+        self._tl_sp = None            # 鸟种筛选code(None=全部, 0.8.6胶囊)
+        self._chips_key = None        # 鸟种胶囊范围=最近树点击(年/月/日)
+        self._raw = {}                # 未过滤时间线数据(胶囊统计用)
         self._thumb_cache: dict[int, QPixmap] = {}
         self._select_mode = False
         self._selected: set[int] = set()
@@ -150,6 +153,16 @@ class TimelinePage(QWidget):
         self.sel_bar.setVisible(False)
         lay.addWidget(self.sel_bar)
 
+        # 鸟种胶囊行(0.8.6用户: 按选中月/日显示鸟种, 点击筛选):
+        # 默认隐藏, 点了时间树节点才出现; FlowLayout自动换行
+        from ..theme.widgets import FlowLayout
+        self.chips_card = QFrame()
+        self.chips_card.setObjectName("Card")
+        self.chips_lay = FlowLayout(self.chips_card, spacing=8)
+        self.chips_lay.setContentsMargins(16, 10, 16, 10)
+        self.chips_card.setVisible(False)
+        lay.addWidget(self.chips_card)
+
         # 主体: 左侧时间树(年→月→日, 点击跳转) + 右侧照片流
         # (2026-10-31用户要求: 只按月份上下翻不方便)
         body = QHBoxLayout()
@@ -187,9 +200,28 @@ class TimelinePage(QWidget):
 
 
     def _batch_share(self):
-        """批量分享卡导出(0.8-⑥): 日期范围+可选鸟种 → 每鸟种一张最美。"""
+        """批量分享卡导出(0.8-⑥): 日期范围+可选鸟种 → 每鸟种一张最美。
+        0.8.6: 默认日期=时间线当前选中节点(年/月/日), 没点过=今天。"""
         from .batch_share_dialog import BatchShareDialog
-        BatchShareDialog(self.lib, self.win).exec()
+        BatchShareDialog(self.lib, self.win,
+                         preset=self._sel_date_range()).exec()
+
+    def _sel_date_range(self):
+        """当前树点击节点→(d1,d2); 未点/杂项节点→None(回落今天)。"""
+        key = self._chips_key
+        if not key:
+            return None
+        if "|" in key:                 # 日
+            d = "-".join(key.split("|", 1))
+            return (d, d)
+        if len(key) == 7 and key[4] == "-":   # 月
+            import calendar
+            y, m = key.split("-")
+            return (f"{key}-01",
+                    f"{key}-{calendar.monthrange(int(y), int(m))[1]:02d}")
+        if len(key) == 4 and key.isdigit():   # 年
+            return (f"{key}-01-01", f"{key}-12-31")
+        return None
 
     def _export_wizard(self):
         """导出向导(0.8-④): 复制到新位置 / 原地重命名。"""
@@ -234,7 +266,17 @@ class TimelinePage(QWidget):
         self.all_btn.setText(t("全不选", "Deselect all") if n >= self.lib.photo_count()
                              else t("全选", "Select all"))
 
-    def _on_item_click(self, pid: int, item=None, group_ids=None):
+    def _on_item_click(self, pid: int, item=None, group_ids=None, ev=None):
+        # 0.8.6连拍修错: 封面右键=组级菜单(整组改鸟种/整组重新识别);
+        # 非连拍单张不弹(改判走多选工具条, 保持原路径)
+        if ev is not None and getattr(ev, "button", None) is not None                 and ev.button() == Qt.RightButton:
+            from .burst_actions import make_group_menu
+            try:
+                make_group_menu(self.lib, self.win, pid, self,
+                                ev.globalPos())
+            except RuntimeError:
+                pass
+            return
         if self._select_mode:
                 # Shift+click: 以上次点击为锚点, 按显示顺序选中头尾之间全部
             # (2026-11-03用户要求); 锚点无效时退化为普通点击。
@@ -363,6 +405,81 @@ class TimelinePage(QWidget):
             # 挂载/取消不改数据签名, refresh会跳过——但查看器/鸟点页的
             # 信息靠库重查, 发信号让各页跟上即可; 时间线网格不显示鸟点
             self.win.library_changed.emit()
+
+    # ---------- 鸟种胶囊(0.8.6: 范围=树点击节点, 点击筛选) ----------
+    def _scope_rows(self) -> list:
+        """当前树点击范围内的照片行(年/月/日); 未点过返回[]。"""
+        key = self._chips_key
+        if not key:
+            return []
+        if "|" in key:                 # 日 "YYYY-MM|DD"
+            day = "-".join(key.split("|", 1))
+            return [p for v in self._raw.values() for p in v
+                    if self._iso_date(p.get("taken_at")) == day]
+        return [p for ym, v in self._raw.items() if ym.startswith(key)
+                for p in v]
+
+    def _rebuild_chips(self):
+        """重建胶囊行: 范围内鸟种(数量降序)+全部; 无范围且未筛选=隐藏。"""
+        rows = self._scope_rows()
+        if not rows and not self._tl_sp:
+            self.chips_card.setVisible(False)
+            return
+        while self.chips_lay.count():
+            it = self.chips_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+        def _chip(text, code):
+            sel = (self._tl_sp == code)
+            c = QLabel(text)
+            c.setStyleSheet(
+                "font-size:13px;padding:4px 14px;border-radius:14px;"
+                + (f"background:{theme.BLUE};color:white;" if sel else
+                   f"background:{theme.FILL};color:{theme.LABEL};"))
+            c.setCursor(Qt.PointingHandCursor)
+            c.mousePressEvent = lambda e, cd=code: self._pick_species(cd)
+            self.chips_lay.addWidget(c)
+
+        names: dict[str, str] = {}
+        for v in self._raw.values():
+            for p in v:
+                mc = p.get("main_code")
+                if mc and mc not in names:
+                    names[mc] = sname(p.get("sp_cn") or "", p.get("sp_en") or "")
+        agg: dict[str, int] = {}
+        for p in rows:
+            mc = p.get("main_code")
+            if mc:
+                agg[mc] = agg.get(mc, 0) + 1
+        _chip(t(f"全部 {len(rows)}", f"All {len(rows)}"), None)
+        for code, n in sorted(agg.items(), key=lambda kv: (-kv[1], kv[0])):
+            _chip(f"{names.get(code, code)} ×{n}", code)
+        self.chips_lay.addStretch(1)
+        tip = QLabel(t("点鸟种只看该种；再点一次恢复全部",
+                       "Click a species to filter; click again for all"))
+        tip.setStyleSheet(f"font-size:12px;color:{theme.LABEL_3};"
+                          "background:transparent;")
+        tip.setWordWrap(True)
+        self.chips_lay.addWidget(tip)
+        self.chips_card.setVisible(True)
+
+    def _pick_species(self, code):
+        """胶囊点击: 筛选/取消该鸟种(整库范围, 与连拍折叠叠加)。"""
+        self._tl_sp = None if self._tl_sp == code else code
+        self.refresh(force=True)
+
+    def _caption(self, ph: dict) -> str:
+        """缩略图说明=鸟种+鸟点(0.8.6用户, 鸟点详情是时间+鸟种的对偶)。"""
+        parts = []
+        if ph.get("main_code"):
+            sp = sname(ph.get("sp_cn") or "", ph.get("sp_en") or "")
+            if sp:
+                parts.append(sp)
+        spot = ph.get("spot_short") or ph.get("spot_name") or ""
+        if spot:
+            parts.append(spot)
+        return " · ".join(parts)
 
     def _batch_remove(self):
         ids = sorted(self._selected)
@@ -564,6 +681,11 @@ class TimelinePage(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         raw = self.lib.timeline()
+        self._raw = raw             # 未过滤数据(鸟种胶囊范围统计用)
+        if self._tl_sp:            # 鸟种筛选(0.8.6胶囊): 只动视图
+            raw = {ym: [p for p in v if p.get("main_code") == self._tl_sp]
+                   for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
         counts = {ym: len(v) for ym, v in raw.items()}
         if self._collapse_on():
             from ..core.burst import collapse_bursts
@@ -640,6 +762,7 @@ class TimelinePage(QWidget):
             # (2026-11-03用户实测"得重启才刷新")。此前直接return跳过了
             # 函数末尾的_build_tree。
             self._build_tree({})
+            self._rebuild_chips()
             return
         import collections
         for ym, photos in data.items():
@@ -671,6 +794,7 @@ class TimelinePage(QWidget):
 
         self.content_lay.addStretch(1)
         self._build_tree(raw)
+        self._rebuild_chips()
         self._restore_scroll_after_rebuild()
         self._tl_sig = self._data_sig()
         self._cur_cols = self._wanted_cols()
@@ -719,7 +843,9 @@ class TimelinePage(QWidget):
                 corner = t("原图离线", "Offline")       # 卷未接入, 插回即恢复
             elif ph["id"] in self._missing_ids:
                 corner = t("文件丢失", "File missing")   # 不在原位置
-            item = PhotoGridItem(thumb, label="", corner=corner,
+            # 0.8.6用户: 缩略图下显示鸟种+鸟点(与鸟点详情的时间+鸟种对偶)
+            item = PhotoGridItem(thumb, label=self._caption(ph),
+                                 corner=corner,
                                  stack=ph.get("group_n", 0), tile=self._tile)
             item.setCursor(Qt.PointingHandCursor)
             item.set_selected(ph["id"] in self._selected)
@@ -727,7 +853,7 @@ class TimelinePage(QWidget):
                        _gids=ph.get("group_ids")):
                 # 防御: 网格重建后残留的僵尸控件点击直接忽略
                 try:
-                    self._on_item_click(_pid, _it, _gids)
+                    self._on_item_click(_pid, _it, _gids, _e)
                 except RuntimeError:
                     pass
             item.mousePressEvent = _click
@@ -837,6 +963,7 @@ class TimelinePage(QWidget):
         点具体日期=内容区改按**日**分组(各日小标题, 2026-11-04用户);
         点年/月=按月分组(默认)。级别变化时重建内容区。"""
         key = item.data(0, Qt.UserRole)
+        self._chips_key = key      # 鸟种胶囊范围跟树点击(0.8.6)
         target = None
         if key and "|" in key:
             # key="YYYY-MM|DD"——_group_day必须存完整ISO日期"YYYY-MM-DD":

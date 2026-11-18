@@ -2,6 +2,41 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-18（晚）· **0.8.6 四轮——实测六报全部落地 + 重打包（替换 releases 目录）**
+
+**六轮（同日深夜，用户"连拍一组都识别错咋搞"P1+P2拍板+rebox旧bug修入）**：**用户红线=识别管线冻结**（sp_engine/recognize_sub/engine/RecognizeWorker 一律只读，新功能只调现成接口，已存记忆）。P1 组级改判：时间线**右键连拍封面**菜单+查看器组内按钮行（group_bar，≥2张才显示）→ `burst_actions.change_group_species`（SpeciesPickDialog 一次 → 现成 `set_species_batch` 全组人工确认，自动统一/识别永不覆盖）。P2 整组重识别=多取景全局最优：`GroupRescueWorker(QThread)`（worker.py 新类，只读复用 build_worker_cmd 子进程协议）——每帧两轮：①无框标准识别拿主框 ②带框=多取景最佳（与画框识别同路径），全局最高置信帧×取景结果写整组（source 必须 detect——子进程带框结果带 rebox 会误触人工保护；预算 MAX_FRAMES=8 帧美学降序、EARLY_CONF=0.85 即收；无鸟清空归未识别同批量语义）。rebox 旧 bug：`db.append_record`（追加 rank 末尾，人工记录不删；旧走 add_records 被"人工优先"整组替换语义挡住=同一照片第二只起静默丢弃，v0.8.5 的 verify_rebox 即挂、本会话 stash 实证与本轮改动无关）。验证：新 verify_burst_ops（append/P1直code路径/P2真引擎7秒 comkin1 99.999%/查看器行可见性）全绿+verify_rebox 转绿+timeline_select/chips/viewer/burst/batch_ops/e2e/i18n 全绿。assert_pkg_086 +2 锚点=109项。重打包替换 releases。
+
+**五轮（同日晚，用户英文界面二报+定策"别硬编码，自适应"）**：英文截图实测=分享卡右栏 Resolution/Layout 段名"Orig…/Clas…"截断+底部按钮贴窗边裁切、查看器右栏 2×2 动作钮两端硬裁（"reate share car"/"nove from BirdTrac"）。**定策：面板宽度=内容 sizeHint 推导（theme/widgets 新 `panel_width_of(host, lo, hi, pad)`），语言/DPI/文案变了自动跟，只夹宽松界防两个坑**（①可换行QLabel的sizeHint不可靠会压扁面板——控件行才是宽度真来源；②无上限会吃掉左侧预览）。接入三处：分享卡右栏（滚动内容与底部动作行取宽者，`_panel_w` 供默认窗宽公式用）、查看器右栏（2×2按钮行sizeHint）、画框识别右栏；分辨率英文段名缩短 2000/3000/Original。验证 verify_share_dialog 新 [12]：en/zh 双语全部按钮 width≥sizeHint（文字零裁切）+面板宽在界内，en=367/zh=377 自适应生效。**发现旧 bug（已修于六轮）：`has_human_record` 把 `source='rebox'` 算人工痕迹，同一照片连续画框第二只起确认被静默丢弃。**
+
+用户实测六报，"修好跟之前的修复一起打包进0.8.6"：
+
+用户实测六报，"修好跟之前的修复一起打包进0.8.6"：
+1. **鸟点详情胶囊跟树点击**：点某天/月/年后顶部鸟种胶囊只显示该范围鸟种（`_date_key` 记录树点击，`_rebuild_chips` 按范围聚合；旧版恒为整点全部、换日期不动）。鸟种筛选语义不变（仍整点过滤视图）。
+2. **时间线鸟种胶囊+缩略图说明**：点时间树年/月/日→内容区上方出现该范围胶囊（数量降序，FlowLayout 换行），点击筛选**整库**该鸟种（`_tl_sp` 过滤 raw 后再连拍折叠），日模式=当天∩鸟种；不点树该行隐藏。缩略图说明=「鸟种 · 鸟点」（timeline() 查询补 main_code/sp_cn/sp_en/spot_name/spot_short，burst 折叠封面带全）。
+3. **鸟种库缩略图说明**=「日期 · 鸟点」（photos_of_species/unidentified_photos 补鸟点两字段；与鸟点详情的「日期 · 鸟种」对偶——用户"三处一样方便"）。
+4. **英文界面三修**：①右侧选项面板 `ScrollBarAlwaysOff`+行标签 rlabel 可换行（旧版长英文顶出横向滚动条）；②大标题英文鸟名**整串紧凑绘制**（旧版逐字符独立单元+gap26=稀疏占满行；`if not pys` 分支单 run+超宽等比缩）；③副名行=「另一语言」：英文界面画中文名（cn_raw，无中文退学名，CJK 不斜体），中文界面仍英文名。单卡/批量 `_card_info` 补 cn_raw/en_raw；lay_seg 英文段名缩短 3:5/3:4。
+5. **鸟点详情惰性加载**：2000+张照片点「查看详情」卡死→月组惰性（打开只建首月=最新月，占位高度=精确高度滚动条先对零跳动；`_fill_visible` 滚动接近两屏内按需建、`_ensure_group` 树跳先建目标月；鸟种名 memo）。
+6. **圆角卡片可选**：`render_card(rounded=)`，单卡「圆角卡片」ToggleSwitch+批量同款，库设置 card_rounded 持久化共用。
+7. **批量分享卡默认日期=时间线当前选中节点**：`_sel_date_range()`（日→单日/月→整月/年→全年），`BatchShareDialog(preset=(d1,d2))` 带预设时快捷段不点亮"今天"。
+**验证**：新增 verify_timeline_chips（胶囊范围/筛选高亮复位/日模式语义/说明文字/预设日期）全绿；verify_spot_detail 增惰性+胶囊范围断言全绿；verify_share_layout 增第10段（圆角角点alpha、英文标题墨宽882≈advance893 旧稀排1257+、副名 cn_raw 像素diff）=**42/42**；回归 share_dialog/sharecard_dpi/share_exif/batch_share/batch_ops/spot_poi/timeline_cols/timeline_select/grid_tiers/best18/e2e/spot_detail/i18n两道/smoke 全绿。**坑复现：Bash 传 python heredoc 会吃一层反斜杠转义（`\n` 变换行）——含反斜杠的替换必须用 Edit 工具**。assert_pkg_086 增4锚点=106项。使用说明-0.8.6-母本重写0.8.6段。重打包替换 releases/鸟迹BirdTrace-0.8.6-便携版。
+
+## 2026-11-17 · **0.8.6——分享卡照片/文字占比手动拖动 + 无裁切参考线（已打包，待实测）**
+
+用户拍板当日做（原计划 0.9）："文字区图片区支持手动拖动+文字随框缩放，标记无裁切位置作拖动参考，打包 0.8.6"。
+1. **渲染层（sharecard.py）**：`render_card` 加 `text_scale`（夹 [0.75,1.35]）——文字区全部 y 偏移/行高/**字号**/胶囊/logo 同乘 `kt=th/base_th`（**字号行高同步缩放=字形矩形关系不变，免疫 0.8.3 截字形坑；画笔 scale(1,k) 竖向缩字会变形，禁用**）；固定版式卡高锁死→照片区反向伸缩（3:5 恒 2667/3:4 恒 2133），classic 卡高随 th 浮动；x 方向不缩。**坑：文字区原有 `for s in right_col` 循环变量撞新缩放助手 `s()`——改 `for seg`（t 遮蔽同款预防）**。`guide_y/guide_note` 叠画橙色虚线+标签（**仅预览渲染传入，出片不传=参考线永不入成品**）。
+2. **交互（share_dialog.py）**：照片/文字交界带（±16 物理px）优先于照片拖动——拖动=`_bdrag_th`（dy→th 夹紧+**磁吸**：距无裁切 th<24 设计 px 吸附）；悬停三态光标（**坑：QLabel 默认不跟踪无键鼠标——setMouseTracking(True)**）；交界带滚轮=±8 微调；双击交界线=文字区复位（与照片构图复位分离）；拖动中 interact 1400+guide、松手全分辨率无 guide。`_no_crop_guide()`：可达→实位；不可达→夹到可拖边界+方向注释；classic 不标。
+3. **验证**：share_layout **38 段**（k=0.8/1.35 卡高锁死+分隔线等比移动 y≈2972 预测+guide 橙线 255,122,0 像素命中+不传 guide 出片干净）；share_dialog **40 段**（r=1.1 竖图 ph_nc=1760 可达/磁吸 900→907/**测试坑：期望 890 忘了磁吸提前吸附——写期望先过一遍交互链**/双限夹紧/不可达注释/交界带优先/双击复位）；全套回归绿。**坑：verify_share_dialog 的 check() 只收两参——复制断言模板先看签名**。
+4. **打包**：version→0.8.6；assert_pkg_086=085+2 新锚=**102/102**（首跑 100 因 heredoc 补丁没落上——**大段插入用 Edit 工具别用 python replace 拼转义**）；frozen_check_086 **5/5**（15s）；`releases/鸟迹BirdTrace-0.8.6-便携版`（1.2G，使用说明.txt 在包内，母本 packaging/使用说明-0.8.6-母本.txt）；冒烟 PASS。**0.8.5 目录保留为当前正式版；0.8.6 实测通过后 commit+tag v0.8.6（未 commit 待指示）**。
+5. **0.8.6 二轮（同日，用户实测"拖动逻辑又搞反了"）**：交界线拖动方向翻转——旧实现把 +dy（手向下）加给 th=分界线逆手上移；修 `th -= dy`（分界线跟手：下拖=照片区变大）。**连续第三次方向类 bug（平移/磁吸期望/交界线），共同根因=断言只验"数值自洽"不验"跟手语义"——本次起方向类断言一律写成"手向X→画面区域向X"因果句式**（verify[10]已按此重写：下拖100→th690/zh变大/卡高不变；磁吸910→907）。重打包替换；assert 102/102+frozen 5/5+冒烟 PASS。未 commit。
+
+## 2026-11-18 · **0.8.6 三轮——实测三问题修复：letterbox 偏左/无裁切线不准/自动默认分界线（已修未打包）**
+
+用户实测 0.8.6（9:16 原图 `20260608-傍霞村-领雀嘴鹎-DSC01991`，卡=问题复现件）报三问题，"先修不打包"：
+1. **照片偏左不居中、放大拉不到中间（根因=符号约定实现反了）**：`photo_placement` docstring 约定"letterbox 时 sx/sy 负值=居中留边"（绘制画在 −sx/−sy），但实现返回 `+(zw−w)/2` 正值 → 9:16 竖图清晰区整体推到 −340..980：左半挂出卡外、右侧全糊底（像素 diff=0.00 复现用户卡）；缩放锚点公式 `(sx+ax)·grow−ax` 跨 letterbox→cover 边界也因符号错被夹到极端（内容跳边）。**修=letterbox 两分支（adjust/bleed）返回负值**，锚点数学不动自愈。视觉验证：清晰区 15%~85% 左右对称、鸟完整。
+2. **无裁切线不准（单一 ph_nc 判断错误）**：真实零裁切区间是双边界 `[0, 0.7·ph_nc) ∪ {ph_nc} ∪ (ph_nc/0.7, ∞)`（bleed=整图 fit/cover=裁切，BLEED_LOSS=0.3 造成）——旧代码只认 ph_nc 单点且宽图夹紧方向反（越拖越裁）。**新纯函数 `nocrop_line(src_w,src_h,key)`** 按**原图比例**返回 (ph, exact|lo|hi|off_tall|off_wide|all)：竖图 lo=0.7·ph_nc（线上整图最大）/横图 hi=ph_nc/0.7（线上整图满宽）/off=最近端注明方向/all=全程无裁切线跟手。参考线+磁吸（`_nocrop_th` 单源）重写。
+3. **自动默认分界线=无裁切线（新纯函数 `auto_text_scale`）**：未手动拖过分界线时（`_ts_touched`），`_update` 按原图比例自动落位——exact→精确整图位/lo→线上整图最大/hi→线上（默认已无裁切则 1.0 不动，横图整图大小恒定）/off→最近端/all→1.0；双击交界线复位=回此默认（非死 1.0）；批量导出同款（batch 逐卡按 width/height 算）。例：9:16→ts 0.859（照片区 1989）、2:3→1.253、方图 3:5→1.348（精确位差 1px 被 1.35 上限挡住，取最近端裁 0.06%）。
+4. **验证**：share_dialog 新增 [11]（nocrop_line 七比例分档/auto_text_scale 五档/letterbox sx=−340 回归/zoom1.6 跨界 ox=0.5 居中）全绿；[2] 钉 ts=1.0 保 [2]~[6] 交互几何（ph=1877），[10] 期望更新（907 默认/807 跟手/方图 3:4→lo=1118 可达/双击回 907）；share_layout 38/38、batch_share、DPI、assert_pkg_086 **102/102**、冒烟 PASS。临时诊断脚本（analyze/repro/confirm_card_086*）已删。**未打包未 commit——等用户实测后再打包替换 0.8.6 目录**。
+
 ## 2026-11-17 · **v0.8.5 转正式（用户实测确认）**
 
 三轮构建后用户实测通过。tag **v0.8.5** 打在二三轮修复后的 PROGRESS 提交上（惯例：tag 跟正式版走）。发布包= `releases/鸟迹BirdTrace-0.8.5-便携版`（第三轮构建，1.2G，使用说明.txt 在包内）。旧包 0.8.2/0.8.3/0.8.4 三目录删除仍待指示；0.9 按 docs/后续开发方案.md 开新会话。

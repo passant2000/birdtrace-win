@@ -235,5 +235,67 @@ pm = render_card(landscape, INFO, "light", width=1600, layout="classic",
 pm2 = render_card(landscape, INFO, "light", width=1600, layout="classic")
 check("classic不吃adjust(历史行为不动)", pm.size() == pm2.size())
 
+# ---- 9) 0.8.6 文字区手动高度: 卡高锁版式/行带等比/参考线 ----
+pm = render_card(portrait, INFO, "light", width=2000, layout="3:5",
+                 text_scale=0.8)
+check("k=0.8卡高锁版式(3:5仍2000x3334)",
+      (pm.width(), pm.height()) == (2000, 3334),
+      f"{pm.width()}x{pm.height()}")
+# ph=2667-round(790*0.8)=2035; 分隔线y=(2035+428*0.8)*1.25≈2972
+found = any(abs(px(pm, 800, yy)[0] - 220) < 26
+            and abs(px(pm, 800, yy)[1] - 219) < 26
+            for yy in range(2960, 2986))
+check("k=0.8分隔线随文字区等比上移(y≈2972)", found)
+pm = render_card(portrait, INFO, "light", width=2000, layout="3:5",
+                 text_scale=1.35)
+check("k=1.35卡高仍锁死", (pm.width(), pm.height()) == (2000, 3334),
+      f"{pm.width()}x{pm.height()}")
+pm = render_card(portrait, INFO, "light", width=2000, layout="3:4",
+                 guide_y=900, guide_note="TEST")
+row = [px(pm, x, 1125) for x in range(300, 1300, 40)]
+check("参考线画出(guide_y=900→橙线y=1125)",
+      any(c[0] > 230 and 90 < c[1] < 160 and c[2] < 60 for c in row),
+      str(row[:3]))
+pm = render_card(portrait, INFO, "light", width=2000, layout="3:4")
+row2 = [px(pm, x, 1125) for x in range(300, 1300, 40)]
+check("不传guide无参考线(出片干净)",
+      not any(c[0] > 230 and 90 < c[1] < 160 and c[2] < 60 for c in row2))
+
+# ---- 10) 0.8.6三修: 圆角可选 + 英文标题整串紧凑 + 副名行换语种 ----
+pm_r = render_card(portrait, INFO, "light", width=1600, layout="3:5")
+pm_s = render_card(portrait, INFO, "light", width=1600, layout="3:5",
+                   rounded=False)
+check("圆角可选: 圆角卡角(2,2)透明/直角卡不透明",
+      pm_r.toImage().pixelColor(2, 2).alpha() == 0
+      and pm_s.toImage().pixelColor(2, 2).alpha() == 255,
+      f"{pm_r.toImage().pixelColor(2, 2).alpha()},"
+      f"{pm_s.toImage().pixelColor(2, 2).alpha()}")
+
+EN = {**INFO, "cn": "Crimson Sunbird", "en": "Crimson Sunbird", "pinyin": []}
+pm_en = render_card(portrait, EN, "light", width=1600, layout="3:5")
+from app.core.sharecard import _font
+from PySide6.QtGui import QFontMetrics
+adv = QFontMetrics(_font(106, 900)).horizontalAdvance("Crimson Sunbird")
+img = pm_en.toImage()
+xs = [x for x in range(1600) for y in range(1877 + 140, 1877 + 290, 4)
+      if sum(img.pixelColor(x, y).getRgb()[:3]) < 430]
+span = (max(xs) - min(xs) + 1) if xs else 0
+check("英文标题整串紧凑(墨宽≈整串advance, 非逐字稀排)",
+      abs(span - adv) < adv * 0.12,
+      f"墨宽{span} vs advance{adv}(旧稀排约{int(adv + 14 * 26)}+)")
+
+EN2 = {**EN, "cn_raw": "红腹笑翠鸟"}
+pm_cn = render_card(portrait, EN2, "light", width=1600, layout="3:5")
+i1, i2 = pm_en.toImage(), pm_cn.toImage()
+diff = any(sum(i1.pixelColor(x, y).getRgb()[:3])
+           != sum(i2.pixelColor(x, y).getRgb()[:3])
+           for x in range(112, 900, 5) for y in range(1877 + 330, 1877 + 390, 5))
+check("英文界面副名行=中文名(cn_raw生效, 非重复英文名)", diff)
+zh = render_card(portrait, INFO, "light", width=1600, layout="3:5").toImage()
+zh_diff = any(sum(zh.pixelColor(x, y).getRgb()[:3])
+              != sum(i2.pixelColor(x, y).getRgb()[:3])
+              for x in range(112, 900, 5) for y in range(1877 + 330, 1877 + 390, 5))
+check("对照: 中文界面副名行不受影响(仍英文名)", zh_diff)
+
 print(f"\n===== SHARE_LAYOUT: PASS={ok} FAIL={fail} =====")
 sys.exit(1 if fail else 0)

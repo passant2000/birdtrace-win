@@ -12,8 +12,10 @@ import json
 import os
 
 from ..core import regions
-from ..core.sharecard import (ADJUST_ZOOM_MAX, DESIGN_W, XHS_LAYOUTS,
-                              photo_placement, render_card, resolve_layout)
+from ..core.sharecard import (ADJUST_ZOOM_MAX, DESIGN_W, TEXT_SCALE_MAX,
+                              TEXT_SCALE_MIN, XHS_LAYOUTS, auto_text_scale,
+                              nocrop_line, photo_placement, render_card,
+                              resolve_layout)
 from ..i18n import t, sname
 from ..theme.widgets import SegmentedControl, ToggleSwitch, make_card
 
@@ -148,6 +150,7 @@ class _PreviewLabel(QLabel):
         super().__init__()
         self.host = host
         self.setAlignment(Qt.AlignCenter)
+        self.setMouseTracking(True)       # 悬停光标(交界线/照片)需要跟踪
 
     def mousePressEvent(self, e):
         self.host._pv_press(e)
@@ -177,6 +180,9 @@ class ShareDialog(QDialog):
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
         self.setMinimumSize(980, 640)
         self._adjust = None             # 手动构图{zoom,ox,oy}; None=自动
+        self._tscale = 1.0              # 文字区高度缩放(0.8.6拖交界线)
+        self._ts_touched = False        # 拖过交界线后不再跟无裁切默认走
+        self._bdrag = None              # 交界线拖动(全局y锚)
         self._view = {"mode": "fit"}    # 预览缩放: fit=适应 | pct=百分比
         self._view_s = 1.0              # 预览像素/卡物理像素
         self._lay_key = None            # 解析出的固定版式key(classic=None)
@@ -185,16 +191,26 @@ class ShareDialog(QDialog):
         self._build_ui()
         self._update()
         # 默认窗口(0.8.5用户: 卡都是竖图, 不要最大化——竖向用满屏幕,
-        # 左右紧凑: 宽=最宽卡(3:4)按高适配的宽度+右栏, 留最大化按钮可手动放大)
+        # 左右紧凑: 宽=最宽卡(3:4)按高适配的宽度+右栏(0.8.6右栏宽随
+        # 内容自适应, 窗宽同步用它), 留最大化按钮可手动放大)
         scr = QGuiApplication.primaryScreen().availableGeometry()
         h = scr.height() - 48
-        w = min(scr.width() - 80, round(h * 0.78) + 430)
+        extra = getattr(self, "_panel_w", 368) + 62
+        w = min(scr.width() - 80, round(h * 0.78) + extra)
         self.resize(max(self.minimumWidth(), w), h)
 
     def _build_ui(self):
         root = QHBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
         root.setSpacing(12)
+
+        def rlabel(txt: str) -> QLabel:
+            """行标签(0.8.6英文界面): 可换行不撑横向——右栏固定368px,
+            旧版长英文标签把面板顶出横向滚动条。"""
+            lb = QLabel(txt)
+            lb.setWordWrap(True)
+            lb.setMinimumWidth(0)
+            return lb
 
         # ---- 左: 预览(视图缩放工具条+滚动视口, 0.8.5) ----
         left = QVBoxLayout()
@@ -223,9 +239,11 @@ class ShareDialog(QDialog):
             bar.addWidget(w)
         bar.addStretch(1)
         self.crop_hint = QLabel(
-            t("照片区拖动平移 · 滚轮缩放构图 · 双击复位 · Ctrl+滚轮缩放预览",
-              "Drag the photo to pan · wheel to zoom framing · "
-              "double-click resets · Ctrl+wheel zooms the preview"))
+            t("照片区拖动平移 · 滚轮缩放构图 · 拖交界线调文字区 · 双击复位 · "
+              "Ctrl+滚轮缩放预览",
+              "Drag the photo to pan · wheel to zoom framing · drag the "
+              "divider to resize text · double-click resets · "
+              "Ctrl+wheel zooms the preview"))
         self.crop_hint.setObjectName("Hint")
         bar.addWidget(self.crop_hint)
         left.addLayout(bar)
@@ -242,7 +260,9 @@ class ShareDialog(QDialog):
         right.setSpacing(10)
         panel = QScrollArea()
         panel.setWidgetResizable(True)
-        panel.setFixedWidth(368)
+        # 0.8.6英文界面: 长标签顶出横向滚动条(得左右拖)——禁横向滚动+
+        # 行标签可换行(rlabel), 面板内自然收缩
+        panel.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         host = QWidget()
         pv = QVBoxLayout(host)
         pv.setContentsMargins(0, 0, 8, 0)
@@ -251,19 +271,31 @@ class ShareDialog(QDialog):
         # 样式卡(选项与旧版一致)
         opt_card, opt = make_card(t("样式", "Style"))
         theme_row = QHBoxLayout()
-        theme_row.addWidget(QLabel(t("主题", "Theme")))
+        theme_row.addWidget(rlabel(t("主题", "Theme")))
         self.theme_seg = SegmentedControl([t("浅色", "Light"), t("深色", "Dark")])
         self.theme_seg.changed.connect(lambda _=0: self._update())
         theme_row.addWidget(self.theme_seg, 1)
         opt.addLayout(theme_row)
 
+        # 圆角卡片开关(0.8.6用户: 圆角做成可选项; 库设置持久化, 批量同源)
+        round_row = QHBoxLayout()
+        round_row.addWidget(rlabel(t("圆角卡片", "Rounded corners")))
+        round_row.addStretch(1)
+        self.round_toggle = ToggleSwitch(
+            self.lib.get_setting("card_rounded", "1") == "1")
+        self.round_toggle.toggled.connect(self._on_round_toggle)
+        round_row.addWidget(self.round_toggle)
+        opt.addLayout(round_row)
+
         # 分辨率档位(2026-11-10用户: 数毛细节): 标准2000/高清3000/原图,
         # 高清单卡文件更大, 适合存档/图床; 原图=卡宽取照片像素宽,
         # 照片1:1零重采样(竖图即原图短边)
         res_row = QHBoxLayout()
-        res_row.addWidget(QLabel(t("分辨率", "Resolution")))
-        self.res_seg = SegmentedControl([t("标准 2000", "Standard 2000"),
-                                         t("高清 3000", "HD 3000"),
+        res_row.addWidget(rlabel(t("分辨率", "Resolution")))
+        # 英文段名缩短(2000/3000, 行标签已是Resolution)——旧"Standard 2000"
+        # 三段在窄栏里末端裁切成"Orig…"(0.8.6英文适配实测)
+        self.res_seg = SegmentedControl([t("标准 2000", "2000"),
+                                         t("高清 3000", "3000"),
                                          t("原图", "Original")])
         self.res_seg.setToolTip(t(
             "原图档：卡片宽度=照片自身像素宽（竖图即原图短边），"
@@ -278,10 +310,11 @@ class ShareDialog(QDialog):
         # 版式(2026-11-11小红书; 2026-11-17竖版改3:5即9:15): 自动=按照片
         # 方向(横3:4/竖3:5全屏); 3:4=feed预览不裁字; 经典=原自适应高度
         lay_row = QHBoxLayout()
-        lay_row.addWidget(QLabel(t("版式", "Layout")))
+        lay_row.addWidget(rlabel(t("版式", "Layout")))
+        # 0.8.6: 英文段名缩短(3:5/3:4)——四段长英文在368px栏里挤出面板
         self.lay_seg = SegmentedControl(
-            [t("自动", "Auto"), t("竖 3:5", "Tall 3:5"),
-             t("横 3:4", "Wide 3:4"), t("经典", "Classic")])
+            [t("自动", "Auto"), t("竖 3:5", "3:5"),
+             t("横 3:4", "3:4"), t("经典", "Classic")])
         self.lay_seg.setToolTip(t(
             "自动：按照片方向选版式（横图3:4，竖图/方图3:5）。\n"
             "3:5（=9:15）=小红书竖版全屏图文；3:4=信息流预览完整；"
@@ -295,7 +328,7 @@ class ShareDialog(QDialog):
         opt.addLayout(lay_row)
 
         life_row = QHBoxLayout()
-        life_row.addWidget(QLabel(t("显示 Life # 序号", "Show Life #")))
+        life_row.addWidget(rlabel(t("显示 Life # 序号", "Show Life #")))
         self.lifer_toggle = ToggleSwitch(True)
         self.lifer_toggle.toggled.connect(lambda _v: self._update())
         life_row.addStretch(1)
@@ -303,7 +336,7 @@ class ShareDialog(QDialog):
         opt.addLayout(life_row)
 
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel(t("拍摄者", "Photographer")))
+        name_row.addWidget(rlabel(t("拍摄者", "Photographer")))
         self.name_edit = QLineEdit(self.lib.get_setting("photographer_name", ""))
         self.name_edit.setPlaceholderText(t("你的名字", "Your name"))
         self.name_edit.setClearButtonEnabled(True)
@@ -312,7 +345,7 @@ class ShareDialog(QDialog):
         opt.addLayout(name_row)
 
         place_row = QHBoxLayout()
-        place_row.addWidget(QLabel(t("地点", "Location")))
+        place_row.addWidget(rlabel(t("地点", "Location")))
         self.place_edit = QLineEdit(self._default_place())
         self.place_edit.setPlaceholderText(
             t("如: 上海市 / 崇明东滩", "e.g. Shanghai / Chongming Dongtan"))
@@ -322,7 +355,7 @@ class ShareDialog(QDialog):
 
         # 拍摄参数(EXIF: 机身/镜头/焦距/光圈/快门/ISO, 有什么显示什么)
         exif_row = QHBoxLayout()
-        exif_row.addWidget(QLabel(t("拍摄参数", "Camera data")))
+        exif_row.addWidget(rlabel(t("拍摄参数", "Camera data")))
         self.exif_toggle = ToggleSwitch(True)
         self.exif_toggle.toggled.connect(self._on_exif_toggle)
         exif_row.addStretch(1)
@@ -338,7 +371,7 @@ class ShareDialog(QDialog):
         # 照片构图卡(0.8.5手动裁切: 滑杆缩放+自动复位)
         crop_card, crop = make_card(t("照片构图", "Photo framing"))
         zr = QHBoxLayout()
-        zr.addWidget(QLabel(t("缩放", "Zoom")))
+        zr.addWidget(rlabel(t("缩放", "Zoom")))
         self.zoom_slider = QSlider(Qt.Horizontal)
         self.zoom_slider.setRange(100, 300)
         self.zoom_slider.setValue(100)
@@ -377,6 +410,14 @@ class ShareDialog(QDialog):
         row.addWidget(b_save, 1)
         right.addLayout(row)
         root.addLayout(right)
+
+        # 右栏宽=内容自适应(0.8.6用户: 不按语言硬编码): 滚动内容与底部
+        # 动作行取宽者(分段按钮/输入框/按钮的文字sizeHint驱动, 语言/DPI
+        # 变了自动跟), 夹宽松界[340,520]防换行标签压扁/吃掉预览
+        from ..theme.widgets import panel_width_of
+        w_row = b_copy.sizeHint().width() + b_save.sizeHint().width() + 16
+        self._panel_w = max(panel_width_of(host, 340, 520), w_row)
+        panel.setFixedWidth(self._panel_w)
 
         self._build_info()
 
@@ -437,6 +478,11 @@ class ShareDialog(QDialog):
         self.exif_hint.setText(text)
         self.exif_hint.setEnabled(self.exif_toggle.isChecked())
 
+    def _on_round_toggle(self, on: bool):
+        """圆角开关(0.8.6): 库设置持久化, 批量导出对话框同读此设置。"""
+        self.lib.set_setting("card_rounded", "1" if on else "0")
+        self._update()
+
     def _on_exif_toggle(self, on: bool):
         self.exif_hint.setEnabled(on)
         self._update()
@@ -466,6 +512,8 @@ class ShareDialog(QDialog):
             code, self.photo.get("region_id"))
         return {
             "cn": title,
+            "cn_raw": species["cn"] if species else "",
+            "en_raw": species["en"] if species else "",
             "pinyin": pys,
             "en": species["en"] if species else "",
             "sci": species["sci"] if species else "",
@@ -481,8 +529,9 @@ class ShareDialog(QDialog):
             "focus": getattr(self, "_focus", None),
         }
 
-    def _update(self, interact_w: int | None = None):
-        """重渲卡片。interact_w=拖动中的低清预览宽(松手/出片前必回全分辨率)。"""
+    def _update(self, interact_w: int | None = None, guide: bool = False):
+        """重渲卡片。interact_w=拖动中的低清预览宽(松手/出片前必回全分辨率)。
+        guide=True时叠画无裁切参考线(仅预览, 出片前必以guide=False重渲)。"""
         theme = "dark" if self.theme_seg.currentIndex() == 1 else "light"
         # BIRDTRACE_CARD_WIDTH: 测试钩子(强制卡宽→k=1)。offscreen无字体
         # 环境下画笔scale(k≠1)时drawText不出墨(tofu都不画), ink类测试
@@ -505,16 +554,30 @@ class ShareDialog(QDialog):
         layout = ("auto", "3:5", "3:4", "classic")[
             self.lay_seg.currentIndex()
             if getattr(self, "lay_seg", None) is not None else 0]
-        self.pm = render_card(self.photo["path"], self._card_info(), theme,
-                              width=w, layout=layout, adjust=self._adjust)
-        # 版式key与照片区几何(手动构图交互用, 数学与渲染单源)
+        # 版式key与照片区几何(手动构图/交界线交互用, 数学与渲染单源)
         if not self._src.isNull():
             self._lay_key = resolve_layout(self._src.width(),
                                            self._src.height(), layout)
         else:
             self._lay_key = None
-        self._zh = round(XHS_LAYOUTS[self._lay_key][1]
-                         * self.pm.width() / DESIGN_W) if self._lay_key else 0
+        # 0.8.6用户: 自动(未手动拖过分界线)默认分界线=无裁切线
+        # (auto_text_scale按原图比例单源; 换版式/分辨率自动跟新)
+        if not self._ts_touched and not self._src.isNull():
+            self._tscale = auto_text_scale(self._src.width(),
+                                           self._src.height(), self._lay_key)
+        gy, gnote = self._no_crop_guide() if guide else (None, None)
+        rounded = (getattr(self, "round_toggle", None) is not None
+                   and self.round_toggle.isChecked())
+        self.pm = render_card(self.photo["path"], self._card_info(), theme,
+                              width=w, layout=layout, adjust=self._adjust,
+                              text_scale=self._tscale, guide_y=gy,
+                              guide_note=gnote, rounded=rounded)
+        if self._lay_key:
+            h0, ph0 = XHS_LAYOUTS[self._lay_key]
+            th_now = round((h0 - ph0) * self._tscale)   # 0.8.6可调文字区
+            self._zh = round((h0 - th_now) * self.pm.width() / DESIGN_W)
+        else:
+            self._zh = 0
         manual_ok = self._lay_key is not None
         self.zoom_slider.setEnabled(manual_ok)
         self.crop_hint2.setEnabled(manual_ok)
@@ -631,9 +694,79 @@ class ShareDialog(QDialog):
         self._adjust = None
         self._update()
 
+    # ---- 交界线拖动(0.8.6): 文字区高度手动 + 无裁切参考线 ----
+    def _in_band(self, xy) -> bool:
+        """照片/文字交界带(卡物理±16px), 优先于照片拖动。"""
+        return (self._lay_key is not None and xy is not None
+                and abs(xy[1] - self._zh) <= 16
+                and 0 <= xy[0] <= self.pm.width())
+
+    def _nocrop_th(self) -> float | None:
+        """无裁切磁吸/参考线目标th(设计): exact/lo/hi有真实线, 其余None。
+        lo/hi各留2设计px稳在bleed侧(cover判定是严格>)。"""
+        if self._lay_key is None or self._src.isNull():
+            return None
+        ph, kind = nocrop_line(self._src.width(), self._src.height(),
+                               self._lay_key)
+        if kind not in ("exact", "lo", "hi"):
+            return None
+        if kind != "exact":
+            ph += 2 if kind == "hi" else -2
+        return XHS_LAYOUTS[self._lay_key][0] - ph
+
+    def _no_crop_guide(self):
+        """无裁切参考线(0.8.6重做: 单源nocrop_line, 按原图比例双边界)。
+        exact/lo/hi→实位无注释; off→夹最近端注明方向; all→线跟当前
+        分界线注明全程无裁切。classic不标。返回(设计y, 注释|None)。"""
+        if self._lay_key is None or self._src.isNull():
+            return None, None
+        ph, kind = nocrop_line(self._src.width(), self._src.height(),
+                               self._lay_key)
+        if kind in ("exact", "lo", "hi"):
+            return XHS_LAYOUTS[self._lay_key][0] - self._nocrop_th(), None
+        if kind == "off_tall":
+            return ph, t("无裁切需更小的文字区",
+                         "No-crop needs a smaller text zone")
+        if kind == "off_wide":
+            return ph, t("无裁切需更大的文字区",
+                         "No-crop needs a larger text zone")
+        # all: 可拖范围内全程无裁切——线跟当前分界线, 告知不用挪
+        h0, ph0 = XHS_LAYOUTS[self._lay_key]
+        return h0 - round((h0 - ph0) * self._tscale), t(
+            "范围内均无裁切", "No crop anywhere in range")
+
+    def _tsnap(self, th: float) -> float:
+        """磁吸: th距无裁切th<24设计px时吸附(仅exact/lo/hi真实线)。"""
+        th_nc = self._nocrop_th()
+        if th_nc is not None and abs(th - th_nc) < 24:
+            return float(th_nc)
+        return th
+
+    def _bdrag_th(self, dy_design: float):
+        """交界线拖动/滚轮: dy=手部位移(设计px, 向下为正)。**分界线跟手**:
+        向下拖=分界线下移=照片区变大/文字区变小(th -= dy)。
+        0.8.6实测修方向: 旧实现 th += dy, 分界线逆着手走。"""
+        if self._lay_key is None:
+            return
+        self._ts_touched = True           # 手动拖过: 不再跟无裁切默认
+        h0, ph0 = XHS_LAYOUTS[self._lay_key]
+        base = h0 - ph0
+        th = self._tsnap(round(base * self._tscale) - dy_design)
+        self._tscale = min(TEXT_SCALE_MAX,
+                           max(TEXT_SCALE_MIN, th / base))
+        self._update(interact_w=1400, guide=True)
+
     def _pv_press(self, e):
-        if e.button() != Qt.LeftButton \
-                or not self._in_photo(self._pv_phys(e)):
+        if e.button() != Qt.LeftButton:
+            e.ignore()
+            return
+        xy = self._pv_phys(e)
+        if self._in_band(xy):             # 交界线优先于照片拖动
+            self._bdrag = e.globalPosition().toPoint()
+            self.preview_host.setCursor(Qt.SizeVerCursor)
+            self._update(interact_w=1400, guide=True)
+            return
+        if not self._in_photo(xy):
             e.ignore()
             return
         self._ensure_adjust()
@@ -642,7 +775,17 @@ class ShareDialog(QDialog):
         self.preview_host.setCursor(Qt.ClosedHandCursor)
 
     def _pv_move(self, e):
+        if self._bdrag is not None:
+            now = e.globalPosition().toPoint()
+            self._bdrag_th((now.y() - self._bdrag.y()) / self._view_s)
+            self._bdrag = now
+            return
         if not self._drag:
+            xy = self._pv_phys(e)         # 悬停光标: 交界线/照片/普通
+            self.preview_host.setCursor(
+                Qt.SizeVerCursor if self._in_band(xy)
+                else (Qt.OpenHandCursor if self._in_photo(xy)
+                      else Qt.ArrowCursor))
             return
         now = e.globalPosition().toPoint()
         self._pan_by((now.x() - self._drag.x()) / self._view_s,
@@ -650,13 +793,24 @@ class ShareDialog(QDialog):
         self._drag = now
 
     def _pv_release(self, e):
+        if self._bdrag is not None:
+            self._bdrag = None
+            self.preview_host.setCursor(Qt.OpenHandCursor)
+            self._update()               # 松手: 回全分辨率+去参考线
+            return
         if self._drag:
             self._drag = None
             self.preview_host.setCursor(Qt.OpenHandCursor)
             self._update()               # 松手回全分辨率
 
     def _pv_dbl(self, e):
-        if self._in_photo(self._pv_phys(e)):
+        xy = self._pv_phys(e)
+        if self._in_band(xy):
+            # 双击交界线=复位到自动(0.8.6: 自动默认=无裁切线, 非死1.0)
+            self._ts_touched = False
+            self._update()
+            return
+        if self._in_photo(xy):
             self._reset_adjust()
 
     def _pv_wheel(self, e):
@@ -666,6 +820,11 @@ class ShareDialog(QDialog):
                 self._view_zoom(1.1 if d > 0 else 1 / 1.1)
             return
         xy = self._pv_phys(e)
+        if self._in_band(xy):            # 交界带上滚轮=调文字区
+            d = e.angleDelta().y()
+            if d:
+                self._bdrag_th(8 if d > 0 else -8)
+            return
         if not self._in_photo(xy):
             e.ignore()                   # 照片区外=正常滚动翻页
             return

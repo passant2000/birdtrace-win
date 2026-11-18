@@ -204,9 +204,10 @@ class PhotoViewer(QDialog):
         self.view.setMinimumSize(600, 400)
         split.addWidget(self.view)
 
-        # 右: 信息面板
+        # 右: 信息面板(宽随内容自适应: 340下英文2×2动作钮两端裁切
+        # "reate share car"/"nove from BirdTrac", 0.8.6英文适配实测;
+        # 用按钮行sizeHint推导, 语言/DPI变了自动跟)
         panel = QWidget()
-        panel.setFixedWidth(340)
         pl = QVBoxLayout(panel)
         pl.setContentsMargins(4, 4, 4, 4)
         pl.setSpacing(10)
@@ -231,6 +232,43 @@ class PhotoViewer(QDialog):
         self.records_box.setSpacing(8)
         pl.addLayout(self.records_box)
         pl.addStretch(1)
+
+        # 连拍组级操作(0.8.6用户: 连拍一组都识别错): 当前照片属于连拍组
+        # 时显示——整组改鸟种(P1)/整组重识别=多取景全局最优(P2)
+        from .burst_actions import change_group_species, reidentify_group
+        self.group_bar = QWidget()
+        gb = QHBoxLayout(self.group_bar)
+        gb.setContentsMargins(0, 0, 0, 0)
+        gb.setSpacing(8)
+        self.gpick_btn = QPushButton(t("整组改鸟种…",
+                                       "Change species for burst…"))
+        self.gpick_btn.setCursor(Qt.PointingHandCursor)
+        self.gpick_btn.setToolTip(t(
+            "当前照片所属的连拍整组一次改判（弹一次选鸟器，全组生效；"
+            "人工改判不会被自动识别/连拍统一覆盖）",
+            "Re-assign the whole burst this photo belongs to (one picker "
+            "for all; manual verdicts are never overwritten)"))
+        self.gpick_btn.clicked.connect(
+            lambda: (change_group_species(self.lib, self.win, self,
+                                          self.ids[self.index]),
+                     self._load()))
+        gb.addWidget(self.gpick_btn)
+        self.grescue_btn = QPushButton(t("整组重新识别…",
+                                         "Re-identify burst…"))
+        self.grescue_btn.setCursor(Qt.PointingHandCursor)
+        self.grescue_btn.setToolTip(t(
+            "每帧尝试多种取景、取全局最优结果应用到整组——连拍各帧姿态"
+            "不同，常有一帧换个取景就认对",
+            "Each frame is tried with several crops; the globally best "
+            "result is applied to the whole group — a different pose often "
+            "gets identified correctly"))
+        self.grescue_btn.clicked.connect(
+            lambda: reidentify_group(self.lib, self.win, self,
+                                     self.ids[self.index],
+                                     on_done=lambda _s: self._load()))
+        gb.addWidget(self.grescue_btn)
+        gb.addStretch(1)
+        pl.addWidget(self.group_bar)
 
         # 底部操作区: 2×2等宽网格, 按用途分组
         #   上行=常用(补识别/分享)  下行=管理(挂点/移除)
@@ -279,12 +317,22 @@ class PhotoViewer(QDialog):
 
         split.addWidget(panel)
         split.setStretchFactor(0, 1)
+        # 面板宽=内容自适应(0.8.6): 2×2按钮行sizeHint推导, 夹[320,460]
+        from ..theme.widgets import panel_width_of
+        panel.setFixedWidth(panel_width_of(panel, 320, 460, pad=16))
 
     # ---------- 数据 ----------
     def _load(self):
         photo, recs = self.lib.photo_detail(self.ids[self.index])
         self.photo = photo
         self.recs = recs
+        # 连拍组级操作行: 属于连拍组(≥2张)才显示(0.8.6)
+        from .burst_actions import group_photo_ids
+        try:
+            gids = group_photo_ids(self.lib, photo["id"])
+        except Exception:
+            gids = [photo["id"]]
+        self.group_bar.setVisible(len(gids) >= 2)
         missing = not Path(photo["path"]).exists()
         if missing:
             # 引用模式下原文件不可读: 区分"硬盘没插"(0.8-②, 插回即好)与

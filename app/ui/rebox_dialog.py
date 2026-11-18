@@ -85,6 +85,9 @@ class ReboxDialog(QDialog):
         self.close_btn.clicked.connect(self.reject)
         pl.addWidget(self.close_btn)
         root.addWidget(panel)
+        # 面板宽=内容自适应(0.8.6用户: 不硬编码, 语言/DPI变了自动跟)
+        from ..theme.widgets import panel_width_of
+        panel.setFixedWidth(panel_width_of(panel, 320, 460, pad=16))
 
     def _enter_draw(self):
         self.view.begin_draw(self._on_drawn)
@@ -227,7 +230,9 @@ class ReboxDialog(QDialog):
                 if cand["code"] == code:
                     rec["confidence"] = cand["prob"]
         rec["box"] = self._last_box
-        self.lib.add_records(self.pid, [rec])
+        # 0.8.6修: 走append_record追加——旧add_records的"人工优先"语义把
+        # 同一照片第二只起的确认静默丢弃(source=rebox已算人工痕迹)
+        self.lib.append_record(self.pid, rec)
         self.win.library_changed.emit()
         # 回传三处(用户典型路径: 待复核/鸟种库 -> 查看器 -> 画框识别):
         # ①查看器记录列表 ②鸟种库页 ③待复核页

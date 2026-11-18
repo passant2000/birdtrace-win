@@ -451,6 +451,31 @@ class Library:
         self.conn.commit()
         self._sidecar_touch(photo_ids=[photo_id])
 
+    def append_record(self, photo_id: int, rec: dict):
+        """追加一条人工记录(0.8.6修: 画框识别确认走这里)。
+
+        旧_accept走add_records: 整组替换语义被"人工优先"挡住——同一照片
+        第二只起确认被静默丢弃(与"可连续框多只"矛盾, v0.8.5起verify_rebox
+        即挂)。现追加rank=末尾一行, 既有记录(含人工)一律不动;
+        主鸟判定/统计走eff_code自动跟上, 想换主鸟用set_main_record。
+        rec字段同add_records(species_code/confidence/source/box/top5/eye)。"""
+        nxt = self.conn.execute(
+            "SELECT IFNULL(MAX(rank),0)+1 FROM records WHERE photo_id=?",
+            (photo_id,)).fetchone()[0]
+        top5 = [{"code": c["code"], "prob": c["prob"]}
+                for c in rec.get("top5", [])]
+        self.conn.execute(
+            "INSERT INTO records(photo_id,species_code,rank,confidence,source,"
+            "box_json,top5_json,eye_json) VALUES(?,?,?,?,?,?,?,?)",
+            (photo_id, rec["species_code"], nxt, rec.get("confidence", 0),
+             rec.get("source", "rebox"), json.dumps(rec.get("box")),
+             json.dumps(top5, ensure_ascii=False),
+             json.dumps(rec.get("eye")) if rec.get("eye") else None))
+        self.conn.execute(
+            "UPDATE photos SET cand_json=NULL WHERE id=?", (photo_id,))
+        self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
+
     def remove_record(self, record_id: int) -> None:
         """删除单条识别记录(多鸟照片清掉误识的次要鸟, 如同种鸟只拍到屁股
         被认成别的种), 其余记录顺位重排保持rank连续。
@@ -560,18 +585,30 @@ class Library:
 
     def timeline(self) -> dict[str, list[dict]]:
         """时间线: 全部照片按拍摄年月分组(未识别照片也显示)。
-        带 group_id/aesthetic 供连拍折叠(core.burst.collapse_bursts)。"""
+        带 group_id/aesthetic 供连拍折叠(core.burst.collapse_bursts);
+        0.8.6带 main_code/sp_cn/sp_en(缩略图鸟种说明+鸟种胶囊)与
+        spot_name/spot_short(缩略图鸟点说明)。"""
         rows = self.conn.execute(
             "SELECT p.id, p.path, p.group_id, p.aesthetic, "
-            "  COALESCE(e.dt_original, p.added_at) AS taken_at "
+            "  COALESCE(e.dt_original, p.added_at) AS taken_at, "
+            "  v0.eff_code AS main_code, sc.cn AS sp_cn, sc.en AS sp_en, "
+            "  st.name AS spot_name, st.short_name AS spot_short "
             "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
+            "  LEFT JOIN (SELECT photo_id, eff_code FROM v_records "
+            "             WHERE rank=1 GROUP BY photo_id) v0 "
+            "    ON v0.photo_id=p.id "
+            "  LEFT JOIN species sc ON sc.code=v0.eff_code "
+            "  LEFT JOIN spots st ON st.id=p.spot_id "
             "ORDER BY taken_at DESC").fetchall()
         out: dict[str, list] = {}
         for r in rows:
             ym = (r["taken_at"] or "")[:7] or t("未知时间", "Unknown date")
             out.setdefault(ym, []).append(
                 {"id": r["id"], "path": r["path"], "taken_at": r["taken_at"],
-                 "group_id": r["group_id"], "aesthetic": r["aesthetic"]})
+                 "group_id": r["group_id"], "aesthetic": r["aesthetic"],
+                 "main_code": r["main_code"], "sp_cn": r["sp_cn"],
+                 "sp_en": r["sp_en"], "spot_name": r["spot_name"],
+                 "spot_short": r["spot_short"]})
         return out
 
     # ---------- 鸟种库 / 成就 ----------
@@ -613,19 +650,23 @@ class Library:
         名录落空/无检测/非鸟; 低置信(0.2~0.5)已改为写名进待复核。"""
         rows = self.conn.execute(
             "SELECT p.id AS photo_id, p.path, p.added_at AS taken_at, "
-            "p.aesthetic FROM photos p "
+            "p.aesthetic, st.name AS spot_name, st.short_name AS spot_short "
+            "FROM photos p LEFT JOIN spots st ON st.id=p.spot_id "
             "WHERE p.rec_fail>=3 AND NOT EXISTS"
             "(SELECT 1 FROM records r WHERE r.photo_id=p.id) "
             "ORDER BY p.aesthetic DESC, p.added_at DESC").fetchall()
         return [dict(r) for r in rows]
 
     def photos_of_species(self, code: str) -> list[dict]:
-        """该鸟种照片, 最美优先(美学评分降序, 无评分排后按拍摄时间)。"""
+        """该鸟种照片, 最美优先(美学评分降序, 无评分排后按拍摄时间)。
+        0.8.6带 spot_name/spot_short(鸟种库缩略图鸟点说明)。"""
         rows = self.conn.execute(
             "SELECT v.photo_id, v.path, v.taken_at, p.aesthetic, p.group_id, "
             "  MAX(confidence) AS confidence, "
-            "  MAX(reviewed) AS reviewed, MAX(confirmed_code) AS confirmed_code "
+            "  MAX(reviewed) AS reviewed, MAX(confirmed_code) AS confirmed_code, "
+            "  st.name AS spot_name, st.short_name AS spot_short "
             "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "  LEFT JOIN spots st ON st.id=p.spot_id "
             "WHERE v.eff_code=? GROUP BY v.photo_id "
             "ORDER BY p.aesthetic DESC, v.taken_at DESC", (code,)).fetchall()
         return [dict(r) for r in rows]

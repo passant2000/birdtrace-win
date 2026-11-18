@@ -43,6 +43,9 @@ XHS_LAYOUTS = {
     "3:4": (2133, 1133),
 }
 BLEED_LOSS = 0.30       # 裁切损失超过30%改用模糊bleed垫底(全景图鸟绝不裁)
+# 0.8.6 文字区手动高度: 缩放系数夹在此区间(字号随行高同步缩, 再小不可读)
+TEXT_SCALE_MIN = 0.75
+TEXT_SCALE_MAX = 1.35
 # 右列(机身/镜头/参数)单行高与最大宽(超宽省略号截断; 上限给足——
 # 左列日期/地点/拍摄者实际字宽远小于此)
 EXIF_COL_W = 880
@@ -133,7 +136,10 @@ def photo_placement(src_w: int, src_h: int, zw: int, zh: int,
 
     返回 {w, h, sx, sy, rx, ry, zoom}:
       w,h   = 缩放后照片尺寸(物理px)
-      sx,sy = 照片左上角相对窗口偏移(负值=该轴letterbox留边居中)
+      sx,sy = 裁切偏移(绘制画在-sx/-sy处): cover≥0=窗口内裁切起点;
+              letterbox<0=居中留边(窗口内正向偏移)——0.8.6实测修复:
+              旧实现返回+(zw-w)/2正值, 绘制在-sx把清晰区整体推出左/上边
+              (用户9:16竖图卡: 清晰区贴左缘+右侧全糊底, 拉不到中间)
       rx,ry = 可平移范围(缩放后-窗口; 0=该轴填满不可平移)
     照片任一轴小于窗口 → 调用方需先画模糊bleed垫底再叠照片。
 
@@ -166,10 +172,10 @@ def photo_placement(src_w: int, src_h: int, zw: int, zh: int,
                 return min(1.0, max(0.0, float(v)))
             except (TypeError, ValueError):
                 return 0.5
-        sx = rx * _frac(adjust.get("ox", 0.5)) if w > zw else (zw - w) / 2
-        sy = ry * _frac(adjust.get("oy", 0.5)) if h > zh else (zh - h) / 2
+        sx = rx * _frac(adjust.get("ox", 0.5)) if w > zw else -(zw - w) / 2
+        sy = ry * _frac(adjust.get("oy", 0.5)) if h > zh else -(zh - h) / 2
     elif bleed_mode:
-        sx, sy = (zw - w) / 2, (zh - h) / 2
+        sx, sy = -(zw - w) / 2, -(zh - h) / 2
     else:
         sx, sy = rx / 2, ry / 2
         if focus and focus[0] is not None:
@@ -178,6 +184,65 @@ def photo_placement(src_w: int, src_h: int, zw: int, zh: int,
             sy = min(max(fyn * h - zh / 2, 0), ry)
     return {"w": w, "h": h, "sx": sx, "sy": sy, "rx": rx, "ry": ry,
             "zoom": zoom}
+
+
+def nocrop_line(src_w: int, src_h: int, key: str) -> tuple[float | None, str]:
+    """无裁切参考线(设计y)与类型(0.8.6修: 按原图比例, 单一ph_nc判断不准)。
+
+    ph_nc=DESIGN_W×原图高/宽(整图满幅精确位)。零裁切区间有**两条**边界
+    (bleed=整图fit可见 / cover=裁切, BLEED_LOSS=0.3造成):
+      [0, 0.7·ph_nc) 整图但缩小(竖图糊左右) ∪ {ph_nc} 满幅 ∪
+      (ph_nc/0.7, ∞) 整图满宽(横图糊上下)
+    返回(ph, kind), ph=None仅all:
+      exact    ph_nc 可拖达 → 线画在ph_nc(磁吸目标)
+      lo       竖图(ph_nc超上限): 0.7·ph_nc 线上=放大裁/线下=整图缩小
+      hi       横图(ph_nc低于下限): ph_nc/0.7 线上=整图满宽/线下=侧裁
+      off_tall/off_wide  可拖范围全在cover带 → 最近端(线仍画出+注明)
+      all      全程无裁切(竖超high/横全bleed)
+    """
+    h0, ph0 = XHS_LAYOUTS[key]
+    base = h0 - ph0
+    pmin = h0 - round(base * TEXT_SCALE_MAX)   # 可拖照片区下界(文字最大)
+    pmax = h0 - round(base * TEXT_SCALE_MIN)   # 可拖照片区上界(文字最小)
+    ph_nc = DESIGN_W * src_h / max(1, src_w)
+    lo, hi = (1 - BLEED_LOSS) * ph_nc, ph_nc / (1 - BLEED_LOSS)
+    if pmin <= ph_nc <= pmax:
+        return ph_nc, "exact"
+    if pmax < lo or pmin > hi:
+        return None, "all"
+    if pmin <= hi <= pmax:
+        return hi, "hi"
+    if pmin <= lo <= pmax:
+        return lo, "lo"
+    return (pmax, "off_tall") if ph_nc > pmax else (pmin, "off_wide")
+
+
+def auto_text_scale(src_w: int, src_h: int, key: str | None) -> float:
+    """自动(未手动拖过)默认文字区缩放(0.8.6用户: 分界线直接放无裁切线)。
+
+    exact→精确整图位; lo(竖图)→线上整图最大; hi(横图)→线上整图(默认
+    已在无裁切区则1.0不动——横图整图大小恒为满宽×ph_nc, 挪线只改
+    糊边/文字占比); off→最近端; all→1.0。classic(None)→1.0历史行为。
+    单卡ShareDialog与批量导出共用; 夹[MIN,MAX]返回。
+    """
+    if not key:
+        return 1.0
+    h0, ph0 = XHS_LAYOUTS[key]
+    base = h0 - ph0
+    ph, kind = nocrop_line(src_w, src_h, key)
+    if kind == "exact":
+        ts = (h0 - ph) / base
+    elif kind == "lo":
+        ts = (h0 - (ph - 2)) / base    # 留2设计px稳在bleed侧(线是严格>)
+    elif kind == "hi":
+        if ph0 > ph:                   # 默认已在无裁切区
+            return 1.0
+        ts = (h0 - (ph + 2)) / base
+    elif kind in ("off_tall", "off_wide"):
+        ts = (h0 - ph) / base
+    else:
+        return 1.0
+    return min(TEXT_SCALE_MAX, max(TEXT_SCALE_MIN, ts))
 
 
 def _draw_bird_logo(p: QPainter, right_x: float, bottom_y: float, s: float):
@@ -243,7 +308,10 @@ def _logo_pixmap() -> QPixmap:
 
 def render_card(photo_path: str, info: dict, theme_name: str = "light",
                 width: int | None = None, layout: str = "classic",
-                adjust: dict | None = None) -> QPixmap:
+                adjust: dict | None = None, text_scale: float = 1.0,
+                guide_y: int | None = None,
+                guide_note: str | None = None,
+                rounded: bool = True) -> QPixmap:
     """info: {cn, pinyin, en, sci, lifer_no|None, photographer, date, place|None,
     exif|None: {"body","lens","shot"} 拍摄参数(勾选后; 三段有什么显示什么),
     focus|None: (fx,fy) 归一化鸟心(检测框中心, 固定版式下裁剪窗口对准它)}
@@ -253,9 +321,22 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
     固定版式下裁剪对准focus; 裁切损失>30%改用模糊bleed垫底(整图可见)。
     adjust(0.8.5手动裁切, 仅固定版式生效): {zoom 1~3, ox/oy 0~1}=
     用户手动缩放平移(photo_placement), None=自动定位。
+    text_scale(0.8.6手动文字区): 文字区高度缩放系数, 夹[TEXT_SCALE_MIN,
+    MAX]; 字号/行高/胶囊同乘kt(同步缩放=字形矩形关系不变, 免截字形坑)。
+    固定版式卡高锁死→照片区反向伸缩; classic卡高随th浮动。
+    guide_y/guide_note(0.8.6拖动参考线, 设计坐标y): 仅预览渲染传,
+    出片不传=参考线永不入成品——交界拖动时标"无裁切位置"用。
+    rounded(0.8.6用户: 圆角做成可选项): False=直角出片。
+    非中文标题(英文界面): 整串紧凑绘制(旧=逐字符稀排, 英文名占满行);
+    副名行英文界面显示中文名(大标题已是英文, 旧版两行重复, 0.8.6用户
+    定: 中国软件副名给中文)。info需补 cn_raw(原始中文名)。
 
     date: "2024-05-12 08:31:00" 或 "2024-05-12"
     """
+    try:
+        ts = min(TEXT_SCALE_MAX, max(TEXT_SCALE_MIN, float(text_scale)))
+    except (TypeError, ValueError):
+        ts = 1.0
     tc = THEMES.get(theme_name, THEMES["light"])
     # width=分辨率档(2026-11-10用户: 标准2000/高清3000), 默认CARD_W。
     # **整卡按比例渲染**: 布局/字体全部用 DESIGN_W(1600) 设计坐标绘制,
@@ -279,7 +360,7 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
     key = "classic"
     if layout == "classic":
         ph = int(W * min(1.28, max(0.70, ratio)))   # 照片区高(设计坐标)
-        th = TEXT_ZONE_H
+        th = round(TEXT_ZONE_H * ts)                # 0.8.6可调, H随th浮动
         H = ph + th                                 # 全设计坐标
     else:
         if layout == "auto":
@@ -289,7 +370,8 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         else:
             key = layout                            # "3:5" / "3:4"
         H, ph = XHS_LAYOUTS[key]
-        th = H - ph
+        th = round((H - ph) * ts)
+        ph = H - th     # 0.8.6: 卡高锁版式——文字区伸缩=照片区反向
     compact = (key == "3:5")
 
     card = QPixmap(round(W * k), round(H * k))
@@ -298,7 +380,8 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
     p.setRenderHint(QPainter.Antialiasing)
     p.setRenderHint(QPainter.SmoothPixmapTransform)
     p.scale(k, k)                                   # 设计→物理 等比映射
-    p.setClipPath(_card_path(W, H, RADIUS))          # 整卡圆角裁剪(设计坐标)
+    # 整卡圆角裁剪(设计坐标; 0.8.6起可关=直角)
+    p.setClipPath(_card_path(W, H, RADIUS if rounded else 0))
 
     # 背景与照片(满宽 bleed)。照片按**物理**分辨率缩放, 目标矩形用
     # 设计坐标(画笔放大后恰好1:1物理像素, 无二次重采样)
@@ -355,15 +438,24 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
     def o(base: int) -> int:
         return META_TALL.get(base, base) if compact else base
 
+    # 0.8.6 文字区等比缩放: 字号/行高/胶囊同乘kt(同步缩放=字形与矩形关系
+    # 不变, 天然免疫0.8.3截字形坑); x方向与卡宽不缩。base_th=该版式默认文字区高
+    base_th = TEXT_ZONE_H if key == "classic" \
+        else (XHS_LAYOUTS[key][0] - XHS_LAYOUTS[key][1])
+    kt = th / base_th
+
+    def s(v: float) -> float:
+        return v * kt
+
     # ---- 右侧 Life # N 胶囊(与中文名行居中对齐) ----
     lifer = info.get("lifer_no")
-    pill_h = o(96)
-    pill_y = y + o(128)
+    pill_h = s(o(96))
+    pill_y = y + s(o(128))
     if lifer is not None:
         pill_text = f"Life # {lifer}"
-        p.setFont(_font(52, 800))
+        p.setFont(_font(int(s(52)), 800))
         tw = p.fontMetrics().horizontalAdvance(pill_text)
-        pill_w = tw + 110
+        pill_w = tw + int(s(110))
         pill_x = W - PAD - pill_w
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(tc["pill_bg"]))
@@ -380,40 +472,54 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         pys = pys.split()
     avail = W - PAD * 2 - (pill_w + 40 if lifer is not None else 0)
     gap = 26
-    py_size, cn_size = 54, 106   # 0.8.1: 拼音加大(用户反馈字小)
-    for _ in range(3):   # 宽度自适应缩放(一般1轮收敛)
-        p.setFont(_font(py_size, 600))
-        fm_py = p.fontMetrics()
+    py_size, cn_size = int(s(54)), int(s(106))   # 0.8.1: 拼音加大; 0.8.6随文字区
+    if not pys:
+        # 非中文标题(英文界面): 整串紧凑绘制——旧实现逐字符当独立单元排
+        # (字母间也吃gap=26+单元内居中), 英文鸟名稀疏占满一整行(0.8.6用户)
         p.setFont(_font(cn_size, 900))
-        fm_cn = p.fontMetrics()
-        units = []
-        for ch, py in zip(cn, pys or [""] * len(cn)):
-            pw = fm_py.horizontalAdvance(py) if py else 0
-            cw = fm_cn.horizontalAdvance(ch)
-            units.append((ch, py, max(pw, cw), pw, cw))
-        total = sum(u[2] for u in units) + gap * max(0, len(units) - 1)
-        if total <= avail or not units:
-            break
-        scale = avail / total
-        py_size = max(30, int(py_size * scale))
-        cn_size = max(56, int(cn_size * scale))
-    x = float(PAD)
-    for ch, py, uw, pw, cw in units:
-        if py:
-            p.setPen(QColor(tc["pinyin"]))
-            p.setFont(_font(py_size, 600))
-            # y+58: 离照片更远(旧44太贴, 用户2026-11-10)
-            p.drawText(QRectF(x + (uw - pw) / 2, y + o(58), pw + 8, o(66)),
-                       Qt.AlignCenter, py)
+        adv = p.fontMetrics().horizontalAdvance(cn)
+        if adv > avail:
+            cn_size = max(int(s(56)), int(cn_size * avail / adv))
+            p.setFont(_font(cn_size, 900))
         p.setPen(QColor(tc["title"]))
-        p.setFont(_font(cn_size, 900))
-        p.drawText(QRectF(x + (uw - cw) / 2, y + o(130), cw + 8, o(170)),
-                   Qt.AlignCenter, ch)
-        x += uw + gap
+        p.drawText(QRectF(PAD, y + s(o(130)), avail, s(o(170))),
+                   Qt.AlignLeft | Qt.AlignVCenter, cn)
+    else:
+        for _ in range(3):   # 宽度自适应缩放(一般1轮收敛)
+            p.setFont(_font(py_size, 600))
+            fm_py = p.fontMetrics()
+            p.setFont(_font(cn_size, 900))
+            fm_cn = p.fontMetrics()
+            units = []
+            for ch, py in zip(cn, pys or [""] * len(cn)):
+                pw = fm_py.horizontalAdvance(py) if py else 0
+                cw = fm_cn.horizontalAdvance(ch)
+                units.append((ch, py, max(pw, cw), pw, cw))
+            total = sum(u[2] for u in units) + gap * max(0, len(units) - 1)
+            if total <= avail or not units:
+                break
+            scale = avail / total
+            py_size = max(int(s(30)), int(py_size * scale))
+            cn_size = max(int(s(56)), int(cn_size * scale))
+        x = float(PAD)
+        for ch, py, uw, pw, cw in units:
+            if py:
+                p.setPen(QColor(tc["pinyin"]))
+                p.setFont(_font(py_size, 600))
+                # y+58: 离照片更远(旧44太贴, 用户2026-11-10)
+                p.drawText(QRectF(x + (uw - pw) / 2, y + s(o(58)), pw + 8,
+                                  s(o(66))),
+                           Qt.AlignCenter, py)
+            p.setPen(QColor(tc["title"]))
+            p.setFont(_font(cn_size, 900))
+            p.drawText(QRectF(x + (uw - cw) / 2, y + s(o(130)), cw + 8,
+                              s(o(170))),
+                       Qt.AlignCenter, ch)
+            x += uw + gap
 
     # ---- 英文名(斜体) + 罕见度胶囊(同行右侧, Life#正下方) ----
     rarity = info.get("rarity")
-    p.setFont(_font(56, 500, italic=True))
+    p.setFont(_font(int(s(56)), 500, italic=True))
     if rarity:
         if rarity in ("稀有", "罕见"):  # i18n:ok
             bg, fg = "#E5484D", "white"
@@ -427,15 +533,15 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
         if pct is not None and rarity in ("稀有", "罕见"):  # i18n:ok
             rarity_txt += t(f" · 前 {_fmt_pct(pct)}%",
                             f" · Top {_fmt_pct(pct)}%")
-        # 稀有度分值(0-10, 2026-11-10用户: 懂鸟式9.2分)——区域相对,
+        # 稀有度分值(0-10, 2026-11-10用户: 懂鸟式9.2)——区域相对,
         # 同源百分位映射, 见 prior_hint.rarity_score
         score = info.get("rarity_score")
         if score is not None and rarity in ("稀有", "罕见"):  # i18n:ok
             rarity_txt += f" · {score:.1f}"
-        p.setFont(_font(38, 700))
+        p.setFont(_font(int(s(38)), 700))
         tw = p.fontMetrics().horizontalAdvance(rarity_txt)
-        pw, rph = tw + 56, 62
-        px, rpy = W - PAD - pw, y + o(329)
+        pw, rph = tw + int(s(56)), s(62)
+        px, rpy = W - PAD - pw, y + s(o(329))
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(bg))
         p.drawRoundedRect(QRectF(px, rpy, pw, rph), rph / 2, rph / 2)
@@ -455,102 +561,123 @@ def render_card(photo_path: str, info: dict, theme_name: str = "light",
                    "CR": "#8B1A12", "EW": "#3A3A3C", "EX": "#1C1C1E"}
         iucn_txt = t(f"{IUCN_ZH[iucn]} {iucn}",
                      f"{iucn} · {IUCN_EN[iucn]}")  # i18n:ok
-        p.setFont(_font(38, 700))
+        p.setFont(_font(int(s(38)), 700))
         itw = p.fontMetrics().horizontalAdvance(iucn_txt)
-        iw, rph2 = itw + 56, 62
+        iw, rph2 = itw + int(s(56)), s(62)
         ix = (W - PAD - pw - 24 - iw) if rarity else (W - PAD - iw)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(IUCN_BG.get(iucn, "#1C1C1E")))
-        p.drawRoundedRect(QRectF(ix, y + o(329), iw, rph2),
+        p.drawRoundedRect(QRectF(ix, y + s(o(329)), iw, rph2),
                           rph2 / 2, rph2 / 2)
         p.setPen(QColor("white"))
-        p.drawText(QRectF(ix, y + o(329), iw, rph2), Qt.AlignCenter, iucn_txt)
+        p.drawText(QRectF(ix, y + s(o(329)), iw, rph2), Qt.AlignCenter,
+                   iucn_txt)
     p.setPen(QColor(tc["en"]))
-    p.setFont(_font(56, 500, italic=True))
+    # 副名行=「另一语言」名(0.8.6用户): 中文界面=英文名(旧有); 英文界面
+    # 大标题已是英文, 旧版副名重复画英文——改画中文名(无中文名退学名)。
+    sub_name = info.get("en") or ""
+    if info.get("cn_raw") and info.get("cn") == info.get("en"):
+        sub_name = info["cn_raw"] or info.get("sci") or ""
+    has_cjk = any("\u4e00" <= c <= "\u9fff" for c in sub_name)  # i18n:ok
+    p.setFont(_font(int(s(56)), 500, italic=not has_cjk))
     en_w = (W - PAD * 2) - ((pw + 36) if rarity else 0)            - (iw + 24 if iucn else 0)
-    p.drawText(QRectF(PAD, y + o(320), en_w, o(80)),
-               Qt.AlignLeft | Qt.AlignVCenter, info.get("en", ""))
+    p.drawText(QRectF(PAD, y + s(o(320)), en_w, s(o(80))),
+               Qt.AlignLeft | Qt.AlignVCenter, sub_name)
 
     # ---- 分隔线 ----
     p.setPen(QColor(tc["line"]))
-    p.drawLine(PAD, y + o(428), W - PAD, y + o(428))
+    p.drawLine(PAD, y + s(o(428)), W - PAD, y + s(o(428)))
 
     # ---- 日期 / 地点 / 拍摄者 (左列) + 机身/镜头/参数 (右列同行对齐) ----
     date_raw = (info.get("date") or "")[:10]
     bits = date_raw.split("-")
     date_txt = " · ".join(bits) if len(bits) == 3 else date_raw
-    p.setFont(_font(40, 500))
+    p.setFont(_font(int(s(40)), 500))
     fm_ex = p.fontMetrics()
     col_w = 0
-    for s in right_col:
-        col_w = max(col_w, fm_ex.horizontalAdvance(s))
+    for seg in right_col:            # 0.8.6: 循环变量改seg(撞s()缩放助手)
+        col_w = max(col_w, fm_ex.horizontalAdvance(seg))
     col_w = min(col_w, EXIF_COL_W)
     left_w = (W - PAD * 2 - col_w - 48) if right_col else (W - PAD * 2)
 
     p.setPen(QColor(tc["title"]))
-    p.setFont(_font(68, 800))
+    p.setFont(_font(int(s(68)), 800))
     fm68 = p.fontMetrics()
     date_disp = _fit(fm68, date_txt, Qt.ElideRight, left_w) \
         if right_col else date_txt
-    p.drawText(QRectF(PAD, y + o(462), left_w, o(100)),
+    p.drawText(QRectF(PAD, y + s(o(462)), left_w, s(o(100))),
                Qt.AlignLeft | Qt.AlignVCenter, date_disp)
     if body:
         p.setPen(QColor(tc["meta"]))
-        p.setFont(_font(40, 500))
-        p.drawText(QRectF(W - PAD - col_w, y + o(482), col_w, o(62)),
+        p.setFont(_font(int(s(40)), 500))
+        p.drawText(QRectF(W - PAD - col_w, y + s(o(482)), col_w, s(o(62))),
                    Qt.AlignRight | Qt.AlignVCenter,
                    _fit(fm_ex, body, Qt.ElideMiddle, col_w))
 
     p.setPen(QColor(tc["meta"]))
-    p.setFont(_font(44, 500))
+    p.setFont(_font(int(s(44)), 500))
     fm_meta = p.fontMetrics()
     place_disp = _fit(fm_meta, info.get("place") or "", Qt.ElideRight,
                       left_w) \
         if right_col else (info.get("place") or "")
-    p.drawText(QRectF(PAD, y + o(580), left_w, o(84)),
+    p.drawText(QRectF(PAD, y + s(o(580)), left_w, s(o(84))),
                Qt.AlignLeft | Qt.AlignVCenter, place_disp)
     if lens:
-        p.setFont(_font(40, 500))
-        p.drawText(QRectF(W - PAD - col_w, y + o(594), col_w, o(60)),
+        p.setFont(_font(int(s(40)), 500))
+        p.drawText(QRectF(W - PAD - col_w, y + s(o(594)), col_w, s(o(60))),
                    Qt.AlignRight | Qt.AlignVCenter,
                    _fit(fm_ex, lens, Qt.ElideMiddle, col_w))
 
-    p.setFont(_font(44, 500))
+    p.setFont(_font(int(s(44)), 500))
     photog_disp = _fit(fm_meta, info.get("photographer") or "",
                        Qt.ElideRight, left_w) \
         if right_col else (info.get("photographer") or "")
-    p.drawText(QRectF(PAD, y + o(676), left_w, o(84)),
+    p.drawText(QRectF(PAD, y + s(o(676)), left_w, s(o(84))),
                Qt.AlignLeft | Qt.AlignVCenter, photog_disp)
     if shot:
         p.setPen(QColor(tc["meta"]))
         # 参数行兜底: 真超宽先缩字号(40→28), 配合_fit守卫(见_fit docstring,
         # DPI≥125%时elidedText等宽边界陷阱——2026-11-02实测缩字号挡不住
         # 边界情形, 必须由守卫直接画原文)。2026-11-01缩字号, 2026-11-02守卫。
-        size = 40
+        size = int(s(40))
         p.setFont(_font(size, 500))
-        while p.fontMetrics().horizontalAdvance(shot) > col_w and size > 28:
+        while p.fontMetrics().horizontalAdvance(shot) > col_w \
+                and size > int(s(28)):
             size -= 2
             p.setFont(_font(size, 500))
-        p.drawText(QRectF(W - PAD - col_w, y + o(690), col_w, o(60)),
+        p.drawText(QRectF(W - PAD - col_w, y + s(o(690)), col_w, s(o(60))),
                    Qt.AlignRight | Qt.AlignVCenter,
                    _fit(p.fontMetrics(), shot, Qt.ElideRight, col_w))
 
     # ---- 品牌落款行: produced by BirdTrace(与左列对齐) + 右下角logo ----
     logo = _logo_pixmap()
-    LOGO_H = 80 if compact else 110
-    lw = int(logo.width() * LOGO_H / logo.height()) if not logo.isNull() else 108
-    logo_top = y + o(790)
+    LOGO_H = int(s(80)) if compact else int(s(110))
+    lw = int(logo.width() * LOGO_H / logo.height()) if not logo.isNull() else int(s(108))
+    logo_top = y + s(o(790))
     p.setPen(QColor(tc["meta"]))
-    p.setFont(_font(34, 500, italic=True))
-    p.drawText(QRectF(PAD, logo_top + (LOGO_H - 48) // 2,
-                      W - PAD * 2 - lw, 48),
+    p.setFont(_font(int(s(34)), 500, italic=True))
+    p.drawText(QRectF(PAD, logo_top + (LOGO_H - int(s(48))) // 2,
+                      W - PAD * 2 - lw, int(s(48))),
                Qt.AlignLeft | Qt.AlignVCenter, "produced by BirdTrace")
     if not logo.isNull():
         p.drawPixmap(int(W - PAD - lw + 8), int(logo_top),
                      logo.scaled(lw, LOGO_H, Qt.KeepAspectRatio,
                                  Qt.SmoothTransformation))
     else:
-        _draw_bird_logo(p, W - PAD + 8, logo_top + LOGO_H - 10, 108)
+        _draw_bird_logo(p, W - PAD + 8, logo_top + LOGO_H - 10, int(s(108)))
+
+    # ---- 0.8.6 拖动参考线(仅预览渲染传入; 出片不传=永不入成品) ----
+    if guide_y is not None and 0 < guide_y < H:
+        p.setPen(QPen(QColor("#FF7A00"), 5, Qt.DashLine))
+        p.drawLine(0, guide_y, W, guide_y)
+        note = guide_note or t("无裁切位置", "No-crop position")
+        p.setFont(_font(34, 700))
+        tw = p.fontMetrics().horizontalAdvance(note) + 24
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#FF7A00"))
+        p.drawRoundedRect(QRectF(PAD, guide_y - 46, tw, 40), 20, 20)
+        p.setPen(QColor("white"))
+        p.drawText(QRectF(PAD, guide_y - 46, tw, 40), Qt.AlignCenter, note)
 
     p.end()
     return card

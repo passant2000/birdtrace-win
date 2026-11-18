@@ -86,8 +86,14 @@ def main():
           f"2026年下10月节点: {y2026.child(0).text(0) if y2026.childCount() else None}")
     m2026 = y2026.child(0)
     check(m2026.childCount() == 6, f"10月下6个日节点: {m2026.childCount()}")
-    # 3) 网格: 月份分组 + 多列
-    check(len(dlg._flow) == 8, f"照片流8项: {len(dlg._flow)}")
+    # 3) 网格: 月份分组 + 多列(0.8.6惰性: 打开只建首月=2026年10月6张,
+    #    其余月占位等高, 树跳/滚动接近时再建——2000+张鸟点秒开)
+    check(len(dlg._flow) == 6, f"打开只建首月(2026-10共6张): {len(dlg._flow)}")
+    check(len([g for g in dlg._groups if not g["built"]]) == 1
+          and dlg._groups[1]["host"].height() > 0,
+          "其余月组占位等高未建(惰性)")
+    dlg._ensure_group("2025-11")
+    check(len(dlg._flow) == 8, f"树跳前建目标月→照片流8项: {len(dlg._flow)}")
     titles = [dlg.grid_lay.itemAt(i).widget().text()
               for i in range(dlg.grid_lay.count())
               if dlg.grid_lay.itemAt(i).widget() and
@@ -113,6 +119,32 @@ def main():
                if "2026" in root2.child(i).text(0))
     dlg._on_tree_click(y26, 0)
     check(True, "树点击跳转不崩")
+    # 5b) 胶囊跟树点击范围(0.8.6用户: 点某天只显示该天鸟种)
+    def _chip_texts():
+        out = []
+        for i in range(dlg.chips_lay.count()):
+            w = dlg.chips_lay.itemAt(i).widget()
+            if w is not None and w.text():
+                out.append(w.text())
+        return out
+    root3 = dlg.tree.topLevelItem(0)
+    y26b = next(root3.child(i) for i in range(root3.childCount())
+                if "2026" in root3.child(i).text(0))
+    m26 = y26b.child(0)
+    day18 = next(m26.child(i) for i in range(m26.childCount())
+                 if "18日" in m26.child(i).text(0))
+    dlg._on_tree_click(day18, 0)
+    txts = _chip_texts()
+    check(any("全部 1" in x for x in txts) and len(txts) >= 2
+          and not any("全部 8" in x for x in txts),
+          f"点10月18日→胶囊只显示该天1张: {txts[:3]}")
+    dlg._on_tree_click(m26, 0)
+    check(any("全部 6" in x for x in _chip_texts())
+          and not any("全部 8" in x for x in _chip_texts()),
+          "点10月→胶囊=该月6张(非整点8)")
+    dlg._on_tree_click(root3, 0)
+    check(any("全部 8" in x for x in _chip_texts()),
+          "点回'全部'→胶囊恢复整点8张")
     # 6) 查看器上下文=筛选结果(直接看ids来源)
     ids = [p["id"] for p in dlg._filtered()]
     check(len(ids) == 8 and len(set(ids)) == 8, "查看器翻页上下文=全部8张")

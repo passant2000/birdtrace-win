@@ -182,3 +182,130 @@ class RecognizeWorker(QThread):
         self.finished_all.emit({"done": grand_done, "total": grand_done,
                                 "ok": grand_ok,
                                 "missing_files": self._fail_missing})
+
+
+class GroupRescueWorker(QThread):
+    """整组重识别＝多取景全局最优(0.8.6连拍组全错, 用户拍板P1+P2)。
+
+    连拍各帧近乎同画面→模型错误相关, 组内取最高置信救不回"整组全错";
+    但各帧鸟的姿态/遮挡不同, **换取景常有一帧认对**——对组内每帧两轮:
+    ①无框(标准识别, 同主管线)拿主检测框 ②带框(多取景取最佳, 与画框
+    识别同一条recognize_sub协议路径), 取全局最高置信的帧×取景结果
+    应用到整组(连拍=同一只鸟, 与连拍统一同源假设)。
+
+    ⚠️识别管线只读(用户红线2026-11-18): 本类只调用现成build_worker_cmd
+    子进程协议, 引擎/阈值/裁剪零改动; 与主管线的RecognizeWorker互不影响。
+    人工确认会被覆盖(入口有确认弹窗, 与批量重新识别同语义)。
+    """
+    progress = Signal(int, int, str)      # done, total, 当前文件名
+    finished_group = Signal(dict)         # {ok, changed, species|error}
+
+    MAX_FRAMES = 8      # 识别预算: 最多8帧×(1检测+4取景分类)
+    EARLY_CONF = 0.85   # 达到即收(再高接近模型上限, 省时间)
+
+    def __init__(self, lib: Library, assets_dir: Path, photo_ids: list[int],
+                 parent=None):
+        super().__init__(parent)
+        self.lib = lib
+        self.assets = Path(assets_dir)
+        self.photo_ids = list(photo_ids)
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        import json as _json
+        import subprocess
+        from ..ai.recognize_sub import build_worker_cmd
+        from ..ai.engine import engine_setting
+        from .burst import parse_ts
+
+        # 帧序=美学分降序(封面优先, 构图好的帧常先救回), 预算截断
+        def _aes(pid):
+            r = self.lib.conn.execute(
+                "SELECT aesthetic FROM photos WHERE id=?", (pid,)).fetchone()
+            return -(r["aesthetic"] or 0) if r else 0
+
+        frames = sorted(self.photo_ids, key=_aes)[:self.MAX_FRAMES]
+        total = len(frames)
+        meta = {}
+        for pid in self.photo_ids:
+            photo, _recs = self.lib.photo_detail(pid)
+            ex = self.lib.conn.execute(
+                "SELECT dt_original FROM exif WHERE photo_id=?",
+                (pid,)).fetchone()
+            from ..exif import month_of
+            meta[pid] = (photo["path"], self.lib.region_for_photo(pid) or "",
+                         str(month_of(ex["dt_original"] if ex else None) or ""))
+        cmd, cwd = build_worker_cmd(
+            str(self.assets), self.lib.get_setting("detect_conf", "0.25"),
+            engine=engine_setting(self.lib.get_setting))
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, encoding="utf-8")
+
+        def ask(pid: int, box: str = "") -> list | None:
+            """问一帧; 返回records列表(None=进程死)。"""
+            path, region, month = meta[pid]
+            proc.stdin.write(f"{pid}\t{path}\t{region}\t{month}\t{box}\n")
+            proc.stdin.flush()
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    return None
+                line = line.strip()
+                if line.startswith("{"):        # 只认JSON行(EP告警混入stdout)
+                    try:
+                        r = _json.loads(line)
+                        return r.get("records") if r.get("ok") else None
+                    except ValueError:
+                        continue
+
+        best, best_conf, err = None, -1.0, ""
+        try:
+            for i, pid in enumerate(frames):
+                if self._stop:
+                    break
+                self.progress.emit(i, total, Path(meta[pid][0]).name)
+                recs = ask(pid)                     # ①标准: 拿主框+基线
+                box = ""
+                if recs and recs[0].get("box"):
+                    b = recs[0]["box"]
+                    box = ",".join(f"{float(v):.1f}" for v in b)
+                recs2 = ask(pid, box) if box else None   # ②带框=多取景最佳
+                for cand in (recs2, recs):
+                    if cand and cand[0].get("confidence", 0) > best_conf:
+                        best, best_conf = cand[0], cand[0]["confidence"]
+                if best_conf >= self.EARLY_CONF:
+                    break
+        finally:
+            try:
+                proc.stdin.close()
+                proc.kill()
+            except OSError:
+                pass
+        if self._stop:
+            self.finished_group.emit({"ok": False, "changed": 0,
+                                      "error": "cancelled"})
+            return
+        if best is None:
+            # 各帧各种取景都没认出鸟: 与批量重识别同语义(确认过覆盖)
+            # 清空归未识别, 不留旧错误记录冒充结果
+            self.lib.reset_recognition(self.photo_ids)
+            self.finished_group.emit({"ok": False, "changed": 0,
+                                      "error": "no-bird"})
+            return
+        # 应用到整组: 同一结果写全组(同鸟假设); source必须detect——
+        # 子进程带框结果带source=rebox会误触"人工痕迹"保护
+        rec = {"species_code": best["species_code"],
+               "confidence": best.get("confidence", 0),
+               "source": "detect", "box": best.get("box"),
+               "top5": best.get("top5") or []}
+        self.lib.reset_recognition(self.photo_ids)
+        for pid in self.photo_ids:
+            self.lib.add_records(pid, [rec])
+        self.progress.emit(total, total, "")
+        self.finished_group.emit({"ok": True, "changed": len(self.photo_ids),
+                                  "species": rec["species_code"],
+                                  "confidence": rec["confidence"]})

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Signal
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkReply,
                                QNetworkRequest)
 from PySide6.QtCore import Qt
@@ -388,7 +388,10 @@ class SpotDetailDialog(QDialog):
         self.spot_id = spot_id
         self.deleted = False
         self._sp_code = None            # 鸟种筛选(None=全部)
+        self._date_key = None           # 树点击范围(0.8.6: 胶囊只显示该范围鸟种)
         self._photos = []               # 本鸟点全部照片(缓存, 筛选只过滤视图)
+        self._groups = []               # 惰性月组(0.8.6: 2000+张秒开)
+        self._cols = 3                  # 网格列数(建组时算)
         from ..theme.widgets import grid_tile_of
         self._tile = grid_tile_of(lib)  # 网格档位(0.8.5全局持久化)
         # 可最小化/最大化(0.8.4用户: 详情页不能放大)
@@ -431,6 +434,7 @@ class SpotDetailDialog(QDialog):
             "QTreeWidget::item:selected{background:rgba(0,122,255,60);}")
         self.tree.itemClicked.connect(self._on_tree_click)
         body_h.addWidget(self.tree)
+        # 0.8.6惰性: 滚动接近的月组按需建(大鸟点不再整页卡死)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.grid_holder = QWidget()
@@ -438,6 +442,8 @@ class SpotDetailDialog(QDialog):
         self.grid_lay.setContentsMargins(0, 0, 12, 20)
         self.grid_lay.setSpacing(12)
         self.scroll.setWidget(self.grid_holder)
+        self.scroll.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._fill_visible())
         body_h.addWidget(self.scroll, 1)
         root.addLayout(body_h, 1)
 
@@ -536,9 +542,27 @@ class SpotDetailDialog(QDialog):
             c.mousePressEvent = lambda e, cd=code: self._pick_species(cd)
             self.chips_lay.addWidget(c)
 
-        _chip(t(f"全部 {len(self._photos)}", f"All {len(self._photos)}"), None)
-        for s in self.lib.spot_species(self.spot_id):
-            _chip(f"{sname(s['cn'], s['en'])} ×{s['n']}", s["code"])
+        # 0.8.6用户: 点某天/月/年后胶囊只显示该范围鸟种(旧版恒为整点全部,
+        # 换日期不跟着变); "全部"行数=范围内张数
+        rows = self._photos
+        if self._date_key:
+            kind, key = self._date_key
+            take = {"y": 4, "m": 7, "d": 10}[kind]
+            rows = [r for r in rows
+                    if (r["taken_at"] or "")[:take] == key]
+        _chip(t(f"全部 {len(rows)}", f"All {len(rows)}"), None)
+        names: dict[str, str] = {}
+        agg: dict[str, int] = {}
+        for r in rows:
+            mc = r["main_code"]
+            if not mc:
+                continue
+            agg[mc] = agg.get(mc, 0) + 1
+            if mc not in names:
+                info = self.lib.species_info(mc)
+                names[mc] = sname(info["cn"], info["en"]) if info else mc
+        for code, n in sorted(agg.items(), key=lambda kv: (-kv[1], kv[0])):
+            _chip(f"{names.get(code, code)} ×{n}", code)
         self.chips_lay.addStretch(1)
         tip = QLabel(t("点鸟种只看该种；再点一次恢复全部",
                        "Click a species to filter; click again for all"))
@@ -588,22 +612,35 @@ class SpotDetailDialog(QDialog):
 
     def _on_tree_click(self, item, _col=0):
         kind, key = item.data(0, Qt.UserRole) or ("all", None)
+        self._date_key = None if kind == "all" else (kind, key)
+        self._rebuild_chips()      # 0.8.6: 胶囊跟树点击范围
         if kind == "all":
             self.scroll.verticalScrollBar().setValue(0)
             return
+        # 惰性: 先建目标月组再跳(年→其第一个月)
+        ym = key[:7] if kind == "d" else key
+        if kind == "y":
+            ym = next((g["ym"] for g in self._groups
+                       if g["ym"] != "—" and g["ym"].startswith(key)), None)
+        if ym:
+            self._ensure_group(ym)
         w = next((w for day, w in getattr(self, "_flow", [])
                   if day.startswith(key)), None)
         if w is not None:
             self.scroll.ensureWidgetVisible(w, 0, 0)
 
-    # ---- 照片网格(月份分组, 列数随窗宽) ----
+    # ---- 照片网格(月份分组, 列数随窗宽; 0.8.6起月组惰性建) ----
     def _build_grid(self, rows):
+        """0.8.6性能: 只建首月组, 其余给精确占位高度——2000+张照片的
+        鸟点旧版一口气建全部缩略图控件, 点「查看详情」卡死几十秒;
+        现在滚动接近(_fill_visible)或树跳转(_ensure_group)时再建。"""
         while self.grid_lay.count():
             it = self.grid_lay.takeAt(0)
             w = it.widget()
             if w:
                 w.deleteLater()
         self._flow = []                # (day, widget) 按显示序, 树跳转用
+        self._groups = []              # [{ym, rows, host, built}]
         if not rows:
             tip = QLabel(t("该鸟点还没有照片 · 在导入页或照片查看器里把照片挂到这个点",
                            "No photos at this spot yet · attach photos on the "
@@ -613,12 +650,13 @@ class SpotDetailDialog(QDialog):
             self.grid_lay.addStretch(1)
             return
         vw = max(420, self.scroll.viewport().width())
-        cols = max(3, vw // (self._tile + 16))
-        ids = [p["id"] for p in rows]
+        self._cols = max(3, vw // (self._tile + 16))
+        self._view_ids = [p["id"] for p in rows]
         by_month = {}
         for r in rows:
             ym = (r["taken_at"] or "")[:7] or "—"
             by_month.setdefault(ym, []).append(r)
+        lh = max(18, round(self._tile / 6))     # PhotoGridItem标签带高
         for ym in sorted(by_month, reverse=True):
             rs = by_month[ym]
             head = (t(f"{ym[:4]}年{int(ym[5:7])}月 · {len(rs)} 张",
@@ -629,27 +667,65 @@ class SpotDetailDialog(QDialog):
             lab.setStyleSheet(f"font-size:15px;font-weight:700;"
                               f"color:{theme.LABEL};background:transparent;")
             self.grid_lay.addWidget(lab)
-            gw = QWidget()
-            grid = QGridLayout(gw)
-            grid.setContentsMargins(0, 0, 0, 6)
-            grid.setSpacing(10)
-            for i, r in enumerate(rs):
-                fh = r.get("file_hash") or self._hash_of(r["id"])
-                tp = ensure_thumbnail(self.lib.root, r["path"], fh,
-                                      max(240, self._tile))
-                pm = QPixmap(str(tp)) if tp else QPixmap()
-                label = (r["taken_at"] or "")[:10]
-                if r["main_code"]:
-                    info = self.lib.species_info(r["main_code"])
-                    if info:
-                        label += "  " + sname(info["cn"], info["en"])
-                item = self._thumb_item(r["id"], pm, label, ids)
-                grid.addWidget(item, i // cols, i % cols)
-                self._flow.append(((r["taken_at"] or "")[:10], item))
-            for c in range(cols):
-                grid.setColumnStretch(c, 1)
-            self.grid_lay.addWidget(gw)
+            host = QWidget()
+            # 占位高=建成后精确高度(行×格+间距+底距): 滚动几何先对, 建成零跳动
+            rows_n = -(-len(rs) // self._cols)
+            host.setFixedHeight(rows_n * (self._tile + lh)
+                                + (rows_n - 1) * 10 + 6)
+            self.grid_lay.addWidget(host)
+            self._groups.append({"ym": ym, "rows": rs, "host": host,
+                                 "built": False})
         self.grid_lay.addStretch(1)
+        if self._groups:
+            self._ensure_group(self._groups[0]["ym"])   # 首月(最新)先建
+
+    def _ensure_group(self, ym: str):
+        """建出指定月组(已建/不存在=空操作)。缩略图+鸟种名(带memo)。"""
+        g = next((g for g in self._groups
+                  if g["ym"] == ym and not g["built"]), None)
+        if g is None:
+            return
+        g["built"] = True
+        host = g["host"]
+        host.setMinimumHeight(0)
+        host.setMaximumHeight(0xFFFFFF)
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 6)
+        grid.setSpacing(10)
+        sp_names: dict[str, str] = {}
+        for i, r in enumerate(g["rows"]):
+            fh = r.get("file_hash") or self._hash_of(r["id"])
+            tp = ensure_thumbnail(self.lib.root, r["path"], fh,
+                                  max(240, self._tile))
+            pm = QPixmap(str(tp)) if tp else QPixmap()
+            label = (r["taken_at"] or "")[:10]
+            if r["main_code"] and r["main_code"] not in sp_names:
+                info = self.lib.species_info(r["main_code"])
+                sp_names[r["main_code"]] = sname(info["cn"], info["en"])                     if info else ""
+            nm = sp_names.get(r["main_code"]) if r["main_code"] else ""
+            if nm:
+                label += "  " + nm
+            item = self._thumb_item(r["id"], pm, label, self._view_ids)
+            grid.addWidget(item, i // self._cols, i % self._cols)
+            self._flow.append(((r["taken_at"] or "")[:10], item))
+        for c in range(self._cols):
+            grid.setColumnStretch(c, 1)
+
+    def _fill_visible(self):
+        """滚动接近的未建月组按需建(视口下方两屏内)。"""
+        if not self._groups:
+            return
+        sb = self.scroll.verticalScrollBar()
+        bottom = sb.value() + self.scroll.viewport().height() * 2
+        for g in self._groups:
+            if g["built"]:
+                continue
+            try:
+                y = g["host"].mapTo(self.grid_holder, QPoint(0, 0)).y()
+            except RuntimeError:
+                return               # 重建间隙的僵尸控件, 忽略本轮
+            if y <= bottom:
+                self._ensure_group(g["ym"])
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
