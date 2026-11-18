@@ -19,6 +19,8 @@ import json
 import os
 from pathlib import Path
 
+from ..i18n import t
+
 
 def scan_roots_get(lib) -> list[str]:
     try:
@@ -41,7 +43,7 @@ def scan_increment(lib, root: str | Path) -> dict:
            "new": [], "moved": [], "changed": [], "meta_only": 0,
            "unchanged": 0, "skipped_hash": 0}
     if not rootp.is_dir():
-        res["error"] = "目录不存在"
+        res["error"] = t("目录不存在", "Folder not found")
         return res
     from ..exif import SUPPORTED_EXTS
     # 库内现状: path→(id,size,mtime) 与 hash→[ids](含missing)
@@ -55,7 +57,7 @@ def scan_increment(lib, root: str | Path) -> dict:
     try:
         it = list(rootp.rglob("*"))
     except OSError as e:
-        res["error"] = f"枚举失败: {e}"
+        res["error"] = t(f"枚举失败: {e}", f"Enum failed: {e}")
         return res
     res["ok"] = True
     for f in it:
@@ -65,7 +67,7 @@ def scan_increment(lib, root: str | Path) -> dict:
         try:
             st = f.stat()
         except OSError:
-            res["error"] = res["error"] or "部分文件不可读(已跳过)"
+            res["error"] = res["error"] or t("部分文件不可读(已跳过)", "Some files unreadable (skipped)")
             continue
         r = by_path.get(key)
         if r is None:

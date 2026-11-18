@@ -12,8 +12,8 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QProgressBar, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QListWidget, QProgressBar,
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from ..core import regions
 from ..core.importer import import_files, scan_sources
@@ -435,7 +435,7 @@ class ImportPage(QWidget):
             QMessageBox.information(
                 self, t("扫描完成", "Scan done"),
                 t("没有发现变化。", "Nothing changed."))
-        """刷新鸟点下拉, 尽量保持当前选择。"""
+        """刷新鸟点下拉, 尽量保持当前选择。"""  # i18n:ok docstring
         cur = self.spot_combo.currentData()
         self.spot_combo.blockSignals(True)
         self.spot_combo.clear()
