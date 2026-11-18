@@ -326,8 +326,11 @@ class BatchShareDialog(QDialog):
             pys = []
         rid = row.get("region_id")
         rarity, pct, score = rarity_info(code, rid)
+        # 署名单源化(1.0冲刺⑫同批⑰): cp.creator(照片级>库级)>EXIF Artist
+        # >手填设置; 框内手填仍是最高(显式临时覆盖)
+        cp = self.lib.effective_copyright(row["photo_id"])
         photographer = self.name_edit.text().strip() or \
-            (row.get("artist") or "").strip()
+            cp.get("creator") or (row.get("artist") or "").strip()
         # 框对准锚点(0.8.4保头): 眼睛点优先(惰性算一次落库)→框心→None
         focus = focus_point(self.lib, row, row)
         return {

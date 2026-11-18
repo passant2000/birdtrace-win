@@ -187,6 +187,12 @@ class Library:
         if "group_lock" not in cols:
             self.conn.execute(
                 "ALTER TABLE photos ADD COLUMN group_lock INTEGER DEFAULT 0")
+        # 版权信息(1.0冲刺⑰): 照片级覆盖存单JSON列保三态——
+        # {"creator": "x"}=覆盖 / {"creator": null}=明确清空 / 缺省=继承
+        # 库级默认(settings.copyright_defaults); 库级默认+sidecar同步
+        if "cp_json" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN cp_json TEXT")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_photos_pick ON photos(pick)")
         # 拒绝片隔离区(1.0冲刺⑨③): 文件移入<库>/隔离区/<操作编号>/,
@@ -611,6 +617,55 @@ class Library:
                     "DELETE FROM collection_photos WHERE collection_id=? "
                     "AND photo_id=?", (collection_id, pid))
         self.conn.commit()
+
+    # ---------- 版权信息(1.0冲刺⑰, 三态单源) ----------
+
+    CP_FIELDS = ("creator", "copyright_owner", "copyright_notice",
+                 "credit_line", "rights_usage_terms")
+
+    def copyright_defaults_set(self, **kw):
+        """库级默认版权(设置页表单; 存settings.copyright_defaults JSON)。"""
+        cur = json.loads(self.get_setting("copyright_defaults", "{}") or "{}")
+        for k, v in kw.items():
+            if k in self.CP_FIELDS:
+                cur[k] = (v or "").strip()
+        self.set_setting("copyright_defaults", json.dumps(cur, ensure_ascii=False))
+
+    def copyright_defaults_get(self) -> dict:
+        try:
+            obj = json.loads(self.get_setting("copyright_defaults", "{}")
+                             or "{}")
+            return obj if isinstance(obj, dict) else {}
+        except ValueError:
+            return {}
+
+    def set_photo_copyright(self, photo_id: int, overrides: dict):
+        """照片级版权覆盖(三态): 字段值=覆盖, None=明确清空(不继承
+        库级默认), 不出现的字段=继承。只存JSON不碰原图EXIF(写回只走
+        ⑪的显式开关)。"""
+        self.conn.execute("UPDATE photos SET cp_json=? WHERE id=?",
+                          (json.dumps(overrides or {}, ensure_ascii=False),
+                           photo_id))
+        self.conn.commit()
+        self._sidecar_touch(photo_ids=[photo_id])
+
+    def effective_copyright(self, photo_id: int) -> dict:
+        """统一有效版权(单源): 照片级覆盖>照片级清空>库级默认。
+        静态站展示/XMP写回/分享卡署名都必须调本接口, 不得各自实现
+        字段合并。EXIF Artist不作数据源(只在分享卡默认值链尾回落)。"""
+        base = self.copyright_defaults_get()
+        row = self.conn.execute("SELECT cp_json FROM photos WHERE id=?",
+                                (photo_id,)).fetchone()
+        if row and row["cp_json"]:
+            try:
+                over = json.loads(row["cp_json"])
+            except ValueError:
+                over = {}
+            if isinstance(over, dict):
+                for k in self.CP_FIELDS:
+                    if k in over:
+                        base[k] = over[k] if over[k] is not None else ""
+        return {k: base.get(k, "") for k in self.CP_FIELDS}
 
     def set_confirmed(self, record_id: int, code: str | None):
         """人工确认/纠正: 写confirmed_code并标记已复核。"""

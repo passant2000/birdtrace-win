@@ -86,6 +86,39 @@ class SettingsPage(QWidget):
         form.addLayout(row)
         lay.addWidget(card)
 
+        # 版权信息(1.0冲刺⑰): 库级默认五字段, 三处消费单源
+        # (分享卡署名/静态站展示/XMP写回)。原图绝不动(写回走⑪显式开关)
+        card_cp, form_cp = make_card(t("版权信息（默认）", "Copyright (defaults)"))
+        self.cp_edits: dict[str, QLineEdit] = {}
+        defaults = self.lib.copyright_defaults_get()
+        cp_labels = [
+            ("creator", t("创作者", "Creator"),
+             t("如：张三（分享卡署名默认从这里取）", "e.g. Zhang San")),
+            ("copyright_owner", t("版权所有者", "Owner"), ""),
+            ("copyright_notice", t("版权声明", "Notice"), ""),
+            ("credit_line", t("署名行", "Credit line"), ""),
+            ("rights_usage_terms", t("使用条款", "Usage terms"), ""),
+        ]
+        for key, lab_t, ph in cp_labels:
+            r2 = QHBoxLayout()
+            l2 = QLabel(lab_t)
+            l2.setObjectName("RowLabel")
+            e2 = QLineEdit(defaults.get(key, ""))
+            e2.setPlaceholderText(ph or t("可省", "optional"))
+            e2.editingFinished.connect(self._save_copyright)
+            self.cp_edits[key] = e2
+            r2.addWidget(l2)
+            r2.addWidget(e2, 1)
+            form_cp.addLayout(r2)
+        cp_hint = QLabel(t(
+            "库级默认，全部照片共用；只存鸟迹库与 sidecar，不改原图 EXIF。",
+            "Library-level defaults shared by all photos; stored in the "
+            "BirdTrace DB and sidecar only, original EXIF never touched."))
+        cp_hint.setWordWrap(True)
+        cp_hint.setObjectName("Hint")
+        form_cp.addRow(cp_hint)
+        lay.addWidget(card_cp)
+
         card2, form2 = make_card(t("识别", "Recognition"))
         row2 = QHBoxLayout()
         lab2 = QLabel(t("默认拍摄地区", "Default region"))
@@ -323,6 +356,10 @@ class SettingsPage(QWidget):
 
     def _save_name(self):
         self.lib.set_setting("photographer_name", self.name_edit.text().strip())
+
+    def _save_copyright(self):
+        self.lib.copyright_defaults_set(
+            **{k: e.text() for k, e in self.cp_edits.items()})
 
     def _rebuild_window(self):
         """整窗重建(语言/主题切换共用): 新窗构建时按当前设置重新取文案。"""

@@ -75,7 +75,7 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
     """本库中位于 folder 的照片 → {hash: entry}。"""
     rows = lib.conn.execute(
         "SELECT p.id, p.path, p.file_hash, p.rating, p.rec_fail, p.aesthetic, "
-        "  p.pick, p.pick_note, "
+        "  p.pick, p.pick_note, p.cp_json, "
         "  p.spot_id, s.name AS spot_name, s.lat AS spot_lat, s.lon AS spot_lon, "
         "  s.note AS spot_note, s.city AS spot_city "
         "FROM photos p LEFT JOIN spots s ON s.id=p.spot_id").fetchall()
@@ -134,6 +134,10 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
             "WHERE pt.photo_id=? ORDER BY t.name", (r["id"],)).fetchall()]
         if tags:
             entry["tags"] = tags
+        # 照片级版权覆盖(1.0冲刺⑰): 覆盖/清空三态原样随文件夹走
+        cp = r["cp_json"] if "cp_json" in r.keys() else None
+        if cp:
+            entry["cp"] = cp
         out[r["file_hash"]] = entry
     return out
 
@@ -193,8 +197,8 @@ def apply_entry(lib, photo_id: int, entry: dict) -> dict:
     done = {"records": False, "no_bird": False, "rating": False,
             "aesthetic": False, "spot": False, "pick": False, "tags": False}
     p = lib.conn.execute(
-        "SELECT rating, rec_fail, aesthetic, spot_id, pick FROM photos "
-        "WHERE id=?", (photo_id,)).fetchone()
+        "SELECT rating, rec_fail, aesthetic, spot_id, pick, cp_json "
+        "FROM photos WHERE id=?", (photo_id,)).fetchone()
     if not p:
         return done
     n_local = lib.conn.execute(
@@ -263,6 +267,12 @@ def apply_entry(lib, photo_id: int, entry: dict) -> dict:
                 "INSERT OR IGNORE INTO photo_tags(photo_id, tag_id) "
                 "VALUES(?,?)", (photo_id, tid))
         done["tags"] = True
+    # 照片级版权覆盖(1.0冲刺⑰): 本地未设置过才回填(已有编辑优先)
+    if entry.get("cp") and not (p["cp_json"] if "cp_json" in p.keys()
+                               else None):
+        lib.conn.execute("UPDATE photos SET cp_json=? WHERE id=?",
+                         (entry["cp"], photo_id))
+        done["cp"] = True
     if entry.get("aesthetic") is not None and p["aesthetic"] is None:
         lib.conn.execute("UPDATE photos SET aesthetic=? WHERE id=?",
                          (float(entry["aesthetic"]), photo_id))

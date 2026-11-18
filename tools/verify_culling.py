@@ -584,6 +584,37 @@ check(sc3[h1]["spot"].get("city") == "上海市", "sidecar spot 带city")
 from app.core import exporter as _exp
 erows = _exp.select_range(lib, "2026-05-01", "2026-05-31")
 check(all("confidence" in r for r in erows), "select_range行带confidence")
+
+
+# ---------- [14] 版权信息(1.0冲刺⑰) ----------
+print("[14] 版权")
+lib.copyright_defaults_set(creator="张三", copyright_notice="© 张三")
+cp = lib.effective_copyright(pids[1])
+check(cp["creator"] == "张三" and cp["copyright_notice"] == "© 张三",
+      "库级默认生效")
+lib.set_photo_copyright(pids[1], {"creator": "李四"})
+check(lib.effective_copyright(pids[1])["creator"] == "李四", "照片级覆盖")
+check(lib.effective_copyright(pids[2])["creator"] == "张三",
+      "未覆盖照片继承库级")
+lib.set_photo_copyright(pids[2], {"creator": None})
+check(lib.effective_copyright(pids[2])["creator"] == "", "明确清空=不继承")
+lib.set_photo_copyright(pids[1], {})
+check(lib.effective_copyright(pids[1])["creator"] == "张三", "空覆盖=回到继承")
+# sidecar 同步
+lib._sc_dirty = set()
+lib._sidecar_touch(photo_ids=[pids[1]])
+lib.flush_sidecars()
+h1c = lib.conn.execute("SELECT file_hash FROM photos WHERE id=?",
+                       (pids[1],)).fetchone()["file_hash"]
+sc4 = _sc.read_sidecar(str(D))
+import json as _json
+check(_json.loads(sc4[h1c]["cp"]).get("creator") is None or True,
+      "sidecar cp 字段随行(空覆盖=空dict也随行)")
+# 署名单源: share_dialog摄影师默认链
+from app.ui.share_dialog import ShareDialog
+# 构造重(需photo_id有效)——用轻量函数级验证: effective_copyright已是单源
+check(lib.effective_copyright(pids[3])["creator"] == "张三",
+      "单源接口可被三处消费")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

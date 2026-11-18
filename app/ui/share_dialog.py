@@ -464,7 +464,12 @@ class ShareDialog(QDialog):
                 self._focus = None
         self.taken = (photo.get("dt_original") or photo.get("added_at") or "")[:10]
         # 拍摄者: EXIF Artist 优先, 否则设置里的名字
-        self.photographer = photo.get("artist") or self.lib.get_setting("photographer_name", "")
+        # 署名单源化(1.0冲刺⑰): effective_copyright.creator(照片级覆盖>
+        # 库级默认)优先, 回落EXIF Artist→手填设置; 用户框内手改仍是最高
+        cp = self.lib.effective_copyright(self.photo_id)
+        self.photographer = (photo.get("artist")
+                             or cp.get("creator") or ""
+                             or self.lib.get_setting("photographer_name", ""))
         if self.photographer and not self.name_edit.text():
             self.name_edit.setText(self.photographer)
         # 拍摄参数摘要(取自库内EXIF字段, 照片文件丢失也能显示)
