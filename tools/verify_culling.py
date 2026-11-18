@@ -552,6 +552,38 @@ from app.ui.stats_page import StatsPage
 sp = StatsPage(lib, win)
 sp.refresh()
 sp.close()
+
+
+# ---------- [13] ⑫小件: 鸟点城市/机镜别名/{confidence}段 ----------
+print("[13] ⑫小件")
+from app.core.camera_aliases import alias_of
+check(alias_of("ILCE-7CM2") == "SONY α7C II", "别名命中(索尼)")
+check(alias_of("2203121C") == "小米12S Ultra", "别名命中(手机工程代号)")
+check(alias_of("某某未知型号") == "某某未知型号", "无命中原样")
+p2 = dict(make="sony", model="ILCE-7CM2", focal_len=600, fnum=2.8,
+          exposure="1/2000", iso=1600, lens="FE 300mm F2.8 GM")
+parts = __import__("app.ui.share_dialog", fromlist=["exif_parts_of"]).exif_parts_of(p2)
+check(parts["body"] == "SONY α7C II", "exif_parts_of 机身过别名")
+# 鸟点city: 建点带city→sidecar→地点行
+cid2 = lib.create_spot("奥森南园", 40.0035, 116.3950, short_name="奥森",
+                       city="上海市")
+lib.set_photos_spot([pids[1]], cid2)
+from app.ui.batch_share_dialog import _place_with_spot
+place = _place_with_spot({"spot_short": "奥森", "spot_city": "上海市"}, "CN-31")
+check(place == "上海市·奥森", f"地点行=市·鸟点名 (得{place})")
+place2 = _place_with_spot({"spot_short": "奥森", "spot_city": ""}, "CN-31")
+check("CN" in place2 or "中国" in place2, "无city回落国·省·鸟点")
+lib._sc_dirty = set()
+lib._sidecar_touch(photo_ids=[pids[1]])
+lib.flush_sidecars()
+h1 = lib.conn.execute("SELECT file_hash FROM photos WHERE id=?",
+                      (pids[1],)).fetchone()["file_hash"]
+sc3 = _sc.read_sidecar(str(D))
+check(sc3[h1]["spot"].get("city") == "上海市", "sidecar spot 带city")
+# {confidence} 段: select_range行带confidence→plan模板
+from app.core import exporter as _exp
+erows = _exp.select_range(lib, "2026-05-01", "2026-05-31")
+check(all("confidence" in r for r in erows), "select_range行带confidence")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

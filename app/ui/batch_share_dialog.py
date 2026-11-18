@@ -31,8 +31,12 @@ from .share_dialog import (exif_parts_of, focus_point, iucn_of, pinyin_spaced,
 
 
 def _place_with_spot(row: dict, rid: str | None) -> str:
-    """地点行: 国别·省级·鸟点, 分隔点统一紧排"·"; 简称优先(单卡同款)。"""
+    """地点行: 市有值时=市·鸟点(⑫③升级), 否则 国别·省级·鸟点;
+    分隔点统一紧排"·"; 简称优先(单卡同款)。"""
     spot = row.get("spot_short") or row.get("spot_name") or ""
+    city = (row.get("spot_city") or "").strip()
+    if city:
+        return f"{city}·{spot}" if spot else city
     if not rid or rid == "GLOBAL":
         return spot
     place = regions.region_display(rid)

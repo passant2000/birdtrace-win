@@ -33,11 +33,16 @@ def exif_parts_of(p: dict) -> dict:
     """拍摄参数三段(机身/镜头/焦·孔·快·ISO); 库里有什么显示什么。
 
     纯函数, 供单卡ShareDialog与批量导出(0.8-⑥)共用; 字段取自库内
-    EXIF(照片文件丢失也能显示)。"""
+    EXIF(照片文件丢失也能显示)。机身/镜头过别名表(1.0冲刺⑫②:
+    ILCE-7CM2→SONY α7C II 等友好名, assets/data/camera_aliases.json
+    可扩展, 无命中原样)。"""
+    from ..core.camera_aliases import alias_of
     make = (p.get("make") or "").strip()
     model = (p.get("model") or "").strip()
     body = model if model and make and model.startswith(make) \
         else " ".join(x for x in (make, model) if x)
+    # 别名键兼容两种形态: 裸型号(ILCE-7CM2)与带品牌串(SONY ILCE-7CM2)
+    body = alias_of(body) if alias_of(body) != body else alias_of(model)
     shot: list[str] = []
     if p.get("focal_len"):
         try:
@@ -53,7 +58,7 @@ def exif_parts_of(p: dict) -> dict:
         shot.append(f"{str(p['exposure']).strip()}s")
     if p.get("iso"):
         shot.append(f"ISO {p['iso']}")
-    return {"body": body, "lens": str(p.get("lens") or "").strip(),
+    return {"body": body, "lens": alias_of(str(p.get("lens") or "").strip()),
             "shot": " · ".join(shot)}
 
 
@@ -423,14 +428,18 @@ class ShareDialog(QDialog):
 
 
     def _default_place(self) -> str:
-        """地点行默认值: 国别·省级, 有鸟点追加紧排"·鸟点名"(简称优先,
-        可编辑; 发稀有鸟前手动删, 鸟点=精确位置)。"""
+        """地点行默认值: 鸟点填了城市时=市·鸟点名(⑫③, 简称优先);
+        否则 国别·省级(, 有鸟点追加紧排"·鸟点名"。可编辑; 发稀有鸟
+        前手动删, 鸟点=精确位置)。"""
         photo, _recs = self.lib.photo_detail(self.photo_id)
+        city = ((photo or {}).get("city") or "").strip()
+        spot = (photo or {}).get("spot_short") or (photo or {}).get("spot_name")
+        if city:
+            return f"{city}·{spot}" if spot else city
         rid = (photo or {}).get("region_id")
         if not rid or rid == "GLOBAL":
             return ""
         place = regions.region_display(rid)
-        spot = (photo or {}).get("spot_short") or (photo or {}).get("spot_name")
         if spot:
             place += "·" + spot
         return place

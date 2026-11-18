@@ -154,9 +154,11 @@ class ExportDialog(QDialog):
         # 每段∈ 无/原文件名/日期/鸟名/序号/鸟点, 用"_"连接;
         # 默认 日期+鸟名+序号 (=原"日期_鸟种_序号")
         self._SEG_ITEMS = [t("（无）", "(none)"), t("原文件名", "Filename"),
+                           t("置信度", "Confidence"),
                            t("日期", "Date"), t("鸟名", "Species"),
                            t("序号", "No."), t("鸟点", "Spot")]
-        self._SEG_KEYS = [None, "filename", "date", "name", "seq", "spot"]
+        self._SEG_KEYS = [None, "filename", "confidence", "date", "name", "seq",
+                          "spot"]
         tpl_row = QHBoxLayout()
         tpl_row.addWidget(QLabel(t("文件名", "File names")))
         self.tpl_combos = []

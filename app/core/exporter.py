@@ -45,7 +45,7 @@ def select_range(lib, date_from: str | None = None,
         "SELECT DISTINCT v.photo_id, p.path, v.eff_code, "
         "  COALESCE(s.cn, s.en, v.eff_code) AS name, s.en AS en_name, "
         "  COALESCE(e.dt_original, p.added_at) AS taken_at, p.rating, "
-        "  p.spot_id, sp.name AS spot_name "
+        "  p.spot_id, sp.name AS spot_name, v.confidence "
         "FROM v_records v "
         "JOIN photos p ON p.id=v.photo_id "
         "LEFT JOIN species s ON s.code=v.eff_code "
@@ -152,6 +152,16 @@ def plan_ops(rows: list[dict], dest_root: Path | None = None,
                         sn = r.get("spot_name")
                         if sn:
                             parts_out.append(safe_component(sn, "spot"))
+                    elif seg == "confidence":
+                        # 置信度段(1.0冲刺⑫①): rank1原始置信整数百分比,
+                        # 无识别时占位0(段保留便于成批一致)
+                        conf = r.get("confidence")
+                        try:
+                            pct = int(round(float(conf) * 100)) if conf \
+                                is not None else 0
+                        except (TypeError, ValueError):
+                            pct = 0
+                        parts_out.append(f"c{pct:02d}")
                     elif seg == "seq":
                         if not seq:
                             seq_by_key[seq_key] = seq_by_key.get(seq_key, 0) + 1

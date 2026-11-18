@@ -162,6 +162,11 @@ class SpotEditDialog(QDialog):
             "简称（可省，分享卡地点行显示用）",
             "Short name (optional, for share cards)"))
         form.addRow(t("简称", "Short name"), self.short_edit)
+        self.city_edit = QLineEdit((spot["city"] or "") if spot else "")
+        self.city_edit.setPlaceholderText(t(
+            "城市（可省，如：上海市；填了则卡上地点=市·鸟点名）",
+            "City (optional, e.g. Shanghai; card shows City·Spot)"))
+        form.addRow(t("城市", "City"), self.city_edit)
         self.note_edit = QLineEdit(spot["note"] if spot else "")
         self.note_edit.setPlaceholderText(t("备注（可省）", "Note (optional)"))
         form.addRow(t("备注", "Note"), self.note_edit)
@@ -233,11 +238,15 @@ class SpotEditDialog(QDialog):
         lon = self._num(self.lon_edit.text())
         note = self.note_edit.text().strip()
         short = self.short_edit.text().strip()
+        city = self.city_edit.text().strip()
         if self.spot:
             self.lib.update_spot(self.spot["id"], name=name, note=note,
-                                 lat=lat, lon=lon, short_name=short)
+                                 lat=lat, lon=lon, short_name=short,
+                                 city=city)
         else:
-            self.created_id = self.lib.create_spot(name, lat, lon, note)
+            self.created_id = self.lib.create_spot(name, lat, lon, note,
+                                                   short_name=short,
+                                                   city=city)
         self.accept()
 
     @staticmethod

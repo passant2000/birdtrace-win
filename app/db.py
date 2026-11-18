@@ -149,6 +149,10 @@ class Library:
         scols = {r["name"] for r in self.conn.execute("PRAGMA table_info(spots)")}
         if "short_name" not in scols:
             self.conn.execute("ALTER TABLE spots ADD COLUMN short_name TEXT DEFAULT ''")
+        # 鸟点城市(1.0冲刺⑫③): 分享卡地点行"市·鸟点名"——离线优先,
+        # 用户在鸟点编辑里填一次(不做逆地理API)
+        if "city" not in scols:
+            self.conn.execute("ALTER TABLE spots ADD COLUMN city TEXT DEFAULT ''")
         # 眼睛点(0.8.4): 分享卡框对准保头用, 识别路径零改动——首次出卡
         # 时惰性计算并落库缓存(旧库自动补列, 旧记录NULL=未算过)
         rcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(records)")}
@@ -1154,28 +1158,32 @@ class Library:
         return dict(r) if r else None
 
     def create_spot(self, name: str, lat: float | None = None,
-                    lon: float | None = None, note: str = "") -> int:
+                    lon: float | None = None, note: str = "",
+                    short_name: str = "", city: str = "") -> int:
         cur = self.conn.execute(
-            "INSERT INTO spots(name,lat,lon,note) VALUES(?,?,?,?)",
-            (name, lat, lon, note))
+            "INSERT INTO spots(name,lat,lon,note,short_name,city) "
+            "VALUES(?,?,?,?,?,?)", (name, lat, lon, note, short_name, city))
         self.conn.commit()
         return cur.lastrowid
 
     def update_spot(self, spot_id: int, name: str | None = None,
                     note: str | None = None, lat: float | None = None,
-                    lon: float | None = None, short_name: str | None = None):
+                    lon: float | None = None, short_name: str | None = None,
+                    city: str | None = None):
         cur = self.spot_info(spot_id)
         if not cur:
             return
         self.conn.execute(
-            "UPDATE spots SET name=?, note=?, lat=?, lon=?, short_name=? "
-            "WHERE id=?",
+            "UPDATE spots SET name=?, note=?, lat=?, lon=?, short_name=?, "
+            "city=? WHERE id=?",
             (name if name is not None else cur["name"],
              note if note is not None else cur["note"],
              lat if lat is not None else cur["lat"],
              lon if lon is not None else cur["lon"],
              (short_name if short_name is not None
               else (cur["short_name"] if "short_name" in cur.keys() else "")),
+             (city if city is not None
+              else (cur["city"] if "city" in cur.keys() else "")),
              spot_id))
         self.conn.commit()
         # 0.8.7修(外审采纳): 鸟点名称/坐标/备注写进每张照片的sidecar,
@@ -1953,6 +1961,7 @@ class Library:
         "  COALESCE(s.cn, s.en, v.eff_code) AS cn, s.en AS en_name, "
         "  s.sci, v.taken_at, b.region_id AS region_id, "
         "  sp.name AS spot_name, sp.short_name AS spot_short, "
+        "  sp.city AS spot_city, "
         "  e.dt_original, e.make, e.model, e.lens, e.iso, e.exposure, "
         "  e.fnum, e.focal_len, e.artist "
         "FROM v_records v JOIN photos p ON p.id=v.photo_id "

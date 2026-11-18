@@ -77,7 +77,7 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
         "SELECT p.id, p.path, p.file_hash, p.rating, p.rec_fail, p.aesthetic, "
         "  p.pick, p.pick_note, "
         "  p.spot_id, s.name AS spot_name, s.lat AS spot_lat, s.lon AS spot_lon, "
-        "  s.note AS spot_note "
+        "  s.note AS spot_note, s.city AS spot_city "
         "FROM photos p LEFT JOIN spots s ON s.id=p.spot_id").fetchall()
     key = os.path.normcase(os.path.normpath(folder))
     out: dict[str, dict] = {}
@@ -118,7 +118,8 @@ def build_entries(lib, folder: str) -> dict[str, dict]:
             "rating": int(r["rating"] or 0),
             "aesthetic": r["aesthetic"],
             "spot": ({"name": r["spot_name"], "lat": r["spot_lat"],
-                      "lon": r["spot_lon"], "note": r["spot_note"] or ""}
+                      "lon": r["spot_lon"], "note": r["spot_note"] or "",
+                      "city": r["spot_city"] or ""}
                      if r["spot_id"] else None),
         }
         # 选片三态(1.0冲刺⑨): 非空才写, 旧版本读到未知字段会保留不清
@@ -183,7 +184,8 @@ def _resolve_spot(lib, spot: dict) -> int | None:
         near, _d = lib.nearest_spot(float(lat), float(lon), max_m=50.0)
         if near:
             return near["id"]
-    return lib.create_spot(name, lat, lon, spot.get("note") or "")
+    return lib.create_spot(name, lat, lon, spot.get("note") or "",
+                           city=spot.get("city") or "")
 
 
 def apply_entry(lib, photo_id: int, entry: dict) -> dict:
