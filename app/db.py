@@ -1760,6 +1760,57 @@ class Library:
                 key=lambda g: g[0])
         return {"exact": exact, "similar": similar, "scanned": n}
 
+    def site_data(self, max_species_per_page: int = 100000) -> dict:
+        """静态图库站数据(1.0冲刺⑩): 按鸟种聚合+时间轴+地区列表。
+        gallery.json schema 预留 tags/collections 字段(拍板: 筛选视图
+        1.0前补, 不阻塞交付)。隐私: 只出省市(region), 鸟点名/坐标
+        绝不进数据(用户可后补开关)。"""
+        species = []
+        for r in self.conn.execute(
+                "SELECT v.eff_code AS code, COALESCE(s.cn, s.en, v.eff_code) "
+                "AS cn, s.en AS en, COUNT(DISTINCT v.photo_id) AS n, "
+                "MAX(p.aesthetic * v.confidence) AS best_score, "
+                "MIN(substr(COALESCE(e.dt_original, p.added_at),1,10)) AS first, "
+                "MAX(substr(COALESCE(e.dt_original, p.added_at),1,10)) AS last "
+                "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+                "LEFT JOIN exif e ON e.photo_id=p.id "
+                "LEFT JOIN species s ON s.code=v.eff_code "
+                "WHERE v.rank=1 GROUP BY v.eff_code "
+                "ORDER BY best_score DESC").fetchall():
+            # 每鸟种代表照+照片hash清单(file_hash命名, 增量上传天然去重)
+            best = self.conn.execute(
+                "SELECT p.file_hash AS h, p.width, p.height, p.aesthetic "
+                "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+                "WHERE v.eff_code=? AND v.rank=1 AND p.aesthetic IS NOT NULL "
+                "  AND (v.confirmed_code IS NOT NULL OR v.confidence>=0.5) "
+                "ORDER BY p.aesthetic * v.confidence DESC LIMIT 1",
+                (r["code"],)).fetchone()
+            photos = [{"h": x["h"]} for x in self.conn.execute(
+                "SELECT DISTINCT p.file_hash AS h FROM v_records v "
+                "JOIN photos p ON p.id=v.photo_id WHERE v.eff_code=? "
+                "AND v.rank=1", (r["code"],)).fetchall()]
+            species.append({
+                "code": r["code"], "cn": r["cn"], "en": r["en"] or "",
+                "count": r["n"], "first": r["first"], "last": r["last"],
+                "best": best["h"] if best else (photos[0]["h"] if photos else ""),
+                "photos": photos})
+        months = [{"ym": r["ym"], "n": r["n"]} for r in self.conn.execute(
+            "SELECT substr(COALESCE(e.dt_original, p.added_at),1,7) AS ym, "
+            "COUNT(*) AS n FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
+            "GROUP BY ym ORDER BY ym").fetchall() if r["ym"]]
+        regions = [{"region": r["region"], "n": r["n"]} for r in self.conn.execute(
+            "SELECT b.region_id AS region, COUNT(*) AS n FROM photos p "
+            "JOIN batches b ON b.id=p.batch_id GROUP BY b.region_id "
+            "ORDER BY n DESC").fetchall()]
+        meta = {"photos": self.photo_count(),
+                "species": len(species),
+                "creator": self.effective_copyright(
+                    self.conn.execute(
+                        "SELECT id FROM photos ORDER BY id DESC LIMIT 1"
+                    ).fetchone()["id"]).get("creator", "") if self.photo_count() else ""}
+        return {"meta": meta, "species": species, "months": months,
+                "regions": regions, "tags": [], "collections": []}
+
     def gear_stats(self) -> dict:
         """装备榜(1.0冲刺⑥): 机身/镜头出片数(数据全在exif表)。
         返回 {"body": [(名称, 数)..desc], "lens": [...]}。"""

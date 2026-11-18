@@ -713,6 +713,31 @@ check(_mp(lib) == 0, "幂等: 已挂raw_path跳过")
 # 全库photo计数=导入数-1对
 check(lib.photo_count() == lib.conn.execute(
     "SELECT COUNT(*) FROM photos").fetchone()[0], "photo_count口径一致")
+
+
+# ---------- [17] 静态图库站(1.0冲刺⑩) ----------
+print("[17] 静态站")
+from app.core.static_site import build_site
+site = D / "site"
+res_s = build_site(lib, site)
+check(res_s["species"] >= 2, f"站点聚合鸟种(得{res_s['species']})")
+check((site / "index.html").is_file(), "index.html生成")
+gj = json.loads((site / "gallery.json").read_text(encoding="utf-8"))
+check(set(gj) >= {"meta", "species", "months", "regions", "tags",
+                  "collections"}, "gallery.json含tags/collections预留字段")
+check(gj["tags"] == [] and gj["collections"] == [], "预留字段空schema")
+blob = (site / "gallery.json").read_text(encoding="utf-8")
+check("spot_name" not in blob and "坐标" not in blob and
+      "lat" not in json.dumps(gj["regions"]), "隐私: 鸟点名/坐标不进站点数据")
+img = list((site / "images").glob("*.webp"))
+check(len(img) >= 2, "两档图落盘")
+check(any(p.name.endswith(".256.webp") for p in img) and
+      any(p.name.endswith(".1280.webp") for p in img), "256+1280两档")
+html = (site / "index.html").read_text(encoding="utf-8")
+check("prefers-color-scheme" in html and "loading=\"lazy\"" in html,
+      "深浅跟随系统+懒加载")
+# 原图绝不出库: images里没有全尺寸文件(只webp两档)
+check(all(p.suffix == ".webp" for p in img), "出库只有webp两档")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

@@ -126,6 +126,16 @@ class TimelinePage(QWidget):
             "plus one best photo per species"))
         self.report_btn.clicked.connect(self._open_birdreport)
         head.addWidget(self.report_btn)
+        self.site_btn = QPushButton(t("静态站…", "Static site…"))
+        self.site_btn.setCursor(Qt.PointingHandCursor)
+        self.site_btn.setToolTip(t(
+            "一键生成纯静态图库站（手机优先/深浅跟随系统/鸟种·时间·地区"
+            "三视图）——鸟点名与坐标绝不进站点数据，原图绝不出库",
+            "Generate a static gallery site (mobile-first, three views); "
+            "spot names/coordinates never included, originals never "
+            "exported"))
+        self.site_btn.clicked.connect(self._open_site)
+        head.addWidget(self.site_btn)
         self.select_btn = QPushButton(t("选择", "Select"))
         self.select_btn.setObjectName("Primary")
         self.select_btn.setCursor(Qt.PointingHandCursor)
@@ -365,6 +375,36 @@ class TimelinePage(QWidget):
         """观鸟记录中心导出(1.0冲刺④): CSV上报行+最美照归集。"""
         from .birdreport_dialog import BirdReportDialog
         BirdReportDialog(self.lib, self.win).exec()
+
+    def _open_site(self):
+        """静态图库站(1.0冲刺⑩): 一键生成纯静态站。"""
+        from PySide6.QtWidgets import QFileDialog, QProgressDialog
+        dest = QFileDialog.getExistingDirectory(
+            self, t("选择站点输出文件夹（建议空目录）",
+                    "Choose output folder (empty recommended)"),
+            str(Path.home() / "Pictures"))
+        if not dest:
+            return
+        from ..core.static_site import build_site
+        pd = QProgressDialog(t("正在生成站点…", "Building site…"),
+                             t("取消", "Cancel"), 0, 0, self)
+        pd.setWindowModality(Qt.WindowModal)
+        pd.setMinimumDuration(300)
+        try:
+            res = build_site(self.lib, Path(dest))
+        except Exception as e:
+            pd.cancel()
+            QMessageBox.warning(self, t("生成失败", "Build failed"), str(e))
+            return
+        pd.cancel()
+        QMessageBox.information(
+            self, t("静态站已生成", "Site built"),
+            t(f"已生成 {res['species']} 个鸟种 / {res['thumb']} 张缩略图 到\n"
+              f"{res['dest']}\n\n把该文件夹拖到 Cloudflare Pages（免费）"
+              "即可上线；index.html 双击本地也能看。",
+              f"Built {res['species']} species / {res['thumb']} thumbs at\n"
+              f"{res['dest']}\n\nDrag the folder to Cloudflare Pages to "
+              "publish; index.html also opens locally."))
 
     # ---------- 标签/作品集(1.0冲刺⑭⑮) ----------
     def _refresh_tag_filter(self):
