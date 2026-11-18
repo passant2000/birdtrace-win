@@ -1159,6 +1159,11 @@ class TimelinePage(QWidget):
         self._restore_scroll_after_rebuild()
         self._tl_sig = self._data_sig()
         self._cur_cols = self._wanted_cols()
+        # 重建后强制几何重算: offscreen/个别DPI下 QScrollArea收不到
+        # LayoutRequest时 content 被压到 viewport 高, 网格行塌缩
+        # (1.0冲刺实测verify_scroll_restore max=0px); 真实GUI此调用
+        # 无害(sizeHint未变时零开销)
+        self.content.adjustSize()
         # 初次打开时页面尚未布局, 列数按陈旧宽度算(曾固定4列)——布局
         # 稳定后再校正一次(列数没变则直接返回, 无开销)
         QTimer.singleShot(0, self._on_relayout)

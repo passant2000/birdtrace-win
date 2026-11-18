@@ -78,11 +78,13 @@ def main():
     def fake_exec(self_dlg):
         combos = self_dlg.findChildren(QComboBox)
         picked["combos"] = combos
+        # 1.0冲刺②: 对话框第一行是识别范围下拉——region combo按数据定位
+        reg_combo = next(c for c in combos if c.findData("CN") >= 0)
         # 国家级"中国"必须可寻址(data=CN)——修复前findData("CN")=-1
-        idx = combos[0].findData("CN")
+        idx = reg_combo.findData("CN")
         picked["cn_idx"] = idx
         if idx >= 0:
-            combos[0].setCurrentIndex(idx)
+            reg_combo.setCurrentIndex(idx)
         return 1   # QDialog.Accepted
 
     QDialog.exec = fake_exec
@@ -108,8 +110,11 @@ def main():
 
     def fake_exec2(self_dlg):
         combos = self_dlg.findChildren(QComboBox)
-        combos[0].setCurrentIndex(combos[0].findData("CN-SH"))
-        combos[1].setCurrentIndex(combos[1].findData(None))   # 不挂鸟点
+        reg_combo = next(c for c in combos if c.findData("CN") >= 0)
+        spot_combo = next(c for c in combos if c is not reg_combo and
+                          c.findData("keep") >= 0)
+        reg_combo.setCurrentIndex(reg_combo.findData("CN-SH"))
+        spot_combo.setCurrentIndex(spot_combo.findData(None))   # 不挂鸟点
         return 1
 
     QDialog.exec = fake_exec2

@@ -31,6 +31,7 @@ COPY_FILES = [
     "assets/map/maplibre-gl.js",
     "assets/map/maplibre-gl.css",
     "assets/map/china_provinces.json",
+    "assets/templates/site_index.html",
 ]
 
 

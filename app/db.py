@@ -662,7 +662,7 @@ class Library:
         字段合并。EXIF Artist不作数据源(只在分享卡默认值链尾回落)。"""
         base = self.copyright_defaults_get()
         row = self.conn.execute("SELECT cp_json FROM photos WHERE id=?",
-                                (photo_id,)).fetchone()
+                                (photo_id,)).fetchone() if photo_id else None
         if row and row["cp_json"]:
             try:
                 over = json.loads(row["cp_json"])

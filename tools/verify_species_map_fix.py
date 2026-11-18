@@ -240,8 +240,10 @@ def main():
         "SELECT code FROM species WHERE code != 'mallar3' LIMIT 39")]
     pid0 = lib.conn.execute("SELECT id FROM photos LIMIT 1").fetchone()[0]
     for c in extra:
-        lib.add_records(pid0, [{"species_code": c, "confidence": 0.9,
-                                "source": "verify"}])
+        # 0.8.6语义: add_records对已有人工痕迹照片整组跳过(pid0此前被
+        # 改判测试动过)——追加语义用append_record(0.8.6修的同款路径)
+        lib.append_record(pid0, {"species_code": c, "confidence": 0.9,
+                                 "source": "verify"})
     overview = lib.species_overview()
     check(len(overview) == 1 + len(extra),
           f"列表 {len(overview)} 种(1+{len(extra)})")
