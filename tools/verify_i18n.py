@@ -174,8 +174,9 @@ def main():
         win.resize(1280, 840)
         win.show()
         app.processEvents()
-        page_keys = [k for k in ("timeline", "import", "species", "review",
-                                 "life", "collections", "settings", "about")
+        page_keys = [k for k in ("home", "timeline", "import", "species",
+                                 "review", "life", "collections",
+                                 "settings", "about")
                      if win.pages.get(k) is not None]
         for k in page_keys:
             page = win.pages[k]

@@ -308,17 +308,8 @@ class TimelinePage(QWidget):
         # (2026-10-31用户要求: 只按月份上下翻不方便)
         body = QHBoxLayout()
         body.setSpacing(12)
-        self.tree_nav = QTreeWidget()
-        self.tree_nav.setHeaderHidden(True)
-        self.tree_nav.setFixedWidth(196)
-        self.tree_nav.setIndentation(16)
-        self.tree_nav.setStyleSheet(
-            f"QTreeWidget{{background:{theme.CARD};border:1px solid {theme.SEP};"
-            "border-radius:12px;padding:4px;}"
-            "QTreeWidget::item{height:26px;border-radius:7px;margin:1px 2px;}"
-            "QTreeWidget::item:hover{background:rgba(127,127,127,40);}"
-            "QTreeWidget::item:selected{background:rgba(0,122,255,60);}")
-        self.tree_nav.itemClicked.connect(self._on_tree_click)
+        self._body_lay = body
+        self.tree_nav = self._make_tree()
         body.addWidget(self.tree_nav)
 
         self.scroll = QScrollArea()
@@ -1145,9 +1136,6 @@ class TimelinePage(QWidget):
             rb.clicked.connect(self._relink)
             mh.addWidget(rb)
             self.content_lay.addWidget(mb)
-        banner = self._daily_bird_banner()
-        if banner:
-            self.content_lay.addWidget(banner)
         if not data:
             # 每次新建: 持久QLabel会被refresh的deleteLater删除, 复用会崩
             empty = QLabel(t("还没有照片 · 去「导入」页添加你的第一张鸟类照片吧",
@@ -1301,17 +1289,42 @@ class TimelinePage(QWidget):
             return s[8:10]
         return ""
 
+    def _make_tree(self) -> QTreeWidget:
+        """构造时间树控件(样式+点击连接)。
+        UI重设计c7加固: _build_tree改为整树重建——原tree_nav.clear()在
+        offscreen/高负载下偶发access violation(2026-11-19实测复现, 同
+        PLAN.md"deleteLater半删对象"陷阱类; 真实GUI无害但测试不稳),
+        deleteLater旧树整体替换可绕开C++ clear()的崩溃路径。"""
+        w = QTreeWidget()
+        w.setHeaderHidden(True)
+        w.setFixedWidth(196)
+        w.setIndentation(16)
+        w.setStyleSheet(
+            f"QTreeWidget{{background:{theme.CARD};border:1px solid {theme.SEP};"
+            "border-radius:12px;padding:4px;}"
+            "QTreeWidget::item{height:26px;border-radius:7px;margin:1px 2px;}"
+            "QTreeWidget::item:hover{background:rgba(127,127,127,40);}"
+            "QTreeWidget::item:selected{background:rgba(0,122,255,60);}")
+        w.itemClicked.connect(self._on_tree_click)
+        return w
+
     def _build_tree(self, data: dict) -> None:
-        """重建左侧时间树。锚点: 月=月份标题QLabel, 日=当日首个网格项;
-        点击itemClicked跳转, 滚动反向高亮(_sync_tree_current)。"""
+        """重建左侧时间树(整树重建替换)。锚点: 月=月份标题QLabel,
+        日=当日首个网格项; 点击itemClicked跳转, 滚动反向高亮
+        (_sync_tree_current)。"""
         keep = self.tree_nav.currentItem()
         try:
             keep_key = keep.data(0, Qt.UserRole) if keep else None
         except RuntimeError:      # 上一次refresh的旧item已删(离屏压力下偶发)
             keep_key = None
-        self.tree_nav.blockSignals(True)
-        self.tree_nav.setCurrentItem(None)   # 清空内部current指针再clear
-        self.tree_nav.clear()
+        # 整树替换: 新树插入旧树位置, 旧树摘除+deleteLater(不再用clear())
+        old = self.tree_nav
+        self.tree_nav = self._make_tree()
+        idx = self._body_lay.indexOf(old)
+        self._body_lay.insertWidget(idx, self.tree_nav)
+        self._body_lay.removeWidget(old)
+        old.hide()
+        old.deleteLater()
         import datetime
         today = datetime.date.today()
         cur_year = None
@@ -1353,7 +1366,6 @@ class TimelinePage(QWidget):
                                             f"{int(d):02d} · {days[d]}")])
                 d_item.setData(0, Qt.UserRole, f"{ym}|{d}")
                 m_item.addChild(d_item)
-        self.tree_nav.blockSignals(False)
         if keep_key:
             for it in self._tree_all_items():
                 if it.data(0, Qt.UserRole) == keep_key:
@@ -1520,79 +1532,6 @@ class TimelinePage(QWidget):
                   "in the new folder.\nPlease make sure you selected the "
                   "folder where the photos are now."))
         self.refresh()
-
-    def _daily_bird_banner(self):
-        """每日一鸟横幅: 文化库中确定性轮换, 点击跳转物种详情。"""
-        try:
-            from ..core.culture import get_culture
-            pool = get_culture().daily_pool()
-        except Exception:
-            return None
-        if not pool:
-            return None
-        import datetime
-        doy = datetime.date.today().timetuple().tm_yday
-        code = pool[doy % len(pool)]
-        sp = self.lib.species_info(code)
-        if not sp:
-            return None
-        stories = get_culture().stories_for(code)
-        story = stories[0] if stories else None
-
-        card = QFrame()
-        card.setObjectName("Card")
-        card.setCursor(Qt.PointingHandCursor)
-        h = QHBoxLayout(card)
-        h.setContentsMargins(14, 12, 14, 12)
-        h.setSpacing(14)
-        cover = QLabel()
-        cover.setFixedSize(84, 84)
-        cover.setAlignment(Qt.AlignCenter)
-        cover.setStyleSheet(f"background:{theme.FILL};border-radius:12px;")
-        cov_row = self.lib.conn.execute(
-            """SELECT p.path, p.file_hash FROM photos p
-               WHERE p.id = (SELECT v2.photo_id FROM v_records v2
-                              WHERE v2.eff_code=? ORDER BY v2.taken_at ASC LIMIT 1)""",
-            (code,)).fetchone()
-        if cov_row:
-            tp = ensure_thumbnail(self.lib.root, cov_row["path"], cov_row["file_hash"], 180)
-            if tp:
-                pm = QPixmap(str(tp))
-                cover.setPixmap(pm.scaled(84, 84, Qt.KeepAspectRatioByExpanding,
-                                          Qt.SmoothTransformation))
-        else:
-            cover.setText("🐦")
-            cover.setStyleSheet(f"font-size:34px;background:{theme.FILL};border-radius:12px;")
-        h.addWidget(cover)
-
-        info = QVBoxLayout()
-        info.setSpacing(2)
-        tag = QLabel(t("每日一鸟 · 文化故事", "Bird of the day · Culture story"))
-        tag.setStyleSheet(f"color:{theme.OLIVE};font-size:11px;font-weight:700;"
-                          "background:transparent;")
-        info.addWidget(tag)
-        name = QLabel(sname(sp["cn"], sp["en"]))
-        name.setStyleSheet(f"font-size:17px;font-weight:800;color:{theme.LABEL};"
-                           "background:transparent;")
-        info.addWidget(name)
-        if story:
-            snippet = (story["summary"] or story["body"] or "")[:76]
-            line = QLabel(story["title"] + ("　" + snippet if snippet else ""))
-            line.setStyleSheet(f"font-size:12px;color:{theme.LABEL_2};background:transparent;")
-            line.setWordWrap(True)
-            info.addWidget(line)
-        else:
-            sci = QLabel(sp["sci"])
-            sci.setStyleSheet(f"font-size:12px;color:{theme.LABEL_2};background:transparent;")
-            info.addWidget(sci)
-        h.addLayout(info, 1)
-
-        go = QLabel(t("查看 ›", "View ›"))
-        go.setStyleSheet(f"color:{theme.BLUE};font-size:14px;font-weight:600;"
-                         "background:transparent;")
-        h.addWidget(go)
-        card.mousePressEvent = lambda e: self.win.open_species(code)
-        return card
 
     def _thumb(self, ph: dict) -> QPixmap | None:
         pid = ph["id"]

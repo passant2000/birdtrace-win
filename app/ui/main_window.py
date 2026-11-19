@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
 from ..db import Library
 from ..i18n import t
 from . import life_page, map_page, species_page, timeline_page
+from .home_page import HomePage
 from .import_page import ImportPage
 from .review_page import ReviewPage
 from .settings_page import SettingsPage
@@ -24,6 +25,7 @@ def _nav() -> list[tuple[str, str, str]]:
     分组(UI重设计c2): gallery图库 / archive档案 / tidy整理 / bottom底部
     ——档案组=生涯/作品集(年鉴随后插入此组); 首页(c7)置顶无分组。"""
     return [
+        ("home", t("首页", "Home"), ""),
         ("timeline", t("时间线", "Timeline"), "gallery"),
         ("species", t("鸟种库", "Species"), "gallery"),
         ("map", t("鸟点地图", "Map"), "gallery"),
@@ -70,7 +72,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.library_changed.connect(self._refresh_pages)
         self._refresh_pages()
-        self.switch_to("about")   # 默认首页=关于
+        self.switch_to("home")   # 默认启动页=首页(UI重设计c7)
         # 老库美学分回填: 延后到启动稳定后安静跑(导入/识别进行中会自动让路)
         from PySide6.QtCore import QTimer
         QTimer.singleShot(8000, self.start_aesthetic_backfill)
@@ -196,6 +198,7 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.pages: dict[str, QWidget] = {}
+        self.pages["home"] = HomePage(self.lib, self)
         self.pages["timeline"] = timeline_page.TimelinePage(self.lib, self)
         self.pages["import"] = ImportPage(self.lib, self.assets, self)
         self.pages["species"] = species_page.SpeciesPage(self.lib, self)
@@ -229,7 +232,7 @@ class MainWindow(QMainWindow):
             logo.setAlignment(Qt.AlignHCenter)
             logo.setCursor(Qt.PointingHandCursor)
             logo.setToolTip(t("回到首页", "Back to home"))
-            logo.mousePressEvent = lambda e: self.switch_to("about")
+            logo.mousePressEvent = lambda e: self.switch_to("home")
             lay.addWidget(logo)
 
         title = QLabel(t("鸟迹", "BirdTrace"))
@@ -266,7 +269,9 @@ class MainWindow(QMainWindow):
             if gi:
                 lay.addSpacing(8)
             glab_text = _nav_group_label(g) if g else ""
-            if glab_text:
+            if g == "":
+                pass   # 首页(c7): 置顶无分组, 不渲染标题/分隔线
+            elif glab_text:
                 glab = QLabel(glab_text)
                 glab.setObjectName("SidebarGroup")
                 lay.addWidget(glab)
