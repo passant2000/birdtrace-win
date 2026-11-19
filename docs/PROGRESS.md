@@ -2,6 +2,12 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-19（深夜）· **1.0.0-test2 打包完成（UI重设计验收包），待用户实测**
+
+**打包链全绿**：版本三连跳（version.py/assert_pkg_100:149版本锚点/使用说明母本改名test2）→ make_release 构建 → **assert_pkg_100 109/109**（含修两处搬家后的旧锚点：主窗口sidecar定时器=main_window+controller符号并集[c12编排搬家]；`nav_order`→`nav_order:`组键f-string字面段[c2按组持久化]）→ **frozen_check_100 14/14**（中文路径库→exe启动自动识别@20s→识别5+无鸟1/top5全带/美学5/选片打星三态/effective_copyright/查重/记录中心/静态站全部冻结库路径通过）→ **包内容确认**：timeline包5模块+app.controller+home/life/collections/copyright全部进PYZ → 发布目录 **releases/鸟迹BirdTrace-1.0.0-test2**（1.2G，robocopy单斜杠惯例）+使用说明.txt（含「界面改版·新导航与新页面」段）+发布副本启动冒烟存活。
+
+**待用户**：真机实测 test2（重点=分组侧栏/首页导览卡/生涯四Tab/作品集联动/工具▾收纳/版权三态对话框+test1既有功能回归）；实测反馈修bug后 bump 1.0.0 正式。**push 仍待指示**（本地领先远端 39+ commits）。
+
 ## 2026-11-19（晚）· **UI重设计三Phase全落地（c0-c12 十三次提交），Flash执行**
 
 **执行**：按 `docs/执行规格-UI整体重设计与生涯作品集-2026-11-19.md` 完整落地（规格书的9个commit点=实际13个提交，c8-c11拆为细分步）。**红线全程守住**：识别管线/RecognizeWorker零改动；db零schema（只加5个只读查询+collection_rename一个UPDATE）；色板不动；正式库未碰。
