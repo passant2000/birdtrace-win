@@ -118,7 +118,7 @@ class BarChart(QWidget):
                 p.setPen(QColor(theme.LABEL_2))
                 lab = str(s.get("hour", i))
                 if self._x_month_mode:
-                    lab = f"{s.get('hour', i)}月"
+                    lab = t(f"{s.get('hour', i)}月", str(s.get("hour", i)))
                 p.drawText(QRectF(cx - slot / 2, h - pad_b + 4, slot, 16),
                            Qt.AlignCenter, lab)
                 continue
@@ -1275,7 +1275,8 @@ class LifePage(QWidget):
                                     t("还没有收录鸟种。", "No species recorded yet."))
             return
         region = self.lib.get_setting("default_region", "GLOBAL")
-        default = f"生涯清单-{self._today().strftime('%Y%m%d')}.csv"
+        default = (t("生涯清单-", "Life list-")
+                   + f"{self._today().strftime('%Y%m%d')}.csv")
         path, _ = QFileDialog.getSaveFileName(
             self, t("导出生涯清单 CSV", "Export life list CSV"), default,
             "CSV (*.csv)")

@@ -51,7 +51,8 @@ def export_collection_pdf(lib, win, cid: int):
     st = lib.collection_stats(cid)
     pids = lib.collection_photos_of(cid)
     creator = lib.copyright_defaults_get().get("creator") or ""
-    default_path = str(Path.home() / f"画册-{name}.pdf")
+    default_path = str(Path.home()
+                       / f"{t('画册-', 'Album-')}{name}.pdf")
     path, _ = QFileDialog.getSaveFileName(
         win, t("导出画册 PDF", "Export album PDF"), default_path,
         "PDF (*.pdf)")
