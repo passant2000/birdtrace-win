@@ -30,7 +30,7 @@ from ..theme.widgets import (SegmentedControl, ThemedDateEdit,
 class ExportDialog(QDialog):
     PREVIEW_MAX = 300          # 预览树最多行数(防卡)
 
-    def __init__(self, lib, win):
+    def __init__(self, lib, win, preset_collection: int | None = None):
         super().__init__(win)
         self.lib = lib
         self.win = win
@@ -40,6 +40,11 @@ class ExportDialog(QDialog):
         self.setModal(True)
         self.resize(860, 760)
         self._build_ui()
+        # 作品集预选(UI重设计c4): 作品集页「导出本集…」直达
+        if preset_collection is not None:
+            idx = self.col_combo.findData(preset_collection)
+            if idx >= 0:
+                self.col_combo.setCurrentIndex(idx)
         self._update_preview()
 
     # ---------- UI ----------
@@ -115,6 +120,17 @@ class ExportDialog(QDialog):
         self.pick_combo.setCursor(Qt.PointingHandCursor)
         pickrow.addWidget(self.pick_combo, 1)
         rc.addLayout(pickrow)
+        # 作品集范围(UI重设计c4, 方案⑮"导出向导按作品集选范围"):
+        # 只读筛选, 与鸟种/鸟点等叠加; 可由作品集页「导出本集…」预选
+        colrow = QHBoxLayout()
+        colrow.addWidget(QLabel(t("作品集", "Collection")))
+        self.col_combo = QComboBox()
+        self.col_combo.addItem(t("全部作品集", "All collections"), None)
+        for c in self.lib.collections_list():
+            self.col_combo.addItem(c["name"], c["id"])
+        self.col_combo.setCursor(Qt.PointingHandCursor)
+        colrow.addWidget(self.col_combo, 1)
+        rc.addLayout(colrow)
         rc.addLayout(prow)
         self.range_hint = QLabel()
         self.range_hint.setObjectName("Hint")
@@ -277,7 +293,8 @@ class ExportDialog(QDialog):
         return exporter.select_range(
             self.lib, d1, d2, self._species_code, spot_id,
             rated_only=self.rated_toggle.isChecked(),
-            pick_filter=self.pick_combo.currentData())
+            pick_filter=self.pick_combo.currentData(),
+            collection_id=self.col_combo.currentData())
 
     def _template(self):
         # 下拉组合 → 段列表(跳过无); 全空=None(原文件名)

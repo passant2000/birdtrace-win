@@ -38,9 +38,11 @@ def fmt_stem(template: str, date: str, name: str, seq: int) -> str:
 def select_range(lib, date_from: str | None = None,
                  date_to: str | None = None, code: str | None = None,
                  spot_id: int | None = None, rated_only: bool = False,
-                 pick_filter: str | None = None
+                 pick_filter: str | None = None,
+                 collection_id: int | None = None
                  ) -> list[dict]:
-    """导出范围 → [{photo_id, path, eff_code, name(cn), en, taken_at}] 按时间升序。"""
+    """导出范围 → [{photo_id, path, eff_code, name(cn), en, taken_at}] 按时间升序。
+    collection_id(UI重设计c4): 限定作品集范围(只读筛选)。"""
     sql = (
         "SELECT DISTINCT v.photo_id, p.path, v.eff_code, "
         "  COALESCE(s.cn, s.en, v.eff_code) AS name, s.en AS en_name, "
@@ -65,6 +67,10 @@ def select_range(lib, date_from: str | None = None,
     if spot_id is not None:
         sql += " AND p.spot_id=?"
         args.append(spot_id)
+    if collection_id is not None:
+        sql += (" AND p.id IN (SELECT photo_id FROM collection_photos "
+                "WHERE collection_id=?)")
+        args.append(collection_id)
     if rated_only:
         sql += " AND p.rating >= 1"
     # 选片三态筛选(1.0冲刺⑨): '!reject'=排除拒绝(默认导出场景常用),

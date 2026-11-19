@@ -28,6 +28,7 @@ def _nav() -> list[tuple[str, str, str]]:
         ("species", t("鸟种库", "Species"), "gallery"),
         ("map", t("鸟点地图", "Map"), "gallery"),
         ("stats", t("成就", "Achievements"), "archive"),
+        ("collections", t("作品集", "Collections"), "archive"),
         ("review", t("待复核", "Pending review"), "tidy"),
         ("import", t("导入", "Import"), "tidy"),
         ("settings", t("设置", "Settings"), "bottom"),
@@ -202,6 +203,8 @@ class MainWindow(QMainWindow):
         self.pages["map"] = None
         self.pages["review"] = ReviewPage(self.lib, self)
         self.pages["stats"] = stats_page.StatsPage(self.lib, self)
+        from .collections_page import CollectionsPage
+        self.pages["collections"] = CollectionsPage(self.lib, self)
         from .about_page import AboutPage
         self.pages["about"] = AboutPage(self.lib, self, self.assets)
         self.pages["settings"] = SettingsPage(self.lib, self)

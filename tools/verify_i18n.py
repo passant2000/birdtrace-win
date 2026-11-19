@@ -175,7 +175,7 @@ def main():
         win.show()
         app.processEvents()
         page_keys = [k for k in ("timeline", "import", "species", "review",
-                                 "stats", "settings", "about")
+                                 "stats", "collections", "settings", "about")
                      if win.pages.get(k) is not None]
         for k in page_keys:
             page = win.pages[k]

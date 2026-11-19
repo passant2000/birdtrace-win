@@ -588,6 +588,51 @@ class Library:
                           (collection_id,))
         self.conn.commit()
 
+    def collection_rename(self, collection_id: int, name: str):
+        """重命名作品集(UI重设计c4; 空名/重名 ValueError)。"""
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("empty collection name")
+        dup = self.conn.execute(
+            "SELECT id FROM collections WHERE name=? AND id<>?",
+            (name, collection_id)).fetchone()
+        if dup:
+            raise ValueError("duplicate collection name")
+        self.conn.execute("UPDATE collections SET name=? WHERE id=?",
+                          (name, collection_id))
+        self.conn.commit()
+
+    def collection_cover(self, collection_id: int) -> int | None:
+        """集内封面照片id(UI重设计c4): aesthetic 最高(并列取主记录
+        置信高), 空集 None。缩略图管线由调用方走 media.ensure_thumbnail。"""
+        row = self.conn.execute(
+            "SELECT cp.photo_id FROM collection_photos cp "
+            "LEFT JOIN photos p ON p.id=cp.photo_id "
+            "LEFT JOIN v_records v ON v.photo_id=cp.photo_id AND v.rank=1 "
+            "WHERE cp.collection_id=? "
+            "ORDER BY IFNULL(p.aesthetic, -1) DESC, IFNULL(v.confidence, 0) DESC, "
+            "cp.sort_order, cp.photo_id LIMIT 1",
+            (collection_id,)).fetchone()
+        return row["photo_id"] if row else None
+
+    def collection_stats(self, collection_id: int) -> dict:
+        """集内概览(UI重设计c4): 张数/鸟种数/首末拍摄日期(卡片展示用)。"""
+        pids = self.collection_photos_of(collection_id)
+        n_sp = n = 0
+        d1 = d2 = None
+        if pids:
+            ph = ",".join("?" * len(pids))
+            row = self.conn.execute(
+                f"SELECT COUNT(DISTINCT v.eff_code) c FROM v_records v "
+                f"WHERE v.photo_id IN ({ph})", pids).fetchone()
+            n_sp = row["c"]
+            n = len(pids)
+            row = self.conn.execute(
+                f"SELECT MIN(e.dt_original) a, MAX(e.dt_original) b "
+                f"FROM exif e WHERE e.photo_id IN ({ph})", pids).fetchone()
+            d1, d2 = row["a"], row["b"]
+        return {"n": n, "species": n_sp, "first": d1, "last": d2}
+
     def collection_photos_of(self, collection_id: int) -> list[int]:
         rows = self.conn.execute(
             "SELECT photo_id FROM collection_photos WHERE collection_id=? "
