@@ -63,6 +63,8 @@ VIEWER_BG = LIGHT["VIEWER_BG"]
 CHIP_BG = LIGHT["CHIP_BG"]
 CHIP_FG = LIGHT["CHIP_FG"]
 CARD_BORDER = LIGHT["CARD_BORDER"]
+SCROLL = LIGHT["SCROLL"]            # 滚动条滑块(map侧栏细滚动条用)
+SCROLL_HOVER = LIGHT["SCROLL_HOVER"]
 SEP = SEPARATOR   # 短别名
 
 _current = dict(LIGHT)
@@ -236,6 +238,7 @@ def _set_module_colors(c: dict):
     g["VIEWER_BG"], g["CHIP_BG"], g["CHIP_FG"] = \
         c["VIEWER_BG"], c["CHIP_BG"], c["CHIP_FG"]
     g["CARD_BORDER"] = c["CARD_BORDER"]
+    g["SCROLL"], g["SCROLL_HOVER"] = c["SCROLL"], c["SCROLL_HOVER"]
 
 
 def _apply_palette(app, c: dict):

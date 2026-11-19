@@ -302,6 +302,91 @@ class SelectBarMixin:
         if dlg.moved:
             self.refresh(force=True)
 
+    def _batch_identify_videos(self):
+        """⑬抽帧识别(独立入口): 首/中/尾帧喂现有管线, 最高置信入库;
+        不碰识别worker(冻结红线)。QMediaPlayer 仅 GUI 线程可用。"""
+        import datetime
+        import numpy as np
+        from pathlib import Path as _P
+        from PySide6.QtGui import QImage
+        from PySide6.QtWidgets import QProgressDialog
+        from ..core.video import extract_frames
+        from ..paths import assets_dir
+
+        vids = []
+        for pid in sorted(self._selected):
+            r = self.lib.conn.execute(
+                "SELECT p.path, p.duration, p.rec_fail FROM photos p "
+                "WHERE p.id=? AND IFNULL(p.is_video,0)=1",
+                (pid,)).fetchone()
+            if r and r["rec_fail"] < 3:
+                vids.append((pid, r["path"], r["duration"]))
+        if not vids:
+            QMessageBox.information(
+                self.win, t("没有所选视频", "No videos selected"),
+                t("「识别视频帧」只对视频有效——请先勾选时间线里的视频。",
+                  "This works on videos only — select videos on the "
+                  "timeline first."))
+            return
+        if not hasattr(self, "_vpipe"):
+            a = assets_dir()
+            from ..ai.pipeline import RecognitionPipeline
+            self._vpipe = RecognitionPipeline(
+                detector_path=str(a / "models/BirdTraceBirdDetector_FP32.onnx"),
+                classifier_path=str(
+                    a / "models/BirdTraceRecognitionModel.onnx"),
+                labels_path=str(a / "data/labels.json"),
+                geo_prior_path=str(a / "data/geo_prior.sqlite"))
+
+        def _qimg_rgb(img):
+            img = img.convertToFormat(QImage.Format_RGB888)
+            w, h = img.width(), img.height()
+            if not w or not h:
+                return None
+            arr = np.frombuffer(img.constBits(), dtype=np.uint8)
+            arr = arr.reshape(h, img.bytesPerLine() // 3, 3)[:, :w, :]
+            return arr.copy()
+
+        prog = QProgressDialog(t("正在抽帧识别…", "Identifying frames…"),
+                               t("取消", "Cancel"), 0, len(vids), self.win)
+        prog.setWindowModality(Qt.WindowModal)
+        ok = fail = 0
+        region = self.lib.get_setting("default_region", "GLOBAL")
+        month = datetime.date.today().month
+        for i, (pid, vpath, dur) in enumerate(vids):
+            if prog.wasCanceled():
+                break
+            prog.setValue(i)
+            if not _P(vpath).is_file():
+                fail += 1
+                continue
+            best = None
+            for qimg in extract_frames(vpath, dur):
+                arr = _qimg_rgb(qimg)
+                if arr is None:
+                    continue
+                try:
+                    recs = self._vpipe.recognize(arr, region, month)
+                except Exception:
+                    recs = []
+                if recs:
+                    cand = recs[0]
+                    if best is None or cand.get("confidence", 0) > \
+                            best.get("confidence", 0):
+                        best = cand
+            if best:
+                self.lib.add_records(pid, [best])
+                ok += 1
+            else:
+                self.lib.bump_rec_fail(pid)
+                fail += 1
+        prog.close()
+        self.win.library_changed.emit()
+        QMessageBox.information(
+            self.win, t("视频识别完成", "Video identification done"),
+            t(f"识别成功 {ok} · 未识别出鸟 {fail}",
+              f"Identified {ok} · no bird found {fail}"))
+
     def _batch_write_xmp(self):
         from ..core.xmp_write import maybe_write_for_photo
         from PySide6.QtWidgets import QMessageBox, QProgressDialog
@@ -661,6 +746,17 @@ class SelectBarMixin:
             "per-file failures reported)"))
         self.xmp_btn.clicked.connect(self._batch_write_xmp)
         sb.addWidget(self.xmp_btn)
+        # ⑬抽帧识别: 所选视频抽首/中/尾帧喂现有引擎, 不碰识别worker(冻结)
+        self.vrec_btn = QPushButton(t("识别视频帧…", "Identify video frames…"))
+        self.vrec_btn.setCursor(Qt.PointingHandCursor)
+        self.vrec_btn.setToolTip(t(
+            "对所选视频抽首/中/尾三帧送识别，取最高置信结果入库"
+            "（低置信自动进待复核；视频不参与自动识别池）",
+            "Extract first/middle/last frames of the selected videos for "
+            "identification; the best result is recorded (low confidence "
+            "goes to pending review)"))
+        self.vrec_btn.clicked.connect(self._batch_identify_videos)
+        sb.addWidget(self.vrec_btn)
         self.rm_btn = QPushButton(t("从鸟迹移除…", "Remove from BirdTrace…"))
         self.rm_btn.setStyleSheet(
             "QPushButton{color:#FF3B30;background:transparent;"

@@ -373,6 +373,7 @@ class MainWindow(QMainWindow):
         ).fetchone()[0]
         self.review_badge_btn.setText(t("待复核", "Pending review") + (f"  ● {n}" if n else ""))
         self._update_status()
+        self._ctl.wake_video_queue()   # ⑬新视频入队补时长/缩略图
 
     def open_species(self, code: str):
         """从时间线/每日一鸟跳转到鸟种详情。"""

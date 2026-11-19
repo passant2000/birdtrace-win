@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRectF, QRect, Qt, Signal
+from PySide6.QtCore import (QEvent, QRectF, QRect, Qt,
+                            Signal, QUrl)
 from PySide6.QtGui import (QColor, QKeySequence, QPainter, QPainterPath,
                            QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QComboBox, QDialog, QGraphicsPixmapItem,
@@ -185,6 +186,7 @@ class PhotoViewer(QDialog):
         QShortcut(QKeySequence(Qt.Key_Left), self, self._prev)
         QShortcut(QKeySequence(Qt.Key_Right), self, self._next)
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.reject)
+        self.rejected.connect(self._video_stop)   # ⑬关闭即停播
         QShortcut(QKeySequence("+"), self, lambda: self.view._zoom_by(1.25))
         QShortcut(QKeySequence("-"), self, lambda: self.view._zoom_by(1 / 1.25))
         # 选片快捷键(1.0冲刺①+⑨): 模态对话框内, 与缩放+/-不冲突
@@ -208,10 +210,16 @@ class PhotoViewer(QDialog):
         split = QSplitter(Qt.Horizontal)
         root.addWidget(split, 1)
 
-        # 左: 大图(可缩放)
+        # 左: 大图(可缩放) / 视频播放(⑬视频归档) 堆叠切换
+        from PySide6.QtWidgets import QStackedLayout
+        left = QWidget()
+        self._left_stack = QStackedLayout(left)
+        split.addWidget(left)
         self.view = ZoomableView()
         self.view.setMinimumSize(600, 400)
-        split.addWidget(self.view)
+        self._left_stack.addWidget(self.view)
+        self._video_box = self._build_video_player()
+        self._left_stack.addWidget(self._video_box)
 
         # 右: 信息面板(宽随内容自适应: 340下英文2×2动作钮两端裁切
         # "reate share car"/"nove from BirdTrac", 0.8.6英文适配实测;
@@ -425,6 +433,67 @@ class PhotoViewer(QDialog):
         from ..theme.widgets import panel_width_of
         panel.setFixedWidth(panel_width_of(panel, 320, 460, pad=16))
 
+    # ---------- ⑬视频播放 ----------
+    def _build_video_player(self) -> QWidget:
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(8)
+        from PySide6.QtMultimediaWidgets import QVideoWidget
+        self._vwidget = QVideoWidget()
+        v.addWidget(self._vwidget, 1)
+        ctrl = QHBoxLayout()
+        from PySide6.QtMultimedia import QMediaPlayer
+        self._vplayer = QMediaPlayer()
+        self._vplayer.setVideoOutput(self._vwidget)
+        self._vplay_btn = QPushButton(t("▶ 播放", "▶ Play"))
+        self._vplay_btn.setCursor(Qt.PointingHandCursor)
+        self._vplay_btn.clicked.connect(self._video_toggle)
+        ctrl.addWidget(self._vplay_btn)
+        from PySide6.QtWidgets import QSlider
+        self._vslider = QSlider(Qt.Horizontal)
+        self._vslider.setRange(0, 0)
+        self._vslider.sliderMoved.connect(self._vplayer.setPosition)
+        ctrl.addWidget(self._vslider, 1)
+        self._vtime = QLabel("0:00")
+        self._vtime.setObjectName("Hint")
+        ctrl.addWidget(self._vtime)
+        v.addLayout(ctrl)
+        self._vplayer.positionChanged.connect(self._video_pos)
+        self._vplayer.durationChanged.connect(
+            lambda d: self._vslider.setRange(0, int(d)))
+        self._vplayer.playbackStateChanged.connect(self._video_state)
+        return box
+
+    def _video_fmt(self, ms: int) -> str:
+        s = int(ms // 1000)
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _video_pos(self, pos: int):
+        self._vslider.setValue(pos)
+        self._vtime.setText(t(
+            f"{self._video_fmt(pos)} / {self._video_fmt(self._vplayer.duration())}",
+            f"{self._video_fmt(pos)} / "
+            f"{self._video_fmt(self._vplayer.duration())}"))
+
+    def _video_state(self, st):
+        from PySide6.QtMultimedia import QMediaPlayer
+        playing = st == QMediaPlayer.PlaybackState.PlayingState
+        self._vplay_btn.setText(t("⏸ 暂停", "⏸ Pause") if playing
+                                else t("▶ 播放", "▶ Play"))
+
+    def _video_toggle(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        if self._vplayer.playbackState() == \
+                QMediaPlayer.PlaybackState.PlayingState:
+            self._vplayer.pause()
+        else:
+            self._vplayer.play()
+
+    def _video_stop(self):
+        self._vplayer.stop()
+        self._vplayer.setSource(QUrl())
+
     # ---------- 数据 ----------
     def _load(self):
         photo, recs = self.lib.photo_detail(self.ids[self.index])
@@ -470,12 +539,28 @@ class PhotoViewer(QDialog):
             self.view.set_placeholder(body)
         else:
             self.view.set_placeholder(None)
-            self.view.set_image(photo["path"])
+            if not photo.get("is_video"):
+                self.view.set_image(photo["path"])
         self.navi.setText(
             t(f"{self.index + 1} / {len(self.ids)}  ·  ← → 切换\n"
               "滚轮缩放 · 拖动平移 · 双击复位",
               f"{self.index + 1} / {len(self.ids)}  ·  ← → to switch\n"
               "Wheel zoom · drag to pan · double-click to reset"))
+        # 视频归档(⑬): 视频走播放页(内嵌QMediaPlayer, 不跳系统播放器),
+        # 缩略图沿用抽帧缓存; 离线/缺失文案与照片一致
+        is_vid = bool(photo.get("is_video")) and not missing
+        self._left_stack.setCurrentIndex(1 if is_vid else 0)
+        if is_vid:
+            self._vplayer.setSource(QUrl.fromLocalFile(photo["path"]))
+            dur = photo.get("duration")
+            if dur:
+                self._vtime.setText(t(
+                    f"{self._video_fmt(int(dur * 1000))} / "
+                    f"{self._video_fmt(int(dur * 1000))}",
+                    f"{self._video_fmt(int(dur * 1000))} / "
+                    f"{self._video_fmt(int(dur * 1000))}"))
+        else:
+            self._video_stop()
 
         taken = photo.get("dt_original") or (photo.get("added_at") or "")
         make = (photo.get("make") or "").strip()

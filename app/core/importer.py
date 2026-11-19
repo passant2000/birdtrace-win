@@ -23,6 +23,12 @@ from .exporter import RAW_EXTS
 # 同名对JPG做主文件, RAW挂附属; 纯RAW自己当主文件照常识别)
 _IMPORT_EXTS = SUPPORTED_EXTS | RAW_EXTS
 
+# 视频归档(1.0冲刺⑬): mp4/mov/avi/mkv 像照片一样编目(时长+抽帧缩略图+
+# 抽帧识别+播放); 识别worker跳过视频(pending排除), 抽帧识别走时间线
+# 「识别视频帧…」入口(core/video.py, Qt自带多媒体后端, 零新增打包依赖)
+from .video import VIDEO_EXTS, is_video
+_IMPORT_EXTS = _IMPORT_EXTS | VIDEO_EXTS
+
 from ..i18n import t
 from ..media import ensure_thumbnail, file_hash
 
@@ -128,10 +134,13 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
                 fh = fh or file_hash(target)
                 ex = read_exif(str(target))
                 w, h = ex.get("width") or 0, ex.get("height") or 0
-                if not w:
+                if not w and not is_video(target):
                     with Image.open(target) as im:
                         w, h = im.size
                 pid = lib.add_photo(str(target), fh, fsize, fmtime, w, h, batch_id)
+                if is_video(target):
+                    lib.conn.execute(
+                        "UPDATE photos SET is_video=1 WHERE id=?", (pid,))
                 lib.add_exif(pid, ex)
                 if spot_id is not None:
                     lib.set_photo_spot(pid, spot_id)
@@ -142,7 +151,8 @@ def import_files(lib: Library, files: list[Path], mode: str = "ref",
                                                      ex["gps_lat"], ex["gps_lon"])
                     if created:
                         stats["spots_created"] += 1
-                ensure_thumbnail(lib.root, str(target), fh, 512)
+                if not is_video(target):   # 视频缩略图走controller抽帧队列
+                    ensure_thumbnail(lib.root, str(target), fh, 512)
                 imported.append((pid, fh, str(f.parent)))
                 known.add(fh)
                 stats["added"] += 1

@@ -32,6 +32,44 @@ class AppController(QObject):
         self._sc_timer.setInterval(3000)
         self._sc_timer.timeout.connect(self._flush_sidecars_tick)
         self._sc_timer.start()
+        # ⑬视频后处理队列: 新入库视频补时长+首帧缩略图(GUI线程, Qt多媒体
+        # 只能在主线程; 每拍处理1个不卡UI, 处理完自停)
+        self._vid_timer = QTimer(self)
+        self._vid_timer.setInterval(1200)
+        self._vid_timer.timeout.connect(self._video_tick)
+        self._vid_timer.start()
+
+    # ---------- ⑬视频后处理 ----------
+    def _video_tick(self):
+        """队列式补视频元数据: duration + 首帧缩略图(webp进缩略图缓存)。"""
+        row = self.win.lib.conn.execute(
+            "SELECT p.id, p.path, p.file_hash h FROM photos p "
+            "WHERE p.is_video=1 AND (p.duration IS NULL) ORDER BY p.id "
+            "LIMIT 1").fetchone()
+        if not row:
+            self._vid_timer.stop()   # 队列空: 自停, 新导入时 refresh 唤醒
+            return
+        from .core.video import probe_duration, extract_frame
+        from .media import thumb_path
+        dur = probe_duration(row["path"], timeout_ms=8000)
+        if dur:
+            self.win.lib.conn.execute(
+                "UPDATE photos SET duration=? WHERE id=?",
+                (dur, row["id"]))
+            self.win.lib.conn.commit()
+        img = extract_frame(row["path"], at_ms=int((dur or 0.5) * 500),
+                            timeout_ms=8000)
+        if img is not None and not img.isNull():
+            for size in (256, 512):
+                tp = thumb_path(self.win.lib.root, row["h"], size)
+                tp.parent.mkdir(parents=True, exist_ok=True)
+                img.scaled(size, size, Qt.KeepAspectRatio,
+                           Qt.SmoothTransformation).save(str(tp), "WEBP")
+        self._update_status()
+
+    def wake_video_queue(self):
+        if not self._vid_timer.isActive():
+            self._vid_timer.start()
 
     # ---------- 识别(自 main_window 纯搬家) ----------
     def start_recognition(self):

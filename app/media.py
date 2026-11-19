@@ -66,6 +66,10 @@ def ensure_thumbnail(lib_root: Path, path: str | Path, fhash: str,
     tp = thumb_path(lib_root, fhash, size)
     if tp.exists():
         return tp
+    # 视频归档(⑬): 缩略图由 controller 抽帧队列用 Qt 多媒体生成后写入
+    # 同一缓存; 这里绝不碰视频文件本身
+    if Path(str(path)).suffix.lower() in (".mp4", ".mov", ".avi", ".mkv"):
+        return None
     try:
         src = _cached_usable(lib_root, fhash, size)
         if src is not None:

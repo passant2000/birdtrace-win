@@ -14,6 +14,8 @@ datas = []
 binaries = collect_dynamic_libs("pillow_heif")
 hiddenimports = collect_submodules("pypinyin")
 hiddenimports += ["rawpy"]  # RAW解码(函数内懒import, 显式声明防漏收)
+hiddenimports += ["PySide6.QtMultimedia",
+                  "PySide6.QtMultimediaWidgets"]  # ⑬视频(播放+抽帧)
 
 a = Analysis(
     [os.path.join(ROOT, "app_main.py")],

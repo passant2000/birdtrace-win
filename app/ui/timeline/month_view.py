@@ -64,7 +64,13 @@ class MonthViewMixin:
                 corner = t("文件丢失", "File missing")   # 不在原位置
             # 0.8.6用户: 缩略图下显示鸟种+鸟点(与鸟点详情的时间+鸟种对偶)
             # 1.0冲刺①+⑨: 人工星级(左上★)+选片三态(左下色点/拒绝红框)
-            item = PhotoGridItem(thumb, label=self._caption(ph),
+            # ⑬视频: label 前缀 ▶+时长
+            cap = self._caption(ph)
+            if ph.get("is_video"):
+                cap = t("▶ 视频", "▶ Video") + (
+                    f" {int(ph['duration'] // 60)}:{int(ph['duration'] % 60):02d}"
+                    if ph.get("duration") else "") + (f" · {cap}" if cap else "")
+            item = PhotoGridItem(thumb, label=cap,
                                  corner=corner,
                                  stack=ph.get("group_n", 0), tile=self._tile,
                                  stars=ph.get("rating", 0),

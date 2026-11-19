@@ -200,6 +200,19 @@ class Library:
             self.conn.execute("ALTER TABLE photos ADD COLUMN raw_path TEXT")
         if "raw_hash" not in cols:
             self.conn.execute("ALTER TABLE photos ADD COLUMN raw_hash TEXT")
+        # 视频归档(1.0冲刺⑬, 2026-11-19用户拍板开发): is_video=种类单源
+        # (pending识别/缩略图/角标/播放判定), duration=秒(角标显示)——
+        # 识别worker跳过视频, 抽帧识别走独立入口(core/video.py)
+        if "is_video" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN is_video INTEGER DEFAULT 0")
+            self.conn.execute(
+                "UPDATE photos SET is_video=1 WHERE lower(path) LIKE '%.mp4'"
+                " OR lower(path) LIKE '%.mov' OR lower(path) LIKE '%.avi'"
+                " OR lower(path) LIKE '%.mkv'")
+        if "duration" not in cols:
+            self.conn.execute(
+                "ALTER TABLE photos ADD COLUMN duration REAL")
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_photos_pick ON photos(pick)")
         # 拒绝片隔离区(1.0冲刺⑨③): 文件移入<库>/隔离区/<操作编号>/,
@@ -451,7 +464,8 @@ class Library:
         rows = self.conn.execute(
             "SELECT p.id FROM photos p "
             "LEFT JOIN records r ON r.photo_id=p.id "
-            "WHERE r.id IS NULL AND p.rec_fail < 3 ORDER BY p.id").fetchall()
+            "WHERE r.id IS NULL AND p.rec_fail < 3 "
+            "AND IFNULL(p.is_video,0)=0 ORDER BY p.id").fetchall()
         return [r["id"] for r in rows]
 
     def bump_rec_fail(self, photo_id: int):
@@ -1108,7 +1122,8 @@ class Library:
             "  v0.eff_code AS main_code, sc.cn AS sp_cn, sc.en AS sp_en, "
             "  v0.confidence AS main_conf, "
             "  st.name AS spot_name, st.short_name AS spot_short, "
-            "  p.rating, p.pick "
+            "  p.rating, p.pick, IFNULL(p.is_video,0) AS is_video, "
+            "  p.duration "
             "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
             "  LEFT JOIN (SELECT photo_id, eff_code, confidence FROM v_records "
             "             WHERE rank=1 GROUP BY photo_id) v0 "
@@ -1127,6 +1142,8 @@ class Library:
                  "spot_short": r["spot_short"],
                  "main_conf": r["main_conf"],
                  "rating": int(r["rating"] or 0),
+                 "is_video": int(r["is_video"] or 0),
+                 "duration": r["duration"],
                  "pick": r["pick"] or ""})
         return out
 

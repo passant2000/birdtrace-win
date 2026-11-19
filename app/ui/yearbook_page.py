@@ -183,8 +183,9 @@ class YearbookPage(QWidget):
                 pic.setPixmap(pm.scaled(pic.size(),
                                         Qt.KeepAspectRatioByExpanding,
                                         Qt.SmoothTransformation))
-            cap = QLabel(sname(r["name"], r.get("en", ""))
-                         if r.get("en") is None else r["name"])
+            _sp = self.lib.species_info(r["eff_code"])                 if r.get("eff_code") else None
+            cap = QLabel(sname(_sp["cn"], _sp["en"])
+                         if _sp else r["name"])
             cap.setAlignment(Qt.AlignCenter)
             cap.setStyleSheet(f"font-size:11px;color:{theme.LABEL_2};"
                               "background:transparent;")
