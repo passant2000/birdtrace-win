@@ -17,10 +17,13 @@ from ..media import cached_thumbnail, ensure_thumbnail
 # 1.0 新功能导览(UI重设计): (emoji, 名称(中,英对), 说明(中,英对), 跳转key)
 # 双语规范第3条: 模块级常量存元组, 显示时 t(*pair) 求值——不存已翻译串
 TOUR_ITEMS = [
-    ("🗂️", ("选片工作流", "Culling workflow"),
-     ("时间线 → 选择 → 打星/保留/拒绝，隔离区可恢复，连拍封面右键组内对比",
-      "Timeline → Select → star/keep/reject; quarantine is recoverable; "
-      "right-click a burst cover to compare"), "timeline"),
+    ("⭐", ("打星与选片", "Rating & culling"),
+     ("拍完先筛片：给照片打★星级，标「保留 / 待定 / 拒绝」三种状态；"
+      "标「拒绝」的片不会删，可移入隔离区暂存、随时恢复。"
+      "入口：时间线 → 选择",
+      "Sort keepers after shooting: star photos 1-5, mark them Keep / "
+      "Pending / Reject. Rejected shots are never deleted — park them in "
+      "the quarantine and restore anytime. Timeline → Select"), "timeline"),
     ("🔍", ("增量重识别", "Incremental re-identify"),
      ("选择模式下「重新识别…」可选只跑未识别/待复核，人工确认永不覆盖",
       "Select mode → Re-identify can run only on unidentified/pending; "

@@ -150,11 +150,17 @@ def main():
         app.processEvents()
     texts3 = " ".join(w.text() for w in page.tabs[2].widget().findChildren(QLabel))
     check("足迹" in texts3 and "奥森南园" in texts3, f"足迹Tab鸟点卡 ({texts3[:80]})")
-    payload = page._footprint_payload(dict(provs))
-    bj = payload.get("110000")
-    check(bj and bj["v"] > -1.5 and "3" in bj["tip"],
-          f"足迹payload注入 (BJ={bj})")
-    check(payload.get("440000", {"v": -4})["v"] == -4.0, "无数据省=透明档")
+    # 内嵌省级地图(实测反馈8): 构造+渲染冒烟
+    from app.ui.china_map_widget import ChinaMapWidget
+    cmap = ChinaMapWidget(dict(provs))
+    cmap.resize(560, 430)
+    cmap.show()
+    for _ in range(5):
+        app.processEvents()
+    pm = cmap.grab()
+    check(not pm.isNull() and pm.toImage().bits() and cmap._paths_cache,
+          "内嵌省级地图渲染(路径已解析)")
+    cmap.close()
     # Tab4 徽章(装备榜过别名+聚合)
     page._tab_changed(3)
     for _ in range(5):

@@ -69,20 +69,14 @@ class SettingsPage(QWidget):
         form_ap.addWidget(ap_hint)
         lay.addWidget(card_ap)
 
-        card, form = make_card(t("个人", "Personal"))
-
-        row = QHBoxLayout()
-        lab = QLabel(t("拍摄者名字（分享卡署名）", "Photographer name (share-card credit)"))
-        lab.setObjectName("RowLabel")
-        self.name_edit = QLineEdit(self.lib.get_setting("photographer_name", ""))
-        self.name_edit.setPlaceholderText(
-            t("用于分享卡, EXIF作者信息优先",
-              "Used on share cards; EXIF artist takes priority"))
-        self.name_edit.editingFinished.connect(self._save_name)
-        row.addWidget(lab)
-        row.addWidget(self.name_edit, 1)
-        form.addLayout(row)
-        lay.addWidget(card)
+        # 个人卡已并入版权卡(实测反馈4: 拍摄者名字与"创作者"重复)——
+        # 分享卡署名单源=版权默认.创作者; 旧键一次性迁移后弃用
+        _po = self.lib.get_setting("photographer_name", "")
+        if _po.strip():
+            _d = self.lib.copyright_defaults_get()
+            if not _d.get("creator", "").strip():
+                self.lib.copyright_defaults_set(creator=_po.strip())
+            self.lib.set_setting("photographer_name", "")
 
         # 版权信息(1.0冲刺⑰): 库级默认五字段, 三处消费单源
         # (分享卡署名/静态站展示/XMP写回)。原图绝不动(写回走⑪显式开关)
@@ -351,9 +345,6 @@ class SettingsPage(QWidget):
         lay.addWidget(card4)
 
         lay.addStretch(1)
-
-    def _save_name(self):
-        self.lib.set_setting("photographer_name", self.name_edit.text().strip())
 
     def _save_copyright(self):
         self.lib.copyright_defaults_set(

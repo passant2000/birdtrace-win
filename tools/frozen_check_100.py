@@ -46,7 +46,7 @@ from app.core.importer import import_files
 lib = Library(LIB)
 lib.fill_species()
 lib.set_setting("grid_tile", "240")     # 档位设置读取路径
-lib.set_setting("photographer_name", "冻结测试者")  # 署名链(⑰)回归锚
+lib.copyright_defaults_set(creator="冻结测试者")  # 署名链(⑰)回归锚
 st = import_files(lib, sorted(SRC.glob("*.jpg")), mode="ref", region_id="CN")
 print("imported:", st["added"], "skipped:", st.get("skipped_dup"))
 lib.close()

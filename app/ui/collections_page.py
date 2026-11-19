@@ -38,11 +38,42 @@ class CollectionsPage(QWidget):
         head = QHBoxLayout()
         self.title = PageHeader(t("作品集", "Collections"))
         head.addWidget(self.title, 1)
+        # 持久按钮组(实测反馈3修复): 只建一次按模式显隐——原实现每次
+        # refresh 都 add_action 一个新建"返回列表", 切几次页就堆几个
         self.new_btn = QPushButton(t("＋ 新建作品集", "＋ New collection"))
         self.new_btn.setObjectName("Primary")
         self.new_btn.setCursor(Qt.PointingHandCursor)
         self.new_btn.clicked.connect(self._new_collection)
         self.title.add_action(self.new_btn)
+        self.back_btn = QPushButton(t("← 返回列表", "← Back"))
+        self.back_btn.setCursor(Qt.PointingHandCursor)
+        self.back_btn.clicked.connect(self._back)
+        self.title.add_action(self.back_btn)
+        self.view_btn = QPushButton(t("在时间线查看", "View in timeline"))
+        self.view_btn.setToolTip(t(
+            "跳到时间线并按本作品集过滤（再点筛选条「作品集: 全部」还原）",
+            "Jump to the timeline filtered by this collection"))
+        self.view_btn.setCursor(Qt.PointingHandCursor)
+        self.view_btn.clicked.connect(self._view_in_timeline)
+        self.title.add_action(self.view_btn)
+        self.export_btn = QPushButton(t("导出…", "Export…"))
+        self.export_btn.setToolTip(t(
+            "导出画册 PDF（A4 排版，可直接分享/打印）或按本集范围导出原图",
+            "Export this collection as an A4 album PDF, or export the "
+            "original files via the export wizard"))
+        self.export_btn.setCursor(Qt.PointingHandCursor)
+        from PySide6.QtWidgets import QMenu
+        m = QMenu(self.export_btn)
+        m.addAction(t("导出画册 PDF…", "Album PDF…"), self._export_pdf)
+        m.addAction(t("导出原图…（导出向导）", "Originals… (wizard)"),
+                    self._export_this)
+        self.export_btn.setMenu(m)
+        self.title.add_action(self.export_btn)
+        self.sel_btn = QPushButton(t("选择", "Select"))
+        self.sel_btn.setCheckable(True)
+        self.sel_btn.setCursor(Qt.PointingHandCursor)
+        self.sel_btn.clicked.connect(self._toggle_sel)
+        self.title.add_action(self.sel_btn)
         lay.addLayout(head)
 
         self.scroll = QScrollArea()
@@ -77,6 +108,8 @@ class CollectionsPage(QWidget):
         self._clear_content()
         self.title.set_title(t("作品集", "Collections"))
         self.new_btn.setVisible(True)
+        for b in ("back_btn", "view_btn", "export_btn", "sel_btn"):
+            getattr(self, b).setVisible(False)
         cols_all = self.lib.collections_list()
         if not cols_all:
             empty = QFrame()
@@ -202,27 +235,10 @@ class CollectionsPage(QWidget):
         self.title.set_title(name)
         self.new_btn.setVisible(False)
 
-        # 头部动作: 返回 / 在时间线查看 / 导出本集 / 选择(移出用)
-        back = QPushButton(t("← 返回列表", "← Back"))
-        back.setCursor(Qt.PointingHandCursor)
-        back.clicked.connect(self._back)
-        self.title.add_action(back)
-        self.view_btn = QPushButton(t("在时间线查看", "View in timeline"))
-        self.view_btn.setToolTip(t(
-            "跳到时间线并按本作品集过滤（再点筛选条「作品集: 全部」还原）",
-            "Jump to the timeline filtered by this collection"))
-        self.view_btn.setCursor(Qt.PointingHandCursor)
-        self.view_btn.clicked.connect(self._view_in_timeline)
-        self.title.add_action(self.view_btn)
-        self.export_btn = QPushButton(t("导出本集…", "Export this collection…"))
-        self.export_btn.setCursor(Qt.PointingHandCursor)
-        self.export_btn.clicked.connect(self._export_this)
-        self.title.add_action(self.export_btn)
-        self.sel_btn = QPushButton(t("选择", "Select"))
-        self.sel_btn.setCheckable(True)
-        self.sel_btn.setCursor(Qt.PointingHandCursor)
-        self.sel_btn.clicked.connect(self._toggle_sel)
-        self.title.add_action(self.sel_btn)
+        # 头部动作(持久按钮, _build_ui 建一次): 本模式显隐切换
+        self.new_btn.setVisible(False)
+        for b in ("back_btn", "view_btn", "export_btn", "sel_btn"):
+            getattr(self, b).setVisible(True)
 
         pids = self.lib.collection_photos_of(cid)
         if not pids:
@@ -353,6 +369,13 @@ class CollectionsPage(QWidget):
         dlg = ExportDialog(self.lib, self.win, preset_collection=self._cur_cid)
         dlg.exec()
 
+    def _export_pdf(self):
+        """导出画册 PDF(实测反馈3b): A4排版封面+作品页, 设计规范版式。"""
+        if self._cur_cid is None:
+            return
+        from .collection_pdf import export_collection_pdf
+        export_collection_pdf(self.lib, self.win, self._cur_cid)
+
     def _new_collection(self):
         name, ok = self._ask_name(t("新建作品集", "New collection"), "")
         if ok and name.strip():
@@ -412,13 +435,6 @@ class CollectionsPage(QWidget):
 
     # ---------- 通用 ----------
     def _clear_content(self):
-        # 断开 title 动作区里的本页动态按钮(每次 show 重建, 防重复堆积)
-        for w in ("view_btn", "export_btn", "sel_btn"):
-            b = getattr(self, w, None)
-            if b is not None:
-                b.setParent(None)
-                b.deleteLater()
-                setattr(self, w, None)
         while self.content_lay.count():
             it = self.content_lay.takeAt(0)
             w = it.widget()

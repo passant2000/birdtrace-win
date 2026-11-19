@@ -52,6 +52,10 @@ class DupDialog(QDialog):
         self.tree.setRootIsDecorated(True)
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tree.itemDoubleClicked.connect(self._open_photo)
+        self.tree.setToolTip(t("双击照片行可在查看器中打开大图",
+                               "Double-click a photo row to open it in the "
+                               "viewer"))
         lay.addWidget(self.tree, 1)
 
         btns = QHBoxLayout()
@@ -109,6 +113,24 @@ class DupDialog(QDialog):
         top2.setExpanded(True)
         for ids in res["similar"]:
             add_group(top2, ids)
+
+    def _open_photo(self, item, _col: int):
+        """双击照片行→查看器打开(实测反馈1: 支持跳转到目标文件)。
+        ids=所在组的全部照片, 组内左右切换对照着看。"""
+        pid = item.data(0, Qt.UserRole)
+        if not pid:
+            return
+        parent = item.parent()
+        if parent is None:
+            return
+        ids = [parent.child(i).data(0, Qt.UserRole)
+               for i in range(parent.childCount())]
+        ids = [p for p in ids if p]
+        if pid not in ids:
+            ids = [pid]
+        from .viewer import PhotoViewer
+        dlg = PhotoViewer(self.lib, self.win, pid, ids)
+        dlg.exec()
 
     def _selected_ids(self) -> list[int]:
         out = []

@@ -854,8 +854,22 @@ class MapPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea{background:transparent;}"
-                             "QWidget{background:transparent;}")
+        # 实测反馈2(2026-11-19): 鸟点多时竖向滑块永远可见+贴着面板边框,
+        # 深色主题下读作"一条故障竖线"(用户多次反馈, 本轮以14鸟点+深色
+        # 复现确认)。改=细(6px)+内缩离边框+短滑块, 明确"是个滚动条"。
+        # 原裸 QWidget{} 类型选择器会命中 QScrollBar 等全部子类,
+        # 改用 viewport 的 objectName 精确命中。
+        scroll.setStyleSheet(
+            "QScrollArea{background:transparent;}"
+            "QWidget#qt_scrollarea_viewport{background:transparent;}"
+            "QScrollBar:vertical{width:6px;margin:6px 6px 6px 0;"
+            "background:transparent;}"
+            "QScrollBar::handle:vertical{background:" + theme.SCROLL +
+            ";border-radius:3px;min-height:32px;}"
+            "QScrollBar::handle:vertical:hover{background:" +
+            theme.SCROLL_HOVER + ";}"
+            "QScrollBar::add-line,QScrollBar::sub-line{height:0;}"
+            "QScrollBar::add-page,QScrollBar::sub-page{background:transparent;}")
         self.spot_list_area = QWidget()
         self.spot_list = QVBoxLayout(self.spot_list_area)
         self.spot_list.setContentsMargins(0, 0, 4, 0)

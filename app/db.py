@@ -1245,6 +1245,38 @@ class Library:
         return {r["d"]: r["c"] for r in self.conn.execute(sql, args).fetchall()
                 if r["d"]}
 
+    def spot_visits(self, spot_id: int) -> dict:
+        """鸟点到访概览(生涯页时间线下钻, 实测反馈6): 到访天数/首末日期/
+        鸟种清单(按张数降序, 带中英名)。只读查询。"""
+        row = self.conn.execute(
+            "SELECT COUNT(DISTINCT substr(COALESCE(e.dt_original, "
+            "p.added_at),1,10)) days, MIN(COALESCE(e.dt_original, "
+            "p.added_at)) first_at, MAX(COALESCE(e.dt_original, "
+            "p.added_at)) last_at FROM photos p LEFT JOIN exif e "
+            "ON e.photo_id=p.id WHERE p.spot_id=?",
+            (spot_id,)).fetchone()
+        species = self.conn.execute(
+            "SELECT v.eff_code code, s.cn, s.en, COUNT(*) n "
+            "FROM photos p JOIN v_records v ON v.photo_id=p.id AND v.rank=1 "
+            "JOIN species s ON s.code=v.eff_code WHERE p.spot_id=? "
+            "GROUP BY v.eff_code ORDER BY n DESC, s.cn",
+            (spot_id,)).fetchall()
+        return {"days": row["days"], "first_at": (row["first_at"] or "")[:10],
+                "last_at": (row["last_at"] or "")[:10],
+                "species": [dict(r) for r in species]}
+
+    def species_sightings(self, code: str) -> list[dict]:
+        """鸟种拍摄明细(生涯页时间线下钻, 实测反馈6): 每次拍摄=日期+
+        鸟点+当日首张photo_id(点开看大图), 按日期升序。只读查询。"""
+        rows = self.conn.execute(
+            "SELECT substr(COALESCE(e.dt_original, p.added_at),1,10) d, "
+            "  sp.name AS spot_name, MIN(v.photo_id) pid "
+            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "LEFT JOIN exif e ON e.photo_id=p.id "
+            "LEFT JOIN spots sp ON sp.id=p.spot_id "
+            "WHERE v.eff_code=? GROUP BY d ORDER BY d", (code,)).fetchall()
+        return [dict(r) for r in rows]
+
     def province_species_counts(self) -> list[tuple[str, int]]:
         """省级行(region_id)→收录鸟种数(生涯页足迹choropleth)。
         口径=photos→batches.region_id(导入时选的地区, 中国行即省级);

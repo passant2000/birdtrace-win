@@ -309,6 +309,13 @@ def main():
             except Exception as e:
                 check(False, f"版权对话框可构造 ({e})")
             try:
+                from app.ui.badge_evidence import BadgeEvidenceDialog
+                dlgs.append(("badge_ev", BadgeEvidenceDialog(
+                    lib, win, "生涯鸟种",
+                    [{"kind": "species", "id": "0", "label": "样例"}])))
+            except Exception as e:
+                check(False, f"徽章证据对话框可构造 ({e})")
+            try:
                 dlgs.append(("rebox", ReboxDialog(lib, win, 1)))
             except Exception as e:
                 check(False, f"画框识别可构造 ({e})")

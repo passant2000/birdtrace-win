@@ -342,7 +342,8 @@ class ShareDialog(QDialog):
 
         name_row = QHBoxLayout()
         name_row.addWidget(rlabel(t("拍摄者", "Photographer")))
-        self.name_edit = QLineEdit(self.lib.get_setting("photographer_name", ""))
+        self.name_edit = QLineEdit(
+            self.lib.copyright_defaults_get().get("creator", ""))
         self.name_edit.setPlaceholderText(t("你的名字", "Your name"))
         self.name_edit.setClearButtonEnabled(True)
         self.name_edit.textChanged.connect(lambda _t: self._update())
@@ -468,8 +469,7 @@ class ShareDialog(QDialog):
         # 库级默认)优先, 回落EXIF Artist→手填设置; 用户框内手改仍是最高
         cp = self.lib.effective_copyright(self.photo_id)
         self.photographer = (photo.get("artist")
-                             or cp.get("creator") or ""
-                             or self.lib.get_setting("photographer_name", ""))
+                             or cp.get("creator") or "")
         if self.photographer and not self.name_edit.text():
             self.name_edit.setText(self.photographer)
         # 拍摄参数摘要(取自库内EXIF字段, 照片文件丢失也能显示)

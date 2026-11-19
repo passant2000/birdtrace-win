@@ -129,7 +129,7 @@ class AboutPage(QWidget):
 
         # ---- 开发者 ----
         c3, v3 = _card(t("开发者", "Developer"))
-        who = self.lib.get_setting("photographer_name", "")
+        who = self.lib.copyright_defaults_get().get("creator", "")
         dev_txt = (t(f"设计与开发：{who}<br>",
                      f"Design &amp; development: {who}<br>") if who
                    else t("设计与开发：一位 Windows 鸟友<br>",

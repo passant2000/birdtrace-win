@@ -207,7 +207,8 @@ class BatchShareDialog(QDialog):
 
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel(t("拍摄者", "Photographer")))
-        self.name_edit = QLineEdit(self.lib.get_setting("photographer_name", ""))
+        self.name_edit = QLineEdit(
+            self.lib.copyright_defaults_get().get("creator", ""))
         self.name_edit.setPlaceholderText(t("留空则用照片EXIF署名",
                                             "Empty = use photo EXIF artist"))
         name_row.addWidget(self.name_edit, 1)

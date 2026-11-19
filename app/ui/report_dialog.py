@@ -294,7 +294,7 @@ class YearlyReportDialog(QFrame):
         p.drawText(QRectF(80, 130, W - 160, 240), Qt.AlignLeft, self.year)
         p.setFont(_f(40, 500))
         p.setPen(QColor(R_META))
-        who = self.lib.get_setting("photographer_name", "")
+        who = self.lib.copyright_defaults_get().get("creator", "")
         p.drawText(QRectF(90, 380, W - 180, 56), Qt.AlignLeft,
                    t(f"{who} 的观鸟一年", f"{who}'s year of birding")
                    if who else t("我的观鸟一年", "My year of birding"))

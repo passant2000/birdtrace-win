@@ -59,10 +59,13 @@ class BarChart(QWidget):
     def __init__(self):
         super().__init__()
         self.series: list[dict] = []
+        self._x_month_mode = False
         self.setMinimumHeight(240)
 
-    def set_series(self, series: list[dict]):
+    def set_series(self, series: list[dict], x_month_mode: bool = False):
+        """x_month_mode: 12个横轴=月份(标"1月"…), 缺省=小时/年份原样。"""
         self.series = series
+        self._x_month_mode = x_month_mode
         self.update()
 
     def paintEvent(self, e):
@@ -104,10 +107,20 @@ class BarChart(QWidget):
                 th = (h - pad_t - pad_b) * s["total"] / top
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(theme.BLUE))
-                p.drawRoundedRect(QRectF(cx - bw / 2, h - pad_b - th, bw, th), 4, 4)
+                p.drawRoundedRect(QRectF(cx - bw / 2, h - pad_b - th, bw, th),
+                                  3, 3)
+                # 数值标注(反馈9: 简陋→可读): 柱顶直接标数值
+                if s["total"]:
+                    p.setPen(QColor(theme.LABEL))
+                    p.drawText(QRectF(cx - slot / 2, h - pad_b - th - 16,
+                                      slot, 14),
+                               Qt.AlignCenter, str(s["total"]))
                 p.setPen(QColor(theme.LABEL_2))
+                lab = str(s.get("hour", i))
+                if self._x_month_mode:
+                    lab = f"{s.get('hour', i)}月"
                 p.drawText(QRectF(cx - slot / 2, h - pad_b + 4, slot, 16),
-                           Qt.AlignCenter, str(s.get("hour", i)))
+                           Qt.AlignCenter, lab)
                 continue
             th = (h - pad_t - pad_b) * s["total"] / top
             nh = (h - pad_t - pad_b) * s["new"] / top
@@ -140,7 +153,8 @@ def _number_card(num, label: str, color: str) -> QFrame:
 
 
 class _Badge(QWidget):
-    """成就徽章: 解锁=彩色+日期; 未解锁=灰+进度条(自 stats_page 搬家)。"""
+    """成就徽章: 解锁=彩色+日期; 未解锁=灰+进度条(自 stats_page 搬家)。
+    实测反馈9: set_click(回调)=点击看徽章背后的证据(照片/鸟种/鸟点)。"""
 
     def __init__(self, emoji: str, name: str, target: int, cur: int,
                  unlock_date: str | None, parent=None):
@@ -149,6 +163,18 @@ class _Badge(QWidget):
         self.emoji, self.name, self.target = emoji, name, target
         self.cur, self.unlock_date = cur, unlock_date
         self.done = cur >= target
+        self._click = None
+
+    def set_click(self, fn):
+        self._click = fn
+        if fn and self.done:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip(t("点击查看达成证据", "Click to see the evidence"))
+
+    def mousePressEvent(self, e):
+        if self._click and self.done:
+            self._click()
+        super().mousePressEvent(e)
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -314,6 +340,9 @@ class LifePage(QWidget):
                                      t("足迹", "Footprints"), t("徽章", "Badges")])
         self.seg.changed.connect(self._tab_changed)
         lay.addWidget(self.seg)
+        # 时间线Tab筛选行(实测反馈6修复): 只建一次——原实现每次refresh
+        # 重建控件, 打一个字/选一个鸟点就被清零, 搜索与下拉"不能用"
+        self._tl_filter_host = self._make_tl_filters()
 
         self.stack = QStackedWidget()
         self.tabs: list[QScrollArea] = []
@@ -371,10 +400,11 @@ class LifePage(QWidget):
     def refresh(self):
         sc = self.tabs[self.stack.currentIndex()]
         cv = sc._cv
+        host = getattr(self, "_tl_filter_host", None)
         while cv.count():
             it = cv.takeAt(0)
             w = it.widget() if it else None
-            if w is not None:
+            if w is not None and w is not host:
                 w.setParent(None)
                 w.deleteLater()
         _a, _b, span = self._span()
@@ -664,33 +694,12 @@ class LifePage(QWidget):
         cv.addWidget(banner)
 
         feed = self.lib.lifer_feed()
-        # 筛选行
-        frow = QHBoxLayout()
-        frow.setSpacing(8)
-        self._tl_year = QComboBox()
-        self._tl_year.addItem(t("全部年份", "All years"), None)
-        self._tl_spot = QComboBox()
-        self._tl_spot.addItem(t("全部鸟点", "All spots"), None)
-        for sp in self.lib.spots_overview():
-            self._tl_spot.addItem(sp["name"], sp["id"])
-        self._tl_search = QLineEdit()
-        self._tl_search.setPlaceholderText(
-            t("搜鸟种名…", "Search species…"))
-        self._tl_search.setFixedWidth(180)
-        for wdg, sig in ((self._tl_year, "currentIndexChanged"),
-                         (self._tl_spot, "currentIndexChanged")):
-            getattr(wdg, sig).connect(lambda _i: self.refresh())
-            frow.addWidget(wdg)
-        self._tl_search.textChanged.connect(lambda _t: self.refresh())
-        frow.addWidget(self._tl_search)
-        frow.addStretch(1)
-        host = QWidget()
-        host.setLayout(frow)
-        cv.addWidget(host)
+        # 持久筛选行(控件只建一次, 见 __init__)
+        cv.addWidget(self._tl_filter_host)
+        self._sync_tl_filter_items(feed)
 
         years = sorted({(li["first_at"] or "")[:4] for li in feed
                         if li["first_at"]}, reverse=True)
-        self._tl_year.addItems(years)
         # 过滤
         q = (self._tl_search.text() or "").strip().lower()
         yf = self._tl_year.currentData()
@@ -698,6 +707,17 @@ class LifePage(QWidget):
         spot_name = ""
         if sf is not None:
             spot_name = self._tl_spot.currentText()
+            card = self._spot_drill_card(sf, spot_name)
+            if card is not None:
+                cv.addWidget(card)   # 下钻: 去过几次/鸟种清单(可点)
+        if q:
+            matches = [li for li in feed if
+                       q in (li["cn"] or "").lower()
+                       or q in (li["en"] or "").lower()
+                       or q in (li["sci"] or "").lower()]
+            if len(matches) == 1:
+                # 下钻: 该鸟种所有拍摄日期+鸟点(可点开图)
+                cv.addWidget(self._species_drill_card(matches[0]["code"]))
         shown = 0
         for y in years:
             group = [li for li in feed if (li["first_at"] or "")[:4] == y]
@@ -736,6 +756,140 @@ class LifePage(QWidget):
                              "after recognition"))
             empty.setObjectName("Hint")
             cv.addWidget(empty)
+
+    # ---------- 时间线Tab: 筛选行(持久) + 下钻卡(实测反馈6) ----------
+    def _make_tl_filters(self) -> QWidget:
+        """筛选行控件只建一次; 选项在 _sync_tl_filter_items 里重填。"""
+        host = QWidget()
+        frow = QHBoxLayout(host)
+        frow.setContentsMargins(0, 0, 0, 0)
+        frow.setSpacing(8)
+        self._tl_year = QComboBox()
+        self._tl_year.addItem(t("全部年份", "All years"), None)
+        self._tl_spot = QComboBox()
+        self._tl_spot.addItem(t("全部鸟点", "All spots"), None)
+        self._tl_search = QLineEdit()
+        self._tl_search.setPlaceholderText(
+            t("搜鸟种名（中英/学名）…", "Search species (CN/EN/Latin)…"))
+        self._tl_search.setFixedWidth(200)
+        self._tl_search.setClearButtonEnabled(True)
+        self._tl_year.currentIndexChanged.connect(lambda _i: self.refresh())
+        self._tl_spot.currentIndexChanged.connect(lambda _i: self.refresh())
+        self._tl_search.textChanged.connect(lambda _t: self.refresh())
+        frow.addWidget(self._tl_year)
+        frow.addWidget(self._tl_spot)
+        frow.addWidget(self._tl_search, 1)
+        return host
+
+    def _sync_tl_filter_items(self, feed: list[dict]):
+        """重填年份/鸟点选项, 保留当前选择(blockSignals防重入)。"""
+        years = sorted({(li["first_at"] or "")[:4] for li in feed
+                        if li["first_at"]}, reverse=True)
+        cur_y = self._tl_year.currentData()
+        self._tl_year.blockSignals(True)
+        self._tl_year.clear()
+        self._tl_year.addItem(t("全部年份", "All years"), None)
+        self._tl_year.addItems(years)
+        if cur_y:
+            idx = self._tl_year.findData(cur_y)
+            self._tl_year.setCurrentIndex(idx if idx >= 0 else 0)
+        self._tl_year.blockSignals(False)
+        cur_s = self._tl_spot.currentData()
+        self._tl_spot.blockSignals(True)
+        self._tl_spot.clear()
+        self._tl_spot.addItem(t("全部鸟点", "All spots"), None)
+        for sp in self.lib.spots_overview():
+            self._tl_spot.addItem(sp["name"], sp["id"])
+        if cur_s is not None:
+            idx = self._tl_spot.findData(cur_s)
+            self._tl_spot.setCurrentIndex(idx if idx >= 0 else 0)
+        self._tl_spot.blockSignals(False)
+
+    def _spot_drill_card(self, spot_id: int, spot_name: str) -> QFrame | None:
+        """选鸟点→概览卡: 到访天数/首末日期/鸟种清单胶囊(点=看该种明细)。"""
+        v = self.lib.spot_visits(spot_id)
+        if not v["species"]:
+            return None
+        card = QFrame()
+        card.setObjectName("Card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 12, 16, 14)
+        lay.setSpacing(6)
+        hl = QLabel(t(
+            f"📍 {spot_name} · 到访 {v['days']} 天 · 鸟种 {len(v['species'])} 种"
+            + (f" · 首次 {v['first_at']}" if v["first_at"] else ""),
+            f"📍 {spot_name} · {v['days']} visit day(s) · "
+            f"{len(v['species'])} species"
+            + (f" · first {v['first_at']}" if v["first_at"] else "")))
+        hl.setObjectName("CardTitle")
+        hl.setWordWrap(True)
+        lay.addWidget(hl)
+        sub = QLabel(t(
+            f"{v['first_at']} ~ {v['last_at']}（点下面的鸟种看它的拍摄记录）",
+            f"{v['first_at']} ~ {v['last_at']} (click a species below to "
+            "see its records)"))
+        sub.setObjectName("Hint")
+        lay.addWidget(sub)
+        from ...theme.widgets import FlowLayout
+        chips_host = QWidget()
+        flow = FlowLayout(chips_host, spacing=6)
+        flow.setContentsMargins(0, 0, 0, 0)
+        for it in v["species"][:40]:
+            chip = QLabel(f"{sname(it['cn'], it['en'])} ×{it['n']}")
+            chip.setStyleSheet(
+                f"background:{theme.FILL};border-radius:10px;"
+                "padding:3px 10px;font-size:12px;"
+                f"color:{theme.LABEL};")
+            chip.setCursor(Qt.PointingHandCursor)
+            code = it["code"]
+            nm = it["cn"] or it["en"] or ""
+
+            def _go(_e, _nm=nm):
+                self._tl_search.setText(_nm)
+                self.refresh()
+            chip.mousePressEvent = _go
+            flow.addWidget(chip)
+        lay.addWidget(chips_host)
+        return card
+
+    def _species_drill_card(self, code: str) -> QFrame:
+        """搜中唯一命中→该鸟种明细卡: 每次拍摄(日期+鸟点), 点=开当日首图。"""
+        sp = self.lib.species_info(code)
+        rows = self.lib.species_sightings(code)
+        spots_n = len({r["spot_name"] for r in rows if r["spot_name"]})
+        card = QFrame()
+        card.setObjectName("Card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 12, 16, 14)
+        lay.setSpacing(6)
+        nm = sname(sp["cn"], sp["en"]) if sp else code
+        hl = QLabel(t(
+            f"🔎 {nm} · {len(rows)} 次拍摄 · 到过 {spots_n} 个鸟点",
+            f"🔎 {nm} · {len(rows)} shot(s) · {spots_n} spot(s)"))
+        hl.setObjectName("CardTitle")
+        hl.setWordWrap(True)
+        lay.addWidget(hl)
+        for r in rows[:60]:
+            line = QLabel(t(
+                f"{r['d']} · {r['spot_name'] or '未挂鸟点'}（点击查看）",
+                f"{r['d']} · {r['spot_name'] or 'no spot'} (click to view)"))
+            line.setStyleSheet(f"font-size:13px;color:{theme.LABEL_2};"
+                               "background:transparent;padding:1px 0;")
+            line.setCursor(Qt.PointingHandCursor)
+            pid = r["pid"]
+
+            def _open(_e, _pid=pid):
+                from .viewer import PhotoViewer
+                if _pid:
+                    PhotoViewer(self.lib, self.win, _pid, [_pid]).exec()
+            line.mousePressEvent = _open
+            lay.addWidget(line)
+        if len(rows) > 60:
+            more = QLabel(t(f"…其余 {len(rows) - 60} 次见时间线",
+                            f"… {len(rows) - 60} more in the timeline"))
+            more.setObjectName("Hint")
+            lay.addWidget(more)
+        return card
 
     def _lifer_row(self, li: dict) -> QFrame:
         row = QFrame()
@@ -805,13 +959,12 @@ class LifePage(QWidget):
                               f"color:{theme.LABEL};background:transparent;")
         cv.addWidget(summary)
 
-        # 省级分布图(懒打开; 复用distribution_map管线, 数据=用户库统计)
+        # 省级足迹地图直接内嵌(实测反馈8): 自绘choropleth, 省名+数字
+        # 直接标注在图上, 悬浮看详情; 免WebEngine轻加载
         if provs:
-            map_btn = QPushButton(t("🗺️ 查看省级足迹地图…",
-                                    "🗺️ Open province footprint map…"))
-            map_btn.setCursor(Qt.PointingHandCursor)
-            map_btn.clicked.connect(self._open_footprint_map)
-            cv.addWidget(map_btn)
+            from .china_map_widget import ChinaMapWidget, map_legend
+            cv.addWidget(ChinaMapWidget(dict(provs)))
+            cv.addWidget(map_legend())
 
         # 鸟点足迹卡列表
         if not spots:
@@ -876,35 +1029,6 @@ class LifePage(QWidget):
         dlg = SpotDetailDialog(self.lib, self.win, spot_id)
         dlg.exec()
 
-    def _open_footprint_map(self):
-        from .distribution_map import DistributionMapDialog
-        provs = dict(self.lib.province_species_counts())
-        dlg = DistributionMapDialog(
-            self.lib, self.win, code="", parent=self.win,
-            title=t("生涯足迹 · 省级分布", "Life footprints · provinces"),
-            payload_fn=lambda: self._footprint_payload(provs))
-        dlg.show()
-
-    def _footprint_payload(self, provs: dict) -> dict:
-        """{adcode: {v, tip}}: v复用先验色阶通道(-4=透明, -1.4..2.0 浅→深),
-        实际值=鸟种数归一化。"""
-        from .distribution_map import ADCODE_TO_REGION
-        from ..core import regions
-        mx = max(provs.values()) if provs else 1
-        out = {}
-        for adcode, rid in ADCODE_TO_REGION.items():
-            n = provs.get(rid, 0)
-            reg = regions.region_display(rid)
-            if n <= 0:
-                out[str(adcode)] = {"v": -4.0, "tip": t(f"{reg}：尚无收录",
-                                                        f"{reg}: no records")}
-            else:
-                v = -1.4 + 3.4 * (n / mx)
-                out[str(adcode)] = {"v": v,
-                                    "tip": t(f"{reg}：{n} 种",
-                                             f"{reg}: {n} species")}
-        return out
-
     # ---------- Tab4 徽章(stats_page 搬家) ----------
     def _build_badges(self, cv: QVBoxLayout):
         ach = self.lib.achievements_summary()
@@ -929,7 +1053,9 @@ class LifePage(QWidget):
             cvv = QVBoxLayout(card)
             cvv.setContentsMargins(18, 14, 18, 16)
             cvv.setSpacing(10)
-            gl = QLabel(gname)
+            gl = QLabel(t("💡 点击徽章看它背后的照片/鸟种", 
+                          "💡 Click a badge to see the photos/species behind it")
+                        if gname == groups[0][0] else gname)
             gl.setObjectName("CardTitle")
             cvv.addWidget(gl)
             grid_host = QWidget()
@@ -938,6 +1064,7 @@ class LifePage(QWidget):
             grid.setSpacing(8)
             cols = 5
             for i, b in enumerate(badges):
+                b.set_click(self._badge_evidence(gname, b))
                 grid.addWidget(b, i // cols, i % cols)
             cvv.addWidget(grid_host)
             cv.addWidget(card)
@@ -1008,10 +1135,109 @@ class LifePage(QWidget):
             hh.setObjectName("CardTitle")
             hv.addWidget(hh)
             hour_chart = BarChart()
-            hour_chart.setMinimumHeight(160)
+            hour_chart.setMinimumHeight(180)
             hour_chart.set_series(hours)
             hv.addWidget(hour_chart, 1)
             cv.addWidget(hour_card)
+
+        # 出片月份 + 鸟种月份(反馈9: 让数据有趣起来, 历年累计)
+        m_ph = self.lib.conn.execute(
+            "SELECT CAST(substr(COALESCE(e.dt_original, p.added_at),6,2) "
+            "AS INTEGER) m, COUNT(*) c FROM photos p LEFT JOIN exif e "
+            "ON e.photo_id=p.id GROUP BY m").fetchall()
+        m_sp = self.lib.conn.execute(
+            "SELECT CAST(substr(COALESCE(e.dt_original, p.added_at),6,2) "
+            "AS INTEGER) m, COUNT(DISTINCT v.eff_code) c FROM v_records v "
+            "JOIN photos p ON p.id=v.photo_id LEFT JOIN exif e "
+            "ON e.photo_id=p.id GROUP BY m").fetchall()
+        ph_map = {r["m"]: r["c"] for r in m_ph if r["m"]}
+        sp_map = {r["m"]: r["c"] for r in m_sp if r["m"]}
+        if ph_map or sp_map:
+            two = QHBoxLayout()
+            two.setSpacing(12)
+            for title, data, series in (
+                    (t("出片月份  ·  历年按月(1~12月)",
+                       "Photos by month  ·  all years"),
+                     ph_map, [{"hour": m, "total": ph_map.get(m, 0)}
+                              for m in range(1, 13)]),
+                    (t("鸟种月份  ·  每月拍到过多少种",
+                       "Species by month  ·  distinct species"),
+                     sp_map, [{"hour": m, "total": sp_map.get(m, 0)}
+                              for m in range(1, 13)])):
+                if not data:
+                    continue
+                mc = QFrame()
+                mc.setObjectName("Card")
+                mv = QVBoxLayout(mc)
+                mv.setContentsMargins(20, 16, 20, 16)
+                ml = QLabel(title)
+                ml.setObjectName("CardTitle")
+                mv.addWidget(ml)
+                chart = BarChart()
+                chart.setMinimumHeight(180)
+                chart.set_series(series, x_month_mode=True)
+                mv.addWidget(chart, 1)
+                two.addWidget(mc, 1)
+            if two.count():
+                host2 = QWidget()
+                host2.setLayout(two)
+                cv.addWidget(host2)
+
+    # ---------- 徽章证据链(实测反馈9) ----------
+    def _badge_evidence(self, gname: str, badge):
+        """点徽章→看背后的证据。按组取证: 生涯鸟种=按序lifers,
+        照片=按时间前N张, 鸟点=鸟点清单, 猛禽/水鸟=该目已收录种。"""
+        target = badge.target
+        cur = badge.cur
+
+        def photo_items() -> list[dict]:
+            rows = self.lib.conn.execute(
+                "SELECT p.id, COALESCE(e.dt_original, p.added_at) ts "
+                "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
+                "ORDER BY ts LIMIT ?", (max(target, 1),)).fetchall()
+            return [{"kind": "photo", "id": r["id"],
+                     "label": (r["ts"] or "")[:10]} for r in rows]
+
+        def species_items(orders=None) -> list[dict]:
+            q = ("SELECT DISTINCT v.eff_code code, s.cn, s.en, "
+                 "MIN(v.taken_at) ts FROM v_records v "
+                 "JOIN species s ON s.code=v.eff_code ")
+            args: list = []
+            if orders:
+                q += f"WHERE s.order_cn IN ({','.join('?' * len(orders))})"
+                args = list(orders)
+            q += " GROUP BY v.eff_code ORDER BY ts"
+            return [{"kind": "species", "id": r["code"],
+                     "label": f"{sname(r['cn'], r['en'])} · "
+                              f"{(r['ts'] or '')[:7]}"}
+                    for r in self.lib.conn.execute(q, args).fetchall()]
+
+        def spot_items() -> list[dict]:
+            return [{"kind": "spot", "id": sp["id"], "label": sp["name"]}
+                    for sp in self.lib.spots_overview()]
+
+        if gname == t("生涯鸟种", "Life list"):
+            items = [{"kind": "species", "id": li["code"],
+                      "label": f"#{li['lifer_no']} "
+                               f"{sname(li['cn'], li['en'])} · "
+                               f"{(li['first_at'] or '')[:7]}"}
+                     for li in self.lib.lifers()[:max(cur, target)]]
+        elif gname == t("照片收藏", "Photo collection"):
+            items = photo_items()
+        elif gname == t("鸟点足迹", "Hotspot trail"):
+            items = spot_items()
+        elif gname == t("猛禽图鉴", "Raptor list"):
+            items = species_items(self.lib.RAPTOR_ORDERS)
+        elif gname == t("水鸟图鉴", "Waterbird list"):
+            items = species_items(self.lib.WATERBIRD_ORDERS)
+        else:
+            return None   # 连续观火等无实物证据组
+
+        def _open():
+            from .badge_evidence import BadgeEvidenceDialog
+            dlg = BadgeEvidenceDialog(self.lib, self.win, badge.name, items)
+            dlg.exec()
+        return _open if items else None
 
     # ---------- 动作 ----------
     def _export_ebird(self):

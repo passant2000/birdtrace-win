@@ -76,7 +76,7 @@ def main():
 
     print("[2] 新功能导览卡")
     check("新功能导览" in t_all, "导览卡显示(seen_tour未置位)")
-    check("组内对比" in t_all or "选片工作流" in t_all, "导览条目渲染")
+    check("打星与选片" in t_all or "保留" in t_all, "导览条目渲染")
     # 关闭 → seen_tour=1 → 刷新后不再显示
     got = [w for w in page.content.findChildren(QPushButton)
            if "不再显示" in w.text()]

@@ -134,8 +134,19 @@ def main():
     page = win.pages["collections"]
     check(page._mode == "list" and page.content_lay.count() >= 2,
           "list模式渲染出卡片(无空态)")
-    check(not getattr(page, "view_btn", None),
-          "list模式无detail动作按钮")
+    check(all(not getattr(page, b).isVisible() for b in
+              ("back_btn", "view_btn", "export_btn", "sel_btn")),
+          "list模式detail按钮全部隐藏")
+    # 累积bug回归(实测反馈3): refresh多次, 「返回列表」只此一个
+    page.refresh()
+    page.refresh()
+    page.refresh()
+    from PySide6.QtWidgets import QPushButton
+    n_back = sum(1 for b in page.title._actions
+                 if False) if False else sum(
+        1 for b in page.findChildren(QPushButton)
+        if b.text().startswith("← 返回"))
+    check(n_back == 1, f"refresh×4后返回按钮仍=1 (got {n_back})")
 
     # 卡片点击 → detail
     page._open_detail(cid_row)
