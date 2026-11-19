@@ -27,16 +27,14 @@ class ReviewPage(QWidget):
         lay.setSpacing(14)
 
         head = QHBoxLayout()
-        self.title = QLabel(t("待复核", "Pending review"))
-        self.title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
-                                 "background:transparent;")
-        head.addWidget(self.title)
-        head.addStretch(1)
+        from ..theme.widgets import PageHeader
+        self.title = PageHeader(t("待复核", "Pending review"))
+        head.addWidget(self.title, 1)
         tip = QLabel(t("识别没把握的照片在这里确认或纠正, 结果计入成就统计",
                        "Confirm or correct photos the recognizer is unsure "
                        "about here; results count toward achievement stats"))
         tip.setObjectName("Hint")
-        head.addWidget(tip)
+        self.title.add_action(tip)
         lay.addLayout(head)
 
         self.scroll = QScrollArea()
@@ -54,7 +52,7 @@ class ReviewPage(QWidget):
             if it.widget():
                 it.widget().deleteLater()
         queue = self.lib.review_queue()
-        self.title.setText(t(f"待复核 · {len(queue)} 张", f"Pending review · {len(queue)}"))
+        self.title.set_title(t(f"待复核 · {len(queue)} 张", f"Pending review · {len(queue)}"))
         if not queue:
             done = QLabel(t("全部处理完毕 🎉", "All caught up 🎉"))
             done.setAlignment(Qt.AlignCenter)

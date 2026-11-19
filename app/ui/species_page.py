@@ -279,23 +279,21 @@ class SpeciesPage(QWidget):
         lay.setSpacing(14)
 
         head = QHBoxLayout()
-        self.title = QLabel(t("鸟种库", "Species"))
-        self.title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
-                                 "background:transparent;")
-        head.addWidget(self.title)
-        head.addStretch(1)
+        from ..theme.widgets import PageHeader
+        self.title = PageHeader(t("鸟种库", "Species"))
+        head.addWidget(self.title, 1)
         self.search = QLineEdit()
         self.search.setPlaceholderText(
             t("搜索 中文名 / 拼音 / 学名 / 英文名…",
               "Search Chinese / pinyin / Latin / English name…"))
         self.search.setFixedWidth(300)
         self.search.textChanged.connect(lambda _t: self.refresh())
-        head.addWidget(self.search)
+        self.title.add_action(self.search)
         self.back_btn = QPushButton(t("← 返回列表", "← Back to list"))
         self.back_btn.setVisible(False)
         self.back_btn.setCursor(Qt.PointingHandCursor)
         self.back_btn.clicked.connect(self._back)
-        head.addWidget(self.back_btn)
+        self.title.add_action(self.back_btn)
         lay.addLayout(head)
 
         self.scroll = QScrollArea()
@@ -399,7 +397,7 @@ class SpeciesPage(QWidget):
         lifer = {li["code"]: li for li in self.lib.lifers()}
         year_codes = set(self.lib.year_bird_codes(
             __import__('datetime').date.today().strftime('%Y')))
-        self.title.setText(t(f"鸟种库 · {len(items)} 种", f"Species · {len(items)}"))
+        self.title.set_title(t(f"鸟种库 · {len(items)} 种", f"Species · {len(items)}"))
         # 识别进行中提示(照片已导入但鸟种尚未生成, 用户会以为"库里没有")
         win = self.win
         if win.worker is not None and win.worker.isRunning():

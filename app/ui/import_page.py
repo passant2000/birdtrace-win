@@ -129,10 +129,8 @@ class ImportPage(QWidget):
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(14)
 
-        title = QLabel(t("导入照片", "Import photos"))
-        title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
-                            "background:transparent;")
-        lay.addWidget(title)
+        from ..theme.widgets import PageHeader
+        lay.addWidget(PageHeader(t("导入照片", "Import photos")))
 
         # ---- 地区(重要: 边框高亮——选错地区=识别按错误名录跑, 2026-11-04用户) ----
         # 样式选择器必须限定#Card: 裸QFrame{}会级联到全部子控件(QLabel也继承

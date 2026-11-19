@@ -84,11 +84,9 @@ class TimelinePage(QWidget):
         lay.setSpacing(14)
 
         head = QHBoxLayout()
-        self.title = QLabel(t("时间线", "Timeline"))
-        self.title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
-                                 "background:transparent;")
-        head.addWidget(self.title)
-        head.addStretch(1)
+        from ..theme.widgets import PageHeader
+        self.title = PageHeader(t("时间线", "Timeline"))
+        head.addWidget(self.title, 1)
         self.burst_btn = QPushButton(t("连拍折叠", "Stack bursts"))
         self.burst_btn.setCheckable(True)
         self.burst_btn.setChecked(self.lib.get_setting("burst_collapse", "1") == "1")
@@ -98,15 +96,15 @@ class TimelinePage(QWidget):
             "Stack same-species burst shots taken within 2s into one cover "
             "(×N badge); click to browse the group. Auto-expanded in select mode"))
         self.burst_btn.toggled.connect(self._toggle_collapse)
-        head.addWidget(self.burst_btn)
+        self.title.add_action(self.burst_btn)
         self.share_btn = QPushButton(t("批量分享卡…", "Batch share cards…"))
         self.share_btn.setCursor(Qt.PointingHandCursor)
         self.share_btn.clicked.connect(self._batch_share)
-        head.addWidget(self.share_btn)
+        self.title.add_action(self.share_btn)
         self.export_btn = QPushButton(t("导出…", "Export…"))
         self.export_btn.setCursor(Qt.PointingHandCursor)
         self.export_btn.clicked.connect(self._export_wizard)
-        head.addWidget(self.export_btn)
+        self.title.add_action(self.export_btn)
         self.dup_btn = QPushButton(t("查重…", "Find duplicates…"))
         self.dup_btn.setCursor(Qt.PointingHandCursor)
         self.dup_btn.setToolTip(t(
@@ -116,7 +114,7 @@ class TimelinePage(QWidget):
             "across months + visually similar within a month); you confirm "
             "each group before removing"))
         self.dup_btn.clicked.connect(self._open_dups)
-        head.addWidget(self.dup_btn)
+        self.title.add_action(self.dup_btn)
         self.report_btn = QPushButton(t("记录中心…", "Bird report…"))
         self.report_btn.setCursor(Qt.PointingHandCursor)
         self.report_btn.setToolTip(t(
@@ -125,7 +123,7 @@ class TimelinePage(QWidget):
             "Export report rows as CSV for birdreport.cn-style upload, "
             "plus one best photo per species"))
         self.report_btn.clicked.connect(self._open_birdreport)
-        head.addWidget(self.report_btn)
+        self.title.add_action(self.report_btn)
         self.site_btn = QPushButton(t("静态站…", "Static site…"))
         self.site_btn.setCursor(Qt.PointingHandCursor)
         self.site_btn.setToolTip(t(
@@ -135,13 +133,13 @@ class TimelinePage(QWidget):
             "spot names/coordinates never included, originals never "
             "exported"))
         self.site_btn.clicked.connect(self._open_site)
-        head.addWidget(self.site_btn)
+        self.title.add_action(self.site_btn)
         self.select_btn = QPushButton(t("选择", "Select"))
         self.select_btn.setObjectName("Primary")
         self.select_btn.setCursor(Qt.PointingHandCursor)
         self.select_btn.clicked.connect(self._toggle_select)
-        head.addWidget(self.select_btn)
-        head.addWidget(make_grid_tier_control(self.lib, self._tier_changed))
+        self.title.add_action(self.select_btn)
+        self.title.add_action(make_grid_tier_control(self.lib, self._tier_changed))
         lay.addLayout(head)
 
         # 评分/选片筛选(1.0冲刺①+⑨): 作用于当前树选择范围(与鸟种胶囊
@@ -1057,7 +1055,7 @@ class TimelinePage(QWidget):
         import datetime
         year_ids = self.lib.year_bird_photo_ids(datetime.date.today().strftime('%Y'))
         total = sum(counts.values())
-        self.title.setText(t(f"时间线 · {total} 张照片", f"Timeline · {total} photos"))
+        self.title.set_title(t(f"时间线 · {total} 张照片", f"Timeline · {total} photos"))
         self._sync_sel_ui()
         # 原图可用性(0.8-②): 离线卷(移动硬盘没插)与真丢失分开——离线不是
         # 丢失, 缩略图/标注/统计照常, 插回即恢复, 不引导"重新链接"。

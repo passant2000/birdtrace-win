@@ -824,9 +824,8 @@ class MapPage(QWidget):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(16, 22, 16, 14)
         sv.setSpacing(10)
-        self.title = QLabel(t("鸟点地图", "Birding spot map"))
-        self.title.setStyleSheet(f"font-size:24px;font-weight:800;color:{theme.LABEL};"
-                                 "background:transparent;")
+        from ..theme.widgets import PageHeader
+        self.title = PageHeader(t("鸟点地图", "Birding spot map"))
         sv.addWidget(self.title)
 
         srow = QHBoxLayout()

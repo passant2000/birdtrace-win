@@ -202,21 +202,19 @@ class StatsPage(QWidget):
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(14)
         head = QHBoxLayout()
-        title = QLabel(t("个人成就", "Achievements"))
-        title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
-                            "background:transparent;")
-        head.addWidget(title)
-        head.addStretch(1)
+        from ..theme.widgets import PageHeader
+        title = PageHeader(t("个人成就", "Achievements"))
+        head.addWidget(title, 1)
         from PySide6.QtWidgets import QPushButton
         self.ebird_btn = QPushButton(t("导出eBird记录", "Export eBird records"))
         self.ebird_btn.setCursor(Qt.PointingHandCursor)
         self.ebird_btn.clicked.connect(self._export_ebird)
-        head.addWidget(self.ebird_btn)
+        title.add_action(self.ebird_btn)
         self.report_btn = QPushButton(t("年度报告…", "Annual report…"))
         self.report_btn.setObjectName("Primary")
         self.report_btn.setCursor(Qt.PointingHandCursor)
         self.report_btn.clicked.connect(self._open_report)
-        head.addWidget(self.report_btn)
+        title.add_action(self.report_btn)
         lay.addLayout(head)
 
         self.scroll = QScrollArea()

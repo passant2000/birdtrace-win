@@ -46,10 +46,8 @@ class AboutPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(14)
-        title = QLabel(t("关于", "About"))
-        title.setStyleSheet(f"font-size:26px;font-weight:800;color:{theme.LABEL};"
-                            "background:transparent;")
-        lay.addWidget(title)
+        from ..theme.widgets import PageHeader
+        lay.addWidget(PageHeader(t("关于", "About")))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

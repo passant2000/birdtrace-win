@@ -132,6 +132,53 @@ def make_card(title: str | None = None) -> tuple[QFrame, QVBoxLayout]:
     return card, lay
 
 
+class PageHeader(QWidget):
+    """页面统一标题行(UI重设计c1): 大标题 + 可选副题 + 右侧动作区。
+    收敛原先 8 页各自手写的 26px 标题(见各页面顶部)。
+    动态计数用 set_title() 改文本; 动作按钮用 add_action() 塞右侧。"""
+
+    def __init__(self, title: str, subtitle: str | None = None):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        self.title_label = QLabel(title)
+        self.title_label.setStyleSheet(
+            f"font-size:26px;font-weight:800;color:{theme.LABEL};"
+            "background:transparent;")
+        text_col.addWidget(self.title_label)
+        self.subtitle_label: QLabel | None = None
+        if subtitle:
+            self.subtitle_label = QLabel(subtitle)
+            self.subtitle_label.setObjectName("Hint")
+            text_col.addWidget(self.subtitle_label)
+        lay.addLayout(text_col)
+        lay.addStretch(1)
+        self._actions = QHBoxLayout()
+        self._actions.setSpacing(8)
+        lay.addLayout(self._actions)
+        self._sync_min()
+
+    def _sync_min(self):
+        # 标题不参与布局压缩(否则页面按钮挤过来会把文字截断);
+        # 窗口极窄时溢出的是右侧动作区, 标题始终完整
+        self.title_label.setMinimumSize(self.title_label.sizeHint())
+
+    def set_title(self, text: str):
+        self.title_label.setText(text)
+        self._sync_min()
+
+    def set_subtitle(self, text: str):
+        if self.subtitle_label is not None:
+            self.subtitle_label.setText(text)
+
+    def add_action(self, w: QWidget):
+        """右侧动作区加入一个控件(按钮/下拉等), 从左到右排列。"""
+        self._actions.addWidget(w)
+
+
 def badge(text: str, color: str | None = None) -> QLabel:
     lb = QLabel(text)
     lb.setObjectName("Badge")
