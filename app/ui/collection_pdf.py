@@ -13,7 +13,7 @@ from PySide6.QtCore import QMarginsF, QRectF, Qt
 from PySide6.QtGui import (QColor, QFont, QPainter, QPixmap)
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtGui import QPdfWriter
-from PySide6.QtCore import QPageSize
+from PySide6.QtGui import QPageSize
 
 from .. import theme
 from ..i18n import t, sname
