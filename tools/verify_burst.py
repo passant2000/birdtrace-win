@@ -166,7 +166,7 @@ def main():
     check(ph >= 6, f"phash已缓存落库 ({ph}张)")
 
     print("\n[4] 时间线折叠")
-    from app.ui.timeline_page import TimelinePage
+    from app.ui.timeline import TimelinePage
     from app.theme.widgets import PhotoGridItem
     page = TimelinePage(lib, None)
     page.resize(1300, 800)

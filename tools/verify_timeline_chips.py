@@ -15,7 +15,7 @@ from app import theme, i18n
 theme.apply_theme(app, "light")
 i18n.set_lang("zh")
 from app.db import Library
-from app.ui.timeline_page import TimelinePage
+from app.ui.timeline import TimelinePage
 
 FAILED = {"v": False}
 

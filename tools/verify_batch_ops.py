@@ -275,7 +275,7 @@ lib2.close()
 # ================= 第三部分: 时间线批量挂鸟点 =================
 print("---- 时间线: 多选→BatchSpotDialog ----")
 import app.ui.spot_dialog as sd
-from app.ui.timeline_page import TimelinePage
+from app.ui.timeline import TimelinePage
 
 lib2 = Library(D2)
 win = _Win()

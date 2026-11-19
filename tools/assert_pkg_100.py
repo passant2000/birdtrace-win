@@ -114,6 +114,19 @@ def code_of(suffix):
     return None
 
 
+def tl_symbols():
+    """UI重设计c8: timeline_page 拆为 app/ui/timeline/ 包(壳+4 mixin),
+    打包断言对5个模块取符号并集(锚点语义不变)。"""
+    out = set()
+    for suf in ("app.ui.timeline", "app.ui.timeline.filters",
+                "app.ui.timeline.select_bar", "app.ui.timeline.month_view",
+                "app.ui.timeline.actions"):
+        c = code_of(suf)
+        if c:
+            out |= symbols(c)
+    return out
+
+
 def symbols(code):
     out = set()
     stack = [code]
@@ -160,8 +173,7 @@ check("map_page弹卡重建+双击改名", {"_rename_spot", "deleteLater"} <= s
       and "重命名鸟点" in s)
 
 # 时间线树
-tl = code_of("app.ui.timeline_page")
-s = symbols(tl) if tl else set()
+s = tl_symbols()
 check("timeline树导航", {"_build_tree", "tree_nav", "_on_tree_click",
                          "_sync_tree_current"} <= s)
 
@@ -198,8 +210,7 @@ check("migration配色A", {"phase_ramp", "RESIDENT_MIN_WEEKS", "全年常驻"} <
       and any("mig-res" in x for x in strs))
 
 # 2026-11-02下午: 时间线列宽 + 姬鹟0.80 + 未识别/待复核语义
-tl2 = code_of("app.ui.timeline_page")
-s = symbols(tl2) if tl2 else set()
+s = tl_symbols()
 check("timeline列宽统一公式", "_wanted_cols" in s
       and any("视口实际宽度" in x for x in s if isinstance(x, str)))
 sp2 = code_of("app.ai.sp_engine")
@@ -218,8 +229,7 @@ check("待复核不是鸟按钮", "_not_bird" in s4
       and any("不是鸟" in x for x in s4 if isinstance(x, str)))
 check("中文名覆盖文件", (DIST / "assets/data/cn_name_overrides.json").exists())
 # 2026-11-03 时间线: 树刷新修复+按日期+Shift范围
-tl3 = code_of("app.ui.timeline_page")
-s = symbols(tl3) if tl3 else set()
+s = tl_symbols()
 check("时间线日期/Shift选择+树刷新",
       {"_select_by_date", "_select_range", "_select_date_range",
        "_iso_dates", "_order_ids"} <= s)
@@ -266,8 +276,7 @@ s = symbols(db4) if db4 else set()
 check("db 0.8方法", {"flush_sidecars", "regroup_bursts", "best_share_cards",
                      "file_status"} <= s and "phash_of" in s
       and "BEST18_DIFF_MIN" in s)
-tl4 = code_of("app.ui.timeline_page")
-s = symbols(tl4) if tl4 else set()
+s = tl_symbols()
 check("时间线0.8入口", {"burst_btn", "_collapse_on", "_batch_share",
                         "_export_wizard"} <= s
       and any("连拍折叠" in x for x in s if isinstance(x, str)))
@@ -283,8 +292,7 @@ im2 = code_of("app.ui.import_page")
 s = symbols(im2) if im2 else set()
 check("导入地区确认弹窗", "确认拍摄地区" in s
       and any("提高识别准确率" in x for x in s if isinstance(x, str)))
-tl5 = code_of("app.ui.timeline_page")
-s = symbols(tl5) if tl5 else set()
+s = tl_symbols()
 check("重新识别地区/鸟点", "_batch_rerecognize" in s
       and "识别地区与鸟点" in s)
 rp2 = code_of("app.ui.review_page")
@@ -344,8 +352,7 @@ except Exception as _e:
 
 # ---- 0.8.0-test3 修复集(2026-11-05复查; 功能级验证=verify_rerecog_region/
 #      verify_burst[7]/verify_export[6]/verify_import_confirm, 此处只做包内符号) ----
-_tl2 = code_of("app.ui.timeline_page")
-_s2 = symbols(_tl2) if _tl2 else set()
+_s2 = tl_symbols()
 check("重新识别地区弹窗在包内(0.8-test3)",
       "识别地区与鸟点" in _s2
       and any("batch_id=b.id WHERE p.id IN (" in x for x in _s2),
@@ -390,7 +397,7 @@ check("卡宽2000(0.8.1)", any("布局(宽2000" in x for x in _sc)
       and any("rarity_score" in x for x in _sc))
 
 # ---- 0.8.2: 批量操作(时间线批量挂鸟点 / 鸟种库多选批量改判 / 未识别整批标注) ----
-_tl6 = symbols(code_of("app.ui.timeline_page")) if code_of("app.ui.timeline_page") else set()
+_tl6 = tl_symbols()
 check("时间线批量挂鸟点入口(0.8.2)", "spot_btn" in _tl6 and "_batch_set_spot" in _tl6
       and any("设置鸟点" in x for x in _tl6 if isinstance(x, str)))
 _sdd = symbols(code_of("app.ui.spot_dialog")) if code_of("app.ui.spot_dialog") else set()
@@ -481,7 +488,7 @@ check("3:5标题区重做(0.8.4→0.8.5竖版3:5)", _sc8c is not None
 _sd4 = symbols(code_of("app.ui.share_dialog")) if code_of("app.ui.share_dialog") else set()
 _bs4 = symbols(code_of("app.ui.batch_share_dialog")) if code_of("app.ui.batch_share_dialog") else set()
 _sp4 = symbols(code_of("app.ui.species_page")) if code_of("app.ui.species_page") else set()
-_tl4 = symbols(code_of("app.ui.timeline_page")) if code_of("app.ui.timeline_page") else set()
+_tl4 = tl_symbols()
 check("focus_point眼锚链路(0.8.4)", "focus_point" in _sd4
       and "focus_point" in _bs4 and "eye_for_photo" in _sd4)
 check("多选出卡入口(0.8.4)", "share_card_rows" in _bs4
@@ -533,7 +540,7 @@ check("网格档位引擎(0.8.5)", {"GRID_TIERS", "grid_tile_of",
       and any("grid_tile" in x for x in _wg5 if isinstance(x, str)))
 check("三页档位接入(0.8.5)",
       "make_grid_tier_control" in (
-          symbols(code_of("app.ui.timeline_page")) or set())
+          tl_symbols())
       and "make_grid_tier_control" in (
           symbols(code_of("app.ui.species_page")) or set())
       and "make_grid_tier_control" in (
@@ -566,7 +573,7 @@ check("圆角可选+英文标题整串+副名换语种(0.8.6)",
       and any("整串紧凑" in x for x in _sc6s)      # 英文标题单run分支
       and {"round_toggle", "_on_round_toggle"} <= _sd6b
       and "圆角卡片" in _sd6s)
-_tl6 = symbols(code_of("app.ui.timeline_page")) or set()
+_tl6 = tl_symbols()
 _bs6 = symbols(code_of("app.ui.batch_share_dialog")) or set()
 _sp6 = symbols(code_of("app.ui.species_page")) or set()
 check("时间线鸟种胶囊+缩略图说明+批量预设日期(0.8.6)",
@@ -585,7 +592,7 @@ check("信息面板宽自适应panel_width_of(0.8.6英文适配)",
 # ---- 0.8.6六轮(2026-11-18晚): 连拍修错P1/P2 + rebox追加落库 ----
 _ba6 = symbols(code_of("app.ui.burst_actions")) or set()
 _wk6 = symbols(code_of("app.core.worker")) or set()
-_tl6b = symbols(code_of("app.ui.timeline_page")) or set()
+_tl6b = tl_symbols()
 _vi6 = symbols(code_of("app.ui.viewer")) or set()
 check("连拍组级操作P1改判+P2整组重识别(0.8.6)",
       {"change_group_species", "reidentify_group", "group_photo_ids",

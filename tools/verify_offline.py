@@ -145,7 +145,7 @@ def main():
     check(n2 == 1, "同名唯一候选按名兼容链接(重存过的文件)")
 
     print("\n[4] 时间线横幅与角标")
-    from app.ui.timeline_page import TimelinePage
+    from app.ui.timeline import TimelinePage
     # 再造一个真丢失
     p_miss2 = add(lib, LIB / "src" / "e.jpg", 6, codes[1])
     (LIB / "src" / "e.jpg").unlink()

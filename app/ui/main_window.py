@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
 
 from ..db import Library
 from ..i18n import t
-from . import life_page, map_page, species_page, timeline_page
+from . import life_page, map_page, species_page
+from .timeline import TimelinePage
 from .home_page import HomePage
 from .import_page import ImportPage
 from .review_page import ReviewPage
@@ -199,7 +200,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.pages: dict[str, QWidget] = {}
         self.pages["home"] = HomePage(self.lib, self)
-        self.pages["timeline"] = timeline_page.TimelinePage(self.lib, self)
+        self.pages["timeline"] = TimelinePage(self.lib, self)
         self.pages["import"] = ImportPage(self.lib, self.assets, self)
         self.pages["species"] = species_page.SpeciesPage(self.lib, self)
         # 地图页含WebEngine(重), 首次切入时才创建

@@ -268,7 +268,7 @@ it3 = PhotoGridItem(pm, stars=5, pick="keep", tile=320)
 check(it3.grab().width() == 320, "大档位正常")
 
 # 时间线页: 筛选下拉与快捷键绑定存在
-from app.ui.timeline_page import TimelinePage
+from app.ui.timeline import TimelinePage
 from PySide6.QtWidgets import QWidget
 win = QWidget()
 win.pages = {}

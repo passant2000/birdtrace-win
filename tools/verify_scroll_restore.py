@@ -71,7 +71,7 @@ def main():
         "SELECT substr(dt_original,1,7) FROM exif WHERE dt_original IS NOT NULL")}
     check(len(months) >= 3, f"EXIF日期分属{len(months)}个月份组")
 
-    from app.ui.timeline_page import TimelinePage
+    from app.ui.timeline import TimelinePage
 
     class _Win(QWidget):
         worker = None

@@ -88,7 +88,7 @@ def main():
     print("\n[5] 时间线档位切换功能级(0.8.5实测修: stale tile+签名吞刷新)")
     from PIL import Image as _Img
     from app import media
-    from app.ui.timeline_page import TimelinePage
+    from app.ui.timeline import TimelinePage
     lib.fill_species()
     code2 = lib.conn.execute(
         "SELECT code FROM species LIMIT 1").fetchone()["code"]
