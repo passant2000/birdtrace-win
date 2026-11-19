@@ -93,6 +93,12 @@ QLabel#AppTitle {{
     background: transparent; padding: 4px 0 0 0;
 }}
 QLabel#AppSubtitle {{ color: {c["LABEL_2"]}; font-size: 12px; background: transparent; }}
+/* 分组侧栏(UI重设计c2): 组标题小字+分隔线 */
+QLabel#SidebarGroup {{
+    color: {c["LABEL_3"]}; font-size: 12px; font-weight: 700;
+    background: transparent; padding: 2px 6px 0 6px;
+}}
+QFrame#SidebarSep {{ color: {c["SEP"]}; background: {c["SEP"]}; max-height: 1px; border: none; }}
 
 QPushButton#NavItem {{
     color: {c["LABEL"]}; background: transparent; border: none;

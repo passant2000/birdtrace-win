@@ -19,18 +19,29 @@ from .review_page import ReviewPage
 from .settings_page import SettingsPage
 
 
-def _nav() -> list[tuple[str, str]]:
-    """导航项(构建时求值t(), 语言切换整窗重建后标签随新语言)。"""
+def _nav() -> list[tuple[str, str, str]]:
+    """导航项(key, 标签, 分组)。构建时求值t(), 语言切换整窗重建后随新语言。
+    分组(UI重设计c2): gallery图库 / archive档案 / tidy整理 / bottom底部
+    ——档案组=生涯/作品集(年鉴随后插入此组); 首页(c7)置顶无分组。"""
     return [
-        ("settings", t("设置", "Settings")),
-        ("import", t("导入", "Import")),
-        ("timeline", t("时间线", "Timeline")),
-        ("species", t("鸟种库", "Species")),
-        ("map", t("鸟点地图", "Map")),
-        ("review", t("待复核", "Pending review")),
-        ("stats", t("成就", "Achievements")),
-        ("about", t("关于", "About")),
+        ("timeline", t("时间线", "Timeline"), "gallery"),
+        ("species", t("鸟种库", "Species"), "gallery"),
+        ("map", t("鸟点地图", "Map"), "gallery"),
+        ("stats", t("成就", "Achievements"), "archive"),
+        ("review", t("待复核", "Pending review"), "tidy"),
+        ("import", t("导入", "Import"), "tidy"),
+        ("settings", t("设置", "Settings"), "bottom"),
+        ("about", t("关于", "About"), "bottom"),
     ]
+
+
+def _nav_group_label(group: str) -> str:
+    """分组标题(组内拖排/持久化按组; bottom组不显示标题, 用分隔线)。"""
+    return {
+        "gallery": t("图库", "Gallery"),
+        "archive": t("档案", "Archive"),
+        "tidy": t("整理", "Organize"),
+    }.get(group, "")
 
 
 class MainWindow(QMainWindow):
@@ -79,6 +90,10 @@ class MainWindow(QMainWindow):
                 self._nav_drag_btn = obj
                 self._nav_drag_origin = ev.globalPosition().toPoint()
                 self._nav_dragged = False
+                # 组内拖排(c2): 记住拖的是哪个键, 插入位只在同组内算
+                self._nav_drag_key = next(
+                    (k for k, b in self._nav_buttons.items() if b is obj),
+                    None)
         elif et == QEvent.MouseMove and getattr(self, "_nav_drag_btn", None):
             pos = ev.globalPosition().toPoint()
             if not self._nav_dragged:
@@ -102,13 +117,16 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, ev)
 
     def _nav_drag_to(self, cursor_y: int):
-        """按光标全局Y把拖动中的按钮插到目标位置(以其他按钮中心为界)。"""
+        """按光标全局Y把拖动中的按钮插到目标位置(以其他按钮中心为界)。
+        c2起限制在分组内: others=同组按钮, 跨组拖动不动。"""
         b = self._nav_drag_btn
         lay = self._nav_lay
         if b is None or lay.indexOf(b) < 0:
             return
-        others = [w for w in self._nav_buttons.values()
-                  if w is not b and lay.indexOf(w) >= 0]
+        drag_group = self._nav_group.get(getattr(self, "_nav_drag_key", ""), None)
+        others = [w for k, w in self._nav_buttons.items()
+                  if w is not b and lay.indexOf(w) >= 0
+                  and self._nav_group.get(k) == drag_group]
         others.sort(key=lay.indexOf)
         pos = 0
         for w in others:
@@ -121,8 +139,9 @@ class MainWindow(QMainWindow):
         # 开始——必须按"其他按钮的实际布局索引"插入(2026-11-06实测:
         # 直接insertWidget(pos)会插到标题区, 拖动只挪一格)
         lay.removeWidget(b)
-        others = [w for w in self._nav_buttons.values()
-                  if w is not b and lay.indexOf(w) >= 0]
+        others = [w for k, w in self._nav_buttons.items()
+                  if w is not b and lay.indexOf(w) >= 0
+                  and self._nav_group.get(k) == drag_group]
         others.sort(key=lay.indexOf)
         if not others:
             lay.insertWidget(0, b)
@@ -135,10 +154,14 @@ class MainWindow(QMainWindow):
         lay.activate()
 
     def _save_nav_order(self):
-        keys = [k for k, b in self._nav_buttons.items()
-                if self._nav_lay.indexOf(b) >= 0]
-        keys.sort(key=lambda k: self._nav_lay.indexOf(self._nav_buttons[k]))
-        self.lib.set_setting("nav_order", ",".join(keys))
+        # c2起按组持久化(nav_order:<group>); 旧版整条nav_order(无冒号)
+        # 是分组前顺序, 不再适用——读到处直接丢弃, 不迁移
+        for g in set(self._nav_group.values()):
+            keys = [k for k, b in self._nav_buttons.items()
+                    if self._nav_group[k] == g
+                    and self._nav_lay.indexOf(b) >= 0]
+            keys.sort(key=lambda k: self._nav_lay.indexOf(self._nav_buttons[k]))
+            self.lib.set_setting(f"nav_order:{g}", ",".join(keys))
 
     def _nav_click(self, key: str):
         # 拖动重排刚发生过: 松手仍落在按钮内会触发clicked——不切页
@@ -182,7 +205,7 @@ class MainWindow(QMainWindow):
         from .about_page import AboutPage
         self.pages["about"] = AboutPage(self.lib, self, self.assets)
         self.pages["settings"] = SettingsPage(self.lib, self)
-        for key, _ in _nav():
+        for key, _l, _g in _nav():
             if self.pages[key] is not None:
                 self.stack.addWidget(self.pages[key])
         root.addWidget(self.stack, 1)
@@ -215,23 +238,51 @@ class MainWindow(QMainWindow):
         lay.addSpacing(18)
 
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_group: dict[str, str] = {}
         self._nav_lay = lay
-        # 拖动重排(2026-11-04用户): 记住上次顺序(nav_order设置)
-        order_raw = self.lib.get_setting("nav_order", "")
+        # 分组渲染(UI重设计c2): 组标题+组内按钮; bottom组用分隔线不用标题
         nav_items = _nav()
-        if order_raw:
-            keys = [k for k in order_raw.split(",") if k in dict(nav_items)]
-            keys += [k for k, _l in nav_items if k not in keys]
-            nav_items = [(k, dict(nav_items)[k]) for k in keys]
-        for key, label in nav_items:
-            b = QPushButton(label)
-            b.setObjectName("NavItem")
-            b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, k=key: self._nav_click(k))
-            lay.addWidget(b)
-            self._nav_buttons[key] = b
-            b.installEventFilter(self)
+        groups: list[tuple[str | None, list[tuple[str, str]]]] = []
+        seen: dict[str | None, int] = {}
+        for key, label, group in nav_items:
+            if group not in seen:
+                seen[group] = len(groups)
+                groups.append((group, []))
+            groups[seen[group]][1].append((key, label))
+        # 组内自定义顺序(nav_order:<group>, 拖动重排持久化);
+        # 旧版nav_order(无冒号)=分组前整条顺序, 不再适用——丢弃按默认序
+        for gi, (g, members) in enumerate(groups):
+            if g:
+                raw = self.lib.get_setting(f"nav_order:{g}", "")
+                if raw:
+                    names = dict(members)
+                    order = [k for k in raw.split(",") if k in names]
+                    order += [k for k, _l in members if k not in order]
+                    groups[gi] = (g, [(k, names[k]) for k in order])
+        for gi, (g, members) in enumerate(groups):
+            if gi:
+                lay.addSpacing(8)
+            glab_text = _nav_group_label(g) if g else ""
+            if glab_text:
+                glab = QLabel(glab_text)
+                glab.setObjectName("SidebarGroup")
+                lay.addWidget(glab)
+            else:
+                # bottom组(设置/关于): 分隔线隔开, 不设组标题
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setObjectName("SidebarSep")
+                lay.addWidget(sep)
+            for key, label in members:
+                b = QPushButton(label)
+                b.setObjectName("NavItem")
+                b.setCheckable(True)
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(lambda _=False, k=key: self._nav_click(k))
+                lay.addWidget(b)
+                self._nav_buttons[key] = b
+                self._nav_group[key] = g or ""
+                b.installEventFilter(self)
         self._nav_buttons["about"].setChecked(True)
 
         lay.addStretch()
@@ -246,6 +297,10 @@ class MainWindow(QMainWindow):
 
     # ---------- 行为 ----------
     def switch_to(self, key: str):
+        # 旧键映射(UI重设计c5占位): "stats"(成就)并入生涯页后, 旧调用/
+        # --open-page stats 继续可用——life页就位前仍指stats, 行为不变
+        if key == "stats" and "life" in self.pages:
+            key = "life"
         # 离开当前页的清理钩子(如鸟种页停掉后台缩略图任务, 释放线程池
         # 与磁盘给即将到来的重页——2026-10-31地图首切卡顿治理的一环)
         old = self.stack.currentWidget()

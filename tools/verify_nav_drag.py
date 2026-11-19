@@ -59,6 +59,10 @@ def main():
                  if w._nav_lay.indexOf(b) >= 0]
         return [k for _i, k in sorted(items)]
 
+    def group_order(w, group):
+        """分组侧栏(c2): 只看某组内的按钮顺序。"""
+        return [k for k in order(w) if w._nav_group.get(k) == group]
+
     def press(btn, pos=None):
         p = pos or btn.rect().center()
         g = btn.mapToGlobal(p)
@@ -85,29 +89,47 @@ def main():
                          Qt.NoModifier)
         QApplication.sendEvent(btn, ev)
 
-    print("\n[1] 拖到列表底部(一次到位)")
-    before = order(win)
+    print("\n[1] 组内拖到底部(一次到位)")
     tl = win._nav_buttons["timeline"]
-    last_k = before[-1]
+    g_before = group_order(win, "gallery")
+    check(g_before[0] == "timeline", f"初始图库组序={g_before}")
+    last_k = g_before[-1]
     last_btn = win._nav_buttons[last_k]
     target_y = last_btn.mapToGlobal(last_btn.rect().center()).y() + 10
     press(tl)
     move(tl, target_y)
     app.processEvents()
-    check(order(win)[-1] == "timeline",
-          f"timeline已到最后一位 ({order(win)})")
+    check(group_order(win, "gallery")[-1] == "timeline",
+          f"timeline已到图库组末位 ({group_order(win, 'gallery')})")
     release(tl, target_y)
     app.processEvents()
-    check(order(win)[-1] == "timeline", f"松手后顺序={order(win)}")
+    check(group_order(win, "gallery")[-1] == "timeline",
+          f"松手后组序={group_order(win, 'gallery')}")
 
-    print("\n[2] 拖回顶部 + 小幅移动不算拖动")
-    first_k = order(win)[0]
-    first_btn = win._nav_buttons[first_k]
-    top_y = first_btn.mapToGlobal(first_btn.rect().center()).y() - 10
+    print("\n[1b] 跨组拖动不动(图库→整理组方向)")
+    g_snap = group_order(win, "gallery")
+    review_btn = win._nav_buttons["review"]
+    cross_y = review_btn.mapToGlobal(review_btn.rect().center()).y()
+    press(tl)
+    move(tl, cross_y)
+    app.processEvents()
+    release(tl, cross_y)
+    app.processEvents()
+    check(group_order(win, "gallery") == g_snap
+          and win._nav_group["timeline"] == "gallery",
+          "timeline仍在图库组原位(组间隔离)")
+    check(group_order(win, "tidy") == [k for k in order(win)
+          if win._nav_group.get(k) == "tidy"],
+          "整理组未被混入")
+
+    print("\n[2] 拖回组顶 + 小幅移动不算拖动")
+    top_btn = win._nav_buttons[group_order(win, "gallery")[0]]
+    top_y = top_btn.mapToGlobal(top_btn.rect().center()).y() - 10
     press(tl)
     move(tl, top_y)
     app.processEvents()
-    check(order(win)[0] == "timeline", f"拖到顶部一次到位 ({order(win)})")
+    check(group_order(win, "gallery")[0] == "timeline",
+          f"拖到组顶一次到位 ({group_order(win, 'gallery')})")
     release(tl, top_y)
     app.processEvents()
 
@@ -161,16 +183,20 @@ def main():
     check(win.stack.currentWidget() is win.pages["species"],
           "拖到外面松手后, 下一次点击正常生效")
 
-    print("\n[4] 顺序持久化 + 重启恢复")
-    saved = lib.get_setting("nav_order", "")
-    live = order(win)
-    check(saved.split(",") == live, f"顺序已存 ({saved})")
+    print("\n[4] 组内顺序持久化 + 重启恢复 + 旧格式丢弃")
+    live = group_order(win, "gallery")
+    saved = lib.get_setting("nav_order:gallery", "")
+    check(saved.split(",") == live, f"组序已存nav_order:gallery ({saved})")
+    # 旧版整条nav_order(无冒号)=分组前顺序, 分组后必须被丢弃不生效
+    lib.set_setting("nav_order", "about,settings,import,review,stats,"
+                                 "map,species,timeline")
     win.close()
     win2 = MainWindow(lib, PROJ / "assets")
     win2.show()
     for _ in range(5):
         app.processEvents()
-    check(order(win2) == live, f"重启后顺序恢复 ({order(win2)})")
+    check(group_order(win2, "gallery") == live,
+          f"重启后组序恢复({group_order(win2, 'gallery')}), 旧nav_order被丢弃")
     win2.close()
 
     print("\n" + ("FAIL" if FAILED["v"] else "ALL PASS"))
