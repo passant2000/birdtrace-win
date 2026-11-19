@@ -34,11 +34,12 @@ nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}#q{display:
 main{max-width:1180px;margin:0 auto;padding:16px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
 .card{background:var(--card);border-radius:12px;overflow:hidden;border:1px solid var(--line)}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--line)}
 .card .cap{padding:8px 10px}.card .cap b{font-size:14px;display:block}.card .cap span{color:var(--tx2);font-size:12px}
+.chip{display:inline-block;border:1px solid var(--line);background:var(--card);color:var(--tx);border-radius:999px;padding:8px 16px;margin:6px 4px;cursor:pointer;font-size:14px}.chip:hover{border-color:var(--ac)}.chip.on{background:var(--ac);color:#fff;border-color:var(--ac)}.ah{margin:20px 4px 6px;color:var(--tx2);font-size:13px;font-weight:600}
 .tl{border-left:2px solid var(--line);margin-left:10px;padding-left:18px}.tl .item{margin:0 0 14px}.tl .item b{font-size:14px}.tl .item span{color:var(--tx2);font-size:12px;margin-left:8px}
 .empty{text-align:center;color:var(--tx2);padding:48px 0}footer{text-align:center;color:var(--tx2);font-size:12px;padding:28px 12px}</style></head>
 <body><header><h1>__TITLE__</h1><div class="sub">__SUB__</div>
 <div class="stats"><div><b>__NP__</b><span>__L_PHOTOS__</span></div><div><b>__NS__</b><span>__L_SPECIES__</span></div><div><b>__NM__</b><span>__L_MONTHS__</span></div></div></header>
-<nav id="tabs"><button data-v="species" class="on">__L_TAB_SPECIES__</button><button data-v="time">__L_TAB_TIME__</button><button data-v="region">__L_TAB_REGION__</button></nav>
+<nav id="tabs"><button data-v="species" class="on">__L_TAB_SPECIES__</button><button data-v="time">__L_TAB_TIME__</button><button data-v="region">__L_TAB_REGION__</button><button data-v="albums" id="tab-albums">__L_TAB_ALBUMS__</button></nav>
 <input id="q" placeholder="__L_SEARCH__"><main id="view"></main><footer>__FOOT__</footer>
 <script>const G=__G__;const im=(h,s)=>`images/${h}.${s}.webp`;
 function esc(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
@@ -46,7 +47,9 @@ let view="species";function render(){const q=(document.getElementById("q").value
 if(view==="species"){const list=G.species.filter(s=>!q||(s.cn+s.en+s.code).toLowerCase().includes(q));
 v.innerHTML=list.length?`<div class="grid">`+list.map(s=>`<div class="card"><img loading="lazy" src="${im(s.best,256)}" alt="${esc(s.cn)}"><div class="cap"><b>${esc(s.cn)}</b><span>${esc(s.en)} · ${s.count} __L_N_PHOTOS__</span></div></div>`).join("")+`</div>`:`<div class="empty">__EMPTY__</div>`}
 else if(view==="time"){v.innerHTML=`<div class="tl">`+G.months.map(m=>`<div class="item"><b>${esc(m.ym)}</b><span>${m.n} __L_N_PHOTOS__</span></div>`).join("")+`</div>`}
-else{v.innerHTML=`<div class="grid">`+G.regions.map(r=>`<div class="card"><div class="cap" style="padding:22px 14px"><b>${esc(r.region||"")}</b><span>${r.n} __L_N_PHOTOS__</span></div></div>`).join("")+`</div>`}}
+else if(view==="region"){v.innerHTML=`<div class="grid">`+G.regions.map(r=>`<div class="card"><div class="cap" style="padding:22px 14px"><b>${esc(r.region||"")}</b><span>${r.n} __L_N_PHOTOS__</span></div></div>`).join("")+`</div>`}
+else if(view==="albums"){(function(v){const secs=[];const sec=(tt,arr)=>{if(arr&&arr.length)secs.push(`<div class="ah">${esc(tt)}</div>`+arr.map(a=>`<div class="chip" data-t="${esc(a.name)}">${esc(a.name)} · ${a.photos.length}</div>`).join(""))};sec(__L_TAGS__,G.tags);sec(__L_COLLECTIONS__,G.collections);v.innerHTML=secs.length?secs.join(""):`<div class="empty">__EMPTY2__</div>`;v.querySelectorAll(".chip").forEach(c=>c.addEventListener("click",()=>{const name=c.dataset.t;const all=[...(G.tags||[]),...(G.collections||[])];const grp=all.find(x=>x.name===name);if(!grp)return;v.innerHTML=`<div class="chip on" id="back-albums">‹ __L_TAB_ALBUMS__</div>`+`<div class="grid">`+grp.photos.map(p=>`<div class="card"><img loading="lazy" src="${im(p.h,256)}"><div class="cap"><b>${esc(p.cn||"")}</b></div></div>`).join("")+`</div>`;document.getElementById("back-albums").addEventListener("click",render)}))})(v)}
+if(!(G.tags&&G.tags.length)&&!(G.collections&&G.collections.length)){const tb=document.getElementById("tab-albums");if(tb)tb.style.display="none"}
 document.getElementById("tabs").addEventListener("click",e=>{if(e.target.dataset.v){view=e.target.dataset.v;document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b===e.target));render()}});
 document.getElementById("q").addEventListener("input",render);render();</script></body></html>
 """
@@ -121,6 +124,13 @@ def build_site(lib, dest: Path) -> dict:
             .replace("__L_TAB_SPECIES__", t("鸟种", "Species"))
             .replace("__L_TAB_TIME__", t("时间轴", "Timeline"))
             .replace("__L_TAB_REGION__", t("地区", "Regions"))
+            .replace("__L_TAB_ALBUMS__", t("标签 · 作品集",
+                                           "Tags · Collections"))
+            .replace("__L_TAGS__", "'" + t("标签", "Tags") + "'")
+            .replace("__L_COLLECTIONS__", "'" + t("作品集", "Collections")
+                     + "'")
+            .replace("__EMPTY2__", t("还没有标签或作品集",
+                                     "No tags or collections yet"))
             .replace("__L_SEARCH__", t("搜索鸟种名 / 拼音缩写",
                                        "Search species / pinyin"))
             .replace("__L_N_PHOTOS__", t("张", "photos"))

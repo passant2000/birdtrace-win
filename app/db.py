@@ -1940,6 +1940,44 @@ class Library:
             "SELECT b.region_id AS region, COUNT(*) AS n FROM photos p "
             "JOIN batches b ON b.id=p.batch_id GROUP BY b.region_id "
             "ORDER BY n DESC").fetchall()]
+        # 标签/作品集筛选视图(10a兑现预留字段): 只收站内照片(排除拒绝片),
+        # 每张带主鸟种名做卡片说明; 空组不进数据
+        h2cn: dict[str, str] = {}
+        for r in self.conn.execute(
+                "SELECT p.file_hash h, COALESCE(s.cn, s.en, '') cn "
+                "FROM photos p JOIN v_records v ON v.photo_id=p.id AND v.rank=1 "
+                "LEFT JOIN species s ON s.code=v.eff_code "
+                "WHERE (p.pick IS NULL OR p.pick<>'reject')"):
+            h2cn.setdefault(r["h"], r["cn"] or "")
+
+        def _grp_photos(member_pids: list[int]) -> list[dict]:
+            out, seen = [], set()
+            for pid in member_pids:
+                r = self.conn.execute(
+                    "SELECT file_hash h FROM photos WHERE id=? AND "
+                    "(pick IS NULL OR pick<>'reject')", (pid,)).fetchone()
+                if r and r["h"] in h2cn and r["h"] not in seen:
+                    seen.add(r["h"])
+                    out.append({"h": r["h"], "cn": h2cn[r["h"]]})
+            return out
+
+        tags = []
+        for r in self.conn.execute(
+                "SELECT t.id, t.name FROM tags t ORDER BY t.name"):
+            rows = self.conn.execute(
+                "SELECT p.id FROM photo_tags pt JOIN photos p "
+                "ON p.id=pt.photo_id WHERE pt.tag_id=? AND "
+                "(p.pick IS NULL OR p.pick<>'reject') ORDER BY p.id",
+                (r["id"],)).fetchall()
+            photos = _grp_photos([x["id"] for x in rows])
+            if photos:
+                tags.append({"name": r["name"], "photos": photos})
+        collections = []
+        for r in self.conn.execute(
+                "SELECT id, name FROM collections ORDER BY name"):
+            photos = _grp_photos(self.collection_photos_of(r["id"]))
+            if photos:
+                collections.append({"name": r["name"], "photos": photos})
         n_site = self.conn.execute(
             "SELECT COUNT(*) FROM photos "
             "WHERE (pick IS NULL OR pick<>'reject')").fetchone()[0]
@@ -1950,7 +1988,7 @@ class Library:
                         "SELECT id FROM photos ORDER BY id DESC LIMIT 1"
                     ).fetchone()["id"]).get("creator", "") if self.photo_count() else ""}
         return {"meta": meta, "species": species, "months": months,
-                "regions": regions, "tags": [], "collections": []}
+                "regions": regions, "tags": tags, "collections": collections}
 
     def gear_stats(self) -> dict:
         """装备榜(1.0冲刺⑥): 机身/镜头出片数(数据全在exif表)。
