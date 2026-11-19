@@ -302,6 +302,43 @@ class SelectBarMixin:
         if dlg.moved:
             self.refresh(force=True)
 
+    def _batch_write_xmp(self):
+        from ..core.xmp_write import maybe_write_for_photo
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog
+        if self.lib.get_setting("xmp_writeback", "0") != "1":
+            QMessageBox.information(
+                self.win, t("XMP 写回未开启", "XMP write-back is off"),
+                t("先到 设置 → 版权信息 → 「XMP 鸟种写回」开启（默认关，"
+                  "建议先拿副本验证）。",
+                  "Enable it first: Settings → Copyright → XMP species "
+                  "write-back (off by default; verify on copies first)."))
+            return
+        ids = sorted(self._selected)
+        if not ids:
+            return
+        prog = QProgressDialog(t("正在写回 XMP…", "Writing XMP…"),
+                               t("取消", "Cancel"), 0, len(ids), self.win)
+        prog.setWindowModality(Qt.WindowModal)
+        ok = skip = fail = 0
+        for i, pid in enumerate(ids):
+            if prog.wasCanceled():
+                break
+            r = self.lib.conn.execute(
+                "SELECT path FROM photos WHERE id=?", (pid,)).fetchone()
+            if r and r["path"] and not str(r["path"]).lower().endswith(
+                    (".jpg", ".jpeg")):
+                skip += 1
+            elif maybe_write_for_photo(self.lib, pid):
+                ok += 1
+            else:
+                fail += 1
+            prog.setValue(i + 1)
+        prog.close()
+        QMessageBox.information(
+            self.win, t("XMP 写回完成", "XMP write-back done"),
+            t(f"成功 {ok} · 跳过(非JPEG) {skip} · 失败 {fail}",
+              f"Written {ok} · skipped (non-JPEG) {skip} · failed {fail}"))
+
     def _batch_set_spot(self):
         ids = sorted(self._selected)
         if not ids:
@@ -613,6 +650,17 @@ class SelectBarMixin:
             "one photo can belong to many"))
         self.col_btn.clicked.connect(self._add_to_collection)
         sb.addWidget(self.col_btn)
+        # ⑪XMP回填(默认关, 开启后可用): 把当前生效鸟种批量写进原图XMP
+        self.xmp_btn = QPushButton(t("写回XMP", "Write XMP"))
+        self.xmp_btn.setCursor(Qt.PointingHandCursor)
+        self.xmp_btn.setToolTip(t(
+            "把所选照片当前生效的鸟种关键词/日期/版权写进 JPEG 的 XMP 段"
+            "（需先在设置里开启 XMP 写回；只处理 JPEG，失败逐条报告）",
+            "Write the effective species keywords/date/copyright into the "
+            "JPEG XMP segment (enable in Settings first; JPEG only, "
+            "per-file failures reported)"))
+        self.xmp_btn.clicked.connect(self._batch_write_xmp)
+        sb.addWidget(self.xmp_btn)
         self.rm_btn = QPushButton(t("从鸟迹移除…", "Remove from BirdTrace…"))
         self.rm_btn.setStyleSheet(
             "QPushButton{color:#FF3B30;background:transparent;"

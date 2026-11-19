@@ -109,6 +109,24 @@ class SettingsPage(QWidget):
         cp_hint.setWordWrap(True)
         cp_hint.setObjectName("Hint")
         form_cp.addWidget(cp_hint)
+        # ⑪XMP写回(可选, 默认关): 人工确认后把鸟种关键词/日期/版权写进
+        # JPEG 的 XMP(供 Lightroom 读取); 首次启用弹"先在副本上验证"提示
+        xrow = QHBoxLayout()
+        xl = QLabel(t("XMP 鸟种写回（实验）", "XMP species write-back (experimental)"))
+        xl.setObjectName("RowLabel")
+        xl.setToolTip(t(
+            "开启后人工确认鸟种时, 把鸟种关键词/拍摄日期/版权声明写入该照片 "
+            "JPEG 的 XMP 段(供 Lightroom 等读取)。只写 JPEG; 原子写, 失败不动原文件。",
+            "When on, confirming a species writes keywords/date/copyright "
+            "into the JPEG's XMP segment for Lightroom. JPEG only; atomic "
+            "write that never touches the original on failure."))
+        from ..theme.widgets import ToggleSwitch as _TS
+        self.xmp_toggle = _TS(self.lib.get_setting("xmp_writeback", "0") == "1")
+        xrow.addWidget(xl)
+        xrow.addStretch(1)
+        xrow.addWidget(self.xmp_toggle)
+        form_cp.addLayout(xrow)
+        self.xmp_toggle.toggled.connect(self._toggle_xmp)
         lay.addWidget(card_cp)
 
         card2, form2 = make_card(t("识别", "Recognition"))
@@ -345,6 +363,26 @@ class SettingsPage(QWidget):
         lay.addWidget(card4)
 
         lay.addStretch(1)
+
+    def _toggle_xmp(self, on: bool):
+        from PySide6.QtWidgets import QMessageBox
+        if on and self.lib.get_setting("xmp_writeback", "0") != "1":
+            r = QMessageBox.warning(
+                self, t("开启 XMP 写回", "Enable XMP write-back"),
+                t("开启后，人工确认鸟种会直接修改照片文件的 XMP 数据段"
+                  "（原图像素不动，但确实在写文件）。\n\n"
+                  "建议先拿一两张照片的副本试一轮，确认 Lightroom 等"
+                  "软件能正常读取后再全量使用。现在开启吗？",
+                  "Confirming species will now write an XMP segment into "
+                  "the photo files themselves (pixels untouched, but files "
+                  "are modified).\n\nTry it on copies of one or two "
+                  "photos first and make sure Lightroom reads them, then "
+                  "enable for real. Enable now?"),
+                QMessageBox.Yes | QMessageBox.No)
+            if r != QMessageBox.Yes:
+                self.xmp_toggle.setChecked(False)
+                return
+        self.lib.set_setting("xmp_writeback", "1" if on else "0")
 
     def _save_copyright(self):
         self.lib.copyright_defaults_set(

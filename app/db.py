@@ -726,6 +726,22 @@ class Library:
             (code, record_id))
         self.conn.commit()
         self._sidecar_touch(record_id=record_id)
+        self._xmp_touch(record_id=record_id)   # ⑪可选写回(设置默认关)
+
+    def _xmp_touch(self, record_id: int):
+        """⑪XMP写回钩子: 设置开启且为JPEG时, 人工确认后把生效鸟种/
+        日期/版权写进原图XMP(原子写, 失败静默——绝不影响确认本身)。"""
+        try:
+            if self.get_setting("xmp_writeback", "0") != "1":
+                return
+            r = self.conn.execute(
+                "SELECT photo_id FROM records WHERE id=?",
+                (record_id,)).fetchone()
+            if r:
+                from .core.xmp_write import maybe_write_for_photo
+                maybe_write_for_photo(self, r["photo_id"])
+        except Exception:
+            pass
 
     def set_species_batch(self, photo_ids: list[int], to_code: str,
                           from_code: str | None = None) -> int:
@@ -750,6 +766,13 @@ class Library:
                 n += 1
         self.conn.commit()
         self._sidecar_touch(photo_ids=list(photo_ids))
+        if n and self.get_setting("xmp_writeback", "0") == "1":
+            for pid in photo_ids:   # ⑪批量改判同样写回(失败静默)
+                try:
+                    from .core.xmp_write import maybe_write_for_photo
+                    maybe_write_for_photo(self, pid)
+                except Exception:
+                    pass
         return n
 
     # ---------- 选片工作流(1.0冲刺①+⑨culling, 2026-11-18) ----------
