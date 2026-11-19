@@ -167,7 +167,7 @@ def main():
           "随后正常点击仍生效")
 
     print("\n[3] 拖到按钮外松手不吞下一次点击")
-    b2 = win._nav_buttons["stats"]
+    b2 = win._nav_buttons["life"]
     g0 = b2.mapToGlobal(b2.rect().center())
     press(b2)
     move(b2, g0.y() + 120)       # 拖出去

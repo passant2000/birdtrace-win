@@ -1197,6 +1197,65 @@ class Library:
     def lifer_photo_ids(self) -> set[int]:
         return {li["photo_id"] for li in self.lifers() if li["photo_id"]}
 
+    # ---------- 生涯档案(UI重设计c5, 只读查询) ----------
+    def lifer_feed(self) -> list[dict]:
+        """生涯新种流(生涯页Tab2): lifers()同口径(编号/首见时间/首见照片)
+        + 首见照片的地点(spot_name, 无鸟点回落batch地区显示名)与年鸟标记
+        (首见在今年且生涯首见往年有过——与year_summary同一判定)。
+        返回按首见时间升序, no=lifer_no(1..N连续)。"""
+        import datetime
+        rows = self.lifers()
+        if not rows:
+            return []
+        year = datetime.date.today().strftime("%Y")
+        # 地点批量查(首见照片可能不存在=库外物种, 地点留空)
+        out = []
+        pid_map = {li["photo_id"]: li for li in rows if li["photo_id"]}
+        spots: dict[int, dict] = {}
+        if pid_map:
+            ph = ",".join("?" * len(pid_map))
+            for r in self.conn.execute(
+                    f"SELECT p.id, sp.name AS spot_name, b.region_id "
+                    f"FROM photos p LEFT JOIN spots sp ON sp.id=p.spot_id "
+                    f"LEFT JOIN batches b ON b.id=p.batch_id "
+                    f"WHERE p.id IN ({ph})", list(pid_map)).fetchall():
+                spots[r["id"]] = dict(r)
+        from .core import regions
+        for li in rows:
+            d = dict(li)
+            d["no"] = li["lifer_no"]
+            sp = spots.get(li["photo_id"]) if li["photo_id"] else None
+            d["spot_name"] = (sp or {}).get("spot_name") or ""
+            rid = (sp or {}).get("region_id")
+            d["region"] = regions.region_display(rid) if rid else ""
+            d["year_bird"] = (li["first_at"] or "")[:4] == year
+            out.append(d)
+        return out
+
+    def day_counts(self, year: str | None = None) -> dict[str, int]:
+        """日期(YYYY-MM-DD)→照片数(生涯页热力图)。日期口径=exif.dt_original
+        回落photos.added_at, 与timeline()分组同口径。year给定时只统计该年。"""
+        sql = ("SELECT substr(COALESCE(e.dt_original, p.added_at),1,10) d, "
+               "COUNT(*) c FROM photos p LEFT JOIN exif e ON e.photo_id=p.id ")
+        args: list = []
+        if year:
+            sql += "WHERE substr(COALESCE(e.dt_original, p.added_at),1,4)=? "
+            args.append(str(year))
+        sql += "GROUP BY d"
+        return {r["d"]: r["c"] for r in self.conn.execute(sql, args).fetchall()
+                if r["d"]}
+
+    def province_species_counts(self) -> list[tuple[str, int]]:
+        """省级行(region_id)→收录鸟种数(生涯页足迹choropleth)。
+        口径=photos→batches.region_id(导入时选的地区, 中国行即省级);
+        生效鸟种=v_records.rank=1 DISTINCT。非CN前缀行原样返回由UI过滤。"""
+        rows = self.conn.execute(
+            "SELECT b.region_id rid, COUNT(DISTINCT v.eff_code) c "
+            "FROM photos p JOIN batches b ON b.id=p.batch_id "
+            "JOIN v_records v ON v.photo_id=p.id AND v.rank=1 "
+            "WHERE b.region_id IS NOT NULL GROUP BY rid ORDER BY c DESC")
+        return [(r["rid"], r["c"]) for r in rows]
+
     # ---------- 年鸟（今年首见且生涯首见不在今年） ----------
     def year_summary(self, year: str) -> dict:
         """{new: 生涯新种数(首见在今年), yearbird: 年鸟回归数}"""

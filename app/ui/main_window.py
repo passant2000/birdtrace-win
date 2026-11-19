@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow,
 
 from ..db import Library
 from ..i18n import t
-from . import map_page, stats_page, species_page, timeline_page
+from . import life_page, map_page, species_page, timeline_page
 from .import_page import ImportPage
 from .review_page import ReviewPage
 from .settings_page import SettingsPage
@@ -27,7 +27,7 @@ def _nav() -> list[tuple[str, str, str]]:
         ("timeline", t("时间线", "Timeline"), "gallery"),
         ("species", t("鸟种库", "Species"), "gallery"),
         ("map", t("鸟点地图", "Map"), "gallery"),
-        ("stats", t("成就", "Achievements"), "archive"),
+        ("life", t("观鸟生涯", "Birding life"), "archive"),
         ("collections", t("作品集", "Collections"), "archive"),
         ("review", t("待复核", "Pending review"), "tidy"),
         ("import", t("导入", "Import"), "tidy"),
@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
         # 地图页含WebEngine(重), 首次切入时才创建
         self.pages["map"] = None
         self.pages["review"] = ReviewPage(self.lib, self)
-        self.pages["stats"] = stats_page.StatsPage(self.lib, self)
+        self.pages["life"] = life_page.LifePage(self.lib, self)
         from .collections_page import CollectionsPage
         self.pages["collections"] = CollectionsPage(self.lib, self)
         from .about_page import AboutPage
@@ -300,9 +300,9 @@ class MainWindow(QMainWindow):
 
     # ---------- 行为 ----------
     def switch_to(self, key: str):
-        # 旧键映射(UI重设计c5占位): "stats"(成就)并入生涯页后, 旧调用/
-        # --open-page stats 继续可用——life页就位前仍指stats, 行为不变
-        if key == "stats" and "life" in self.pages:
+        # 旧键映射(UI重设计c5): 成就页已并入生涯页, 旧调用/--open-page
+        # stats 继续可用
+        if key == "stats":
             key = "life"
         # 离开当前页的清理钩子(如鸟种页停掉后台缩略图任务, 释放线程池
         # 与磁盘给即将到来的重页——2026-10-31地图首切卡顿治理的一环)
@@ -334,7 +334,7 @@ class MainWindow(QMainWindow):
         recognizing = self.worker is not None and self.worker.isRunning()
         skip = set()
         if importing:
-            skip |= {"timeline", "species", "stats", "review"}
+            skip |= {"timeline", "species", "life", "review"}
         if recognizing:
             skip |= {"timeline", "review"}
         self._skipped_pages = skip if skip else getattr(self, "_skipped_pages", set()) & set()

@@ -157,15 +157,23 @@ class _Bridge(QObject):
 
 
 class DistributionMapDialog(QDialog):
-    """省级分布choropleth对话框(模态)。入口: 图鉴页地区分布卡片。"""
+    """省级分布choropleth对话框(模态)。入口: 图鉴页地区分布卡片。
+    UI重设计c5扩展: title/payload_fn 可选参数供生涯页足迹图复用同一
+    渲染管线(数据源换成调用方注入的 {adcode:{v,tip}}), 缺省行为不变。"""
 
-    def __init__(self, lib, win, code: str, parent=None):
+    def __init__(self, lib, win, code: str, parent=None,
+                 title: str | None = None,
+                 payload_fn=None):
         super().__init__(parent or win)
         self.lib = lib
         self.code = code
-        sp = lib.species_info(code)
-        name = sname(sp["cn"], sp["en"])
-        self.setWindowTitle(t(f"{name} · 分布地图", f"{name} · Distribution map"))
+        self._payload_fn = payload_fn
+        if title:
+            self.setWindowTitle(title)
+        else:
+            sp = lib.species_info(code)
+            name = sname(sp["cn"], sp["en"])
+            self.setWindowTitle(t(f"{name} · 分布地图", f"{name} · Distribution map"))
         self.resize(1060, 720)
 
         v = QVBoxLayout(self)
@@ -228,7 +236,8 @@ class DistributionMapDialog(QDialog):
             self.web.page().runJavaScript(e)
         self._js = []
         import json
-        payload = region_tooltip_map(self.code)
+        payload = self._payload_fn() if self._payload_fn else \
+            region_tooltip_map(self.code)
         self.js(f"apiSetValues({json.dumps(payload, ensure_ascii=False)})")
 
 

@@ -60,7 +60,7 @@ def main():
     win.raise_()
     win.activateWindow()
 
-    pages = ["timeline", "import", "species", "map", "review", "stats",
+    pages = ["timeline", "import", "species", "map", "review", "life",
              "about", "settings"]
     state = {"i": 0}
 

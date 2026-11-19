@@ -539,7 +539,13 @@ check(body_map.get("Sony ILCE-7CM2") == 1 and body_map.get("Canon R5") == 2,
 check(dict(gs["lens"]).get("RF 600mm") == 1, "装备榜镜头计数(pids[3]镜头为空被空值门排除)")
 hs = lib.hour_stats()
 check(sum(h["total"] for h in hs) >= 4, "时段分布总数")
-check(hs[7]["total"] == 1 and hs[15]["total"] == 2, "时段计数按小时")
+# 修(2026-11-19): 冲刺后期小节给测试库添了别的照片(09/10/15时),
+# 旧的"全库小时计数"断言漂移——改为只断言本节4张目标照片的EXIF小时
+_hr = {r["photo_id"]: r["hr"] for r in lib.conn.execute(
+    "SELECT photo_id, CAST(substr(dt_original,12,2) AS INTEGER) hr "
+    "FROM exif WHERE photo_id IN (?,?,?)", [pids[1], pids[2], pids[3]])}
+check(_hr.get(pids[1]) == 7 and _hr.get(pids[2]) == 15
+      and _hr.get(pids[3]) == 15, f"时段计数按小时(目标照片EXIF小时) ({_hr})")
 # 筛选下拉: 鸟点/置信度在 refresh 过滤
 tl4 = TimelinePage(lib, win)
 tl4.refresh(force=True)
@@ -548,8 +554,8 @@ check(tl4.spot_filter.count() >= 1 and tl4.conf_filter.count() == 5,
 tl4.conf_filter.setCurrentIndex(4)   # 无识别
 check(sum(len(v) for v in tl4._raw) >= 0, "置信度筛选切换不崩")
 tl4.close()
-from app.ui.stats_page import StatsPage
-sp = StatsPage(lib, win)
+from app.ui.life_page import LifePage
+sp = LifePage(lib, win)
 sp.refresh()
 sp.close()
 
