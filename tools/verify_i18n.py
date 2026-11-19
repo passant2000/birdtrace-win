@@ -303,6 +303,11 @@ def main():
             except Exception as e:
                 check(False, f"组内对比对话框可构造 ({e})")
             try:
+                from app.ui.copyright_dialog import CopyrightDialog
+                dlgs.append(("copyright", CopyrightDialog(lib, win, 1)))
+            except Exception as e:
+                check(False, f"版权对话框可构造 ({e})")
+            try:
                 dlgs.append(("rebox", ReboxDialog(lib, win, 1)))
             except Exception as e:
                 check(False, f"画框识别可构造 ({e})")

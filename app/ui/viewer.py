@@ -308,6 +308,24 @@ class PhotoViewer(QDialog):
         tag_row.addWidget(self.tag_edit_btn)
         pl.addLayout(tag_row)
 
+        # 版权状态行(UI重设计c6, 补⑰照片级UI): 展示三态概要+编辑入口
+        cp_row = QHBoxLayout()
+        self.cp_lab = QLabel("")
+        self.cp_lab.setWordWrap(True)
+        self.cp_lab.setStyleSheet(f"font-size:12px;color:{theme.LABEL_2};"
+                                  "background:transparent;")
+        cp_row.addWidget(self.cp_lab, 1)
+        self.cp_btn = QPushButton(t("版权…", "Copyright…"))
+        self.cp_btn.setCursor(Qt.PointingHandCursor)
+        self.cp_btn.setToolTip(t(
+            "本照片的版权三态：留空继承库级默认 / 填写覆盖 / 置空不用默认"
+            "（分享卡署名与静态站展示单源取这里）",
+            "Per-photo copyright tri-state: empty inherits library "
+            "defaults / typed overrides / ∅ explicitly none"))
+        self.cp_btn.clicked.connect(self._edit_copyright)
+        cp_row.addWidget(self.cp_btn)
+        pl.addLayout(cp_row)
+
         pl.addStretch(1)
 
         # 连拍组级操作(0.8.6用户: 连拍一组都识别错): 当前照片属于连拍组
@@ -344,6 +362,15 @@ class PhotoViewer(QDialog):
                                      self.ids[self.index],
                                      on_done=lambda _s: self._load()))
         gb.addWidget(self.grescue_btn)
+        # 组内对比入口(UI重设计c6): 连拍右键菜单之外的第二入口——
+        # 用户实测"组内对比太隐蔽"
+        self.gcmp_btn = QPushButton(t("组内对比选片…", "Compare & pick…"))
+        self.gcmp_btn.setToolTip(t(
+            "并排对比整组连拍（滚轮缩放/推荐排序辅助），边看边打星定保留",
+            "Compare burst frames side by side (zoomable, with pick "
+            "recommendations); star and pick as you go"))
+        self.gcmp_btn.clicked.connect(self._compare_group)
+        gb.addWidget(self.gcmp_btn)
         gb.addStretch(1)
         pl.addWidget(self.group_bar)
 
@@ -559,15 +586,6 @@ class PhotoViewer(QDialog):
                 (self.photo or {}).get("pick_note") or "")
             self.pick_note_edit.blockSignals(False)
 
-    def _edit_tags(self):
-        if not self.photo:
-            return
-        from .tag_pick_dialog import TagPickDialog
-        pid = self.ids[self.index]
-        dlg = TagPickDialog(self.lib, self.win, pid)
-        dlg.exec()
-        self._sync_tags_lab()
-
     def _sync_tags_lab(self):
         pid = self.ids[self.index]
         tags = self.lib.tags_of(pid)
@@ -579,6 +597,53 @@ class PhotoViewer(QDialog):
             parts.append(t("作品集: ", "Collections: ") + "、".join(cols))
         self.tags_lab.setText("\n".join(parts) or
                               t("（未打标签）", "(no tags)"))
+        self._sync_copyright_lab()
+
+    # ---------- 版权三态(UI重设计c6) ----------
+    def _sync_copyright_lab(self):
+        row = self.lib.conn.execute(
+            "SELECT cp_json FROM photos WHERE id=?",
+            (self.ids[self.index],)).fetchone()
+        over: dict = {}
+        if row and row["cp_json"]:
+            try:
+                got = json.loads(row["cp_json"])
+                if isinstance(got, dict):
+                    over = got
+            except ValueError:
+                over = {}
+        if not over:
+            self.cp_lab.setText(t("版权：继承库级默认",
+                                  "Copyright: library defaults"))
+        else:
+            n_val = len([v for v in over.values() if v is not None])
+            n_none = len([v for v in over.values() if v is None])
+            self.cp_lab.setText(t(
+                f"版权：本照片自定义（{n_val} 项覆盖 · {n_none} 项置空）",
+                f"Copyright: customized for this photo "
+                f"({n_val} overrides · {n_none} blanked)"))
+
+    def _edit_copyright(self):
+        from .copyright_dialog import CopyrightDialog
+        dlg = CopyrightDialog(self.lib, self.win, self.ids[self.index])
+        dlg.exec()
+        if dlg.changed:
+            self._sync_copyright_lab()
+
+    def _compare_group(self):
+        from .compare_dialog import CompareDialog
+        dlg = CompareDialog(self.lib, self.win, self.ids[self.index])
+        dlg.exec()
+        self._load()
+
+    def _edit_tags(self):
+        if not self.photo:
+            return
+        from .tag_pick_dialog import TagPickDialog
+        pid = self.ids[self.index]
+        dlg = TagPickDialog(self.lib, self.win, pid)
+        dlg.exec()
+        self._sync_tags_lab()
 
     def _path_clicked(self, link: str):
         """点击路径: 资源管理器打开所在文件夹并选中该文件。"""

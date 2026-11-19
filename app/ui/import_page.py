@@ -192,8 +192,11 @@ class ImportPage(QWidget):
         row.addWidget(self.recursive)
         form.addLayout(row)
 
-        self.src_label = QLabel(t("尚未选择 · 支持JPG / PNG / WebP / HEIC",
-                                  "Nothing selected · JPG / PNG / WebP / HEIC supported"))
+        self.src_label = QLabel(t(
+            "尚未选择 · 支持JPG / PNG / WebP / HEIC"
+            "（同名 RAW/DNG 自动成对编目）",
+            "Nothing selected · JPG / PNG / WebP / HEIC supported "
+            "(same-name RAW/DNG pairs are cataloged together)"))
         self.src_label.setObjectName("Hint")
         form.addWidget(self.src_label)
         lay.addWidget(card)
