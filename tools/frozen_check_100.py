@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""1.0.0-test2 冻结实测: 中文路径库导入→exe启动自动识别→断言识别/top5/美学/存活。
+"""1.0.0-test3 冻结实测: 中文路径库导入→exe启动自动识别→断言识别/top5/美学/存活。
 
 用法: .venv/Scripts/python.exe -u tools/frozen_check_100.py
 前置: packaging/dist/birdtrace 已构建(make_release.py)。
