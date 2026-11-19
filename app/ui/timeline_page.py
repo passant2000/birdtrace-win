@@ -169,6 +169,14 @@ class TimelinePage(QWidget):
         self.tag_filter.currentIndexChanged.connect(
             lambda _: self.refresh(force=True))
         fbar.addWidget(self.tag_filter)
+        # 作品集筛选(UI重设计c3, 补⑮"只能加不能看"缺口): 按集过滤视图,
+        # 与其余筛选叠加; 作品集页「在时间线查看」经 apply_collection_filter 联动
+        self.col_filter = QComboBox()
+        self.col_filter.addItem(t("作品集: 全部", "Collections: all"), None)
+        self.col_filter.setCursor(Qt.PointingHandCursor)
+        self.col_filter.currentIndexChanged.connect(
+            lambda _: self.refresh(force=True))
+        fbar.addWidget(self.col_filter)
         # 鸟点/置信度(1.0冲刺⑤组合筛选: 五维下拉叠加=鸟种胶囊×日期树×
         # 评分×选片×标签×鸟点×置信度, 全部只动视图)
         self.spot_filter = QComboBox()
@@ -416,6 +424,28 @@ class TimelinePage(QWidget):
         idx = self.tag_filter.findData(cur)
         self.tag_filter.setCurrentIndex(idx if idx >= 0 else 0)
         self.tag_filter.blockSignals(False)
+
+    def _refresh_col_filter(self):
+        """作品集下拉重填(UI重设计c3; 保留当前选中; refresh 前调用)。"""
+        cur = self.col_filter.currentData()
+        self.col_filter.blockSignals(True)
+        self.col_filter.clear()
+        self.col_filter.addItem(t("作品集: 全部", "Collections: all"), None)
+        for c in self.lib.collections_list():
+            self.col_filter.addItem(f"{c['name']} ({c['n']})", c["id"])
+        idx = self.col_filter.findData(cur)
+        self.col_filter.setCurrentIndex(idx if idx >= 0 else 0)
+        self.col_filter.blockSignals(False)
+
+    def apply_collection_filter(self, cid: int):
+        """作品集页联动: 选中指定作品集并刷新(公开接口)。"""
+        idx = self.col_filter.findData(cid)
+        if idx < 0:
+            self.refresh(force=True)   # 重填一次让新集出现在下拉里
+            idx = self.col_filter.findData(cid)
+        if idx >= 0:
+            self.col_filter.setCurrentIndex(idx)
+        self.refresh(force=True)
 
     def _refresh_spot_filter(self):
         """鸟点下拉重填(保留当前选中; refresh 前调用)。"""
@@ -971,6 +1001,7 @@ class TimelinePage(QWidget):
             return
         if hasattr(self, "tag_filter"):
             self._refresh_tag_filter()
+            self._refresh_col_filter()
             self._refresh_spot_filter()
         # 重建前记住位置: 识别完成/库变化刷新时用户可能正浏览, 不跳顶
         self._keep_scroll = self.scroll.verticalScrollBar().value()
@@ -1017,6 +1048,17 @@ class TimelinePage(QWidget):
             tagged = {r["photo_id"] for r in self.lib.conn.execute(
                 "SELECT photo_id FROM photo_tags WHERE tag_id=?", (tag_id,))}
             raw = {ym: [p for p in v if p["id"] in tagged]
+                   for ym, v in raw.items()}
+            raw = {ym: v for ym, v in raw.items() if v}
+        # 作品集筛选(UI重设计c3): 同标签套路, 批量map避免逐张查询
+        ci_col = (self.col_filter.currentIndex()
+                  if hasattr(self, "col_filter") else 0)
+        if ci_col:
+            cid = self.col_filter.itemData(ci_col)
+            in_col = {r["photo_id"] for r in self.lib.conn.execute(
+                "SELECT photo_id FROM collection_photos WHERE collection_id=?",
+                (cid,))}
+            raw = {ym: [p for p in v if p["id"] in in_col]
                    for ym, v in raw.items()}
             raw = {ym: v for ym, v in raw.items() if v}
         # 鸟点筛选(1.0冲刺⑤)

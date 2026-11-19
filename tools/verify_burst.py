@@ -179,7 +179,7 @@ def main():
     check(len(cover) == 1, "封面带 ×5 角标")
     check(f3 in page._grid_items and page._grid_items[f3].stack == 5,
           "封面=f3(组内美学最高)")
-    check("9 张" in page.title.text(), f"标题仍是真实张数 ({page.title.text()})")
+    check("9 张" in page.title.title_label.text(), f"标题仍是真实张数 ({page.title.title_label.text()})")
     opened = {}
     page._open = lambda pid, ids: opened.update(pid=pid, ids=list(ids))
     page._on_item_click(f3, page._grid_items[f3], [f1, f2, f3, f4, f5])

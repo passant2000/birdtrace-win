@@ -294,8 +294,8 @@ def main():
     loop4 = QEventLoop()
     QTimer.singleShot(50, loop4.quit)
     loop4.exec()
-    check("1" in page2.title.text() or bar.value() == 0,
-          f"搜索后列表过滤 ({page2.title.text()})")
+    check("1" in page2.title.title_label.text() or bar.value() == 0,
+          f"搜索后列表过滤 ({page2.title.title_label.text()})")
     check(bar.value() == 0, "新搜索词列表从头看(不恢复旧位置)")
     page2.search.clear()
     loop5 = QEventLoop()

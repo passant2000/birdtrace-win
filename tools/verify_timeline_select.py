@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 sys.path.insert(0, ".")
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 from PySide6.QtCore import Qt, QEventLoop, QTimer
 
 app = QApplication([])
@@ -167,7 +167,7 @@ print(f"点日期 {_day_iso}: 渲染 {_n_day} 项 (该日共 {_exp_day} 张, "
 # 封面数≤照片数是正常行为)
 assert 0 < _n_day <= _exp_day and _all_that_day, \
     f"按日分组应显示该日照片 (got {_n_day}/{_exp_day}, 全属该日={_all_that_day})"
-_day_heads = [lb.text() for lb in page.content.findChildren(type(page.title))
+_day_heads = [lb.text() for lb in page.content.findChildren(QLabel)
               if f"{int(_dd)}日" in lb.text() and "张" in lb.text()]
 assert _day_heads, "day分组应渲染日小标题"
 # 点月节点→回月分组
@@ -186,7 +186,7 @@ settle(300)   # offscreen陷阱: 让上一轮refresh的deleteLater回收, 否则
 page.refresh()
 settle(500)
 print("全删后: 照片", len(page._order_ids), "树顶层", page.tree_nav.topLevelItemCount(),
-      "标题", page.title.text())
+      "标题", page.title.title_label.text())
 assert page.tree_nav.topLevelItemCount() == 0, "全删后树仍残留(原bug)"
-assert "0 张" in page.title.text()
+assert "0 张" in page.title.title_label.text()
 print("ALL PASS")
