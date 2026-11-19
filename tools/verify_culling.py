@@ -738,6 +738,15 @@ check("prefers-color-scheme" in html and "loading=\"lazy\"" in html,
       "深浅跟随系统+懒加载")
 # 原图绝不出库: images里没有全尺寸文件(只webp两档)
 check(all(p.suffix == ".webp" for p in img), "出库只有webp两档")
+# 拒绝片不上站(对标Perch "Don't upload rejected images")
+rej_hash = lib.conn.execute(
+    "SELECT file_hash FROM photos WHERE pick='reject' LIMIT 1").fetchone()
+if rej_hash:
+    check(all(sp["h"] != rej_hash["file_hash"] for sp in gj["species"]
+              for sp in sp.get("photos", [])),
+          "拒绝片hash不出现在站点照片清单")
+    check(all(s["best"] != rej_hash["file_hash"] for s in gj["species"]),
+          "拒绝片不作代表照")
 # ---------- 收尾 ----------
 lib.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 lib.conn.close()

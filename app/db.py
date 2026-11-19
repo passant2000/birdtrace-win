@@ -1775,7 +1775,8 @@ class Library:
                 "FROM v_records v JOIN photos p ON p.id=v.photo_id "
                 "LEFT JOIN exif e ON e.photo_id=p.id "
                 "LEFT JOIN species s ON s.code=v.eff_code "
-                "WHERE v.rank=1 GROUP BY v.eff_code "
+                "WHERE v.rank=1 AND (p.pick IS NULL OR p.pick<>'reject') "
+                "GROUP BY v.eff_code "
                 "ORDER BY best_score DESC").fetchall():
             # 每鸟种代表照+照片hash清单(file_hash命名, 增量上传天然去重)
             best = self.conn.execute(
@@ -1788,7 +1789,8 @@ class Library:
             photos = [{"h": x["h"]} for x in self.conn.execute(
                 "SELECT DISTINCT p.file_hash AS h FROM v_records v "
                 "JOIN photos p ON p.id=v.photo_id WHERE v.eff_code=? "
-                "AND v.rank=1", (r["code"],)).fetchall()]
+                "AND v.rank=1 AND (p.pick IS NULL OR p.pick<>'reject')",
+                (r["code"],)).fetchall()]
             species.append({
                 "code": r["code"], "cn": r["cn"], "en": r["en"] or "",
                 "count": r["n"], "first": r["first"], "last": r["last"],
@@ -1802,7 +1804,10 @@ class Library:
             "SELECT b.region_id AS region, COUNT(*) AS n FROM photos p "
             "JOIN batches b ON b.id=p.batch_id GROUP BY b.region_id "
             "ORDER BY n DESC").fetchall()]
-        meta = {"photos": self.photo_count(),
+        n_site = self.conn.execute(
+            "SELECT COUNT(*) FROM photos "
+            "WHERE (pick IS NULL OR pick<>'reject')").fetchone()[0]
+        meta = {"photos": n_site,   # 与鸟种照片同口径: 拒绝片不上站
                 "species": len(species),
                 "creator": self.effective_copyright(
                     self.conn.execute(
