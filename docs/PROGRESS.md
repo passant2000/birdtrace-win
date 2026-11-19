@@ -2,6 +2,22 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-19（晚）· **UI重设计三Phase全落地（c0-c12 十三次提交），Flash执行**
+
+**执行**：按 `docs/执行规格-UI整体重设计与生涯作品集-2026-11-19.md` 完整落地（规格书的9个commit点=实际13个提交，c8-c11拆为细分步）。**红线全程守住**：识别管线/RecognizeWorker零改动；db零schema（只加5个只读查询+collection_rename一个UPDATE）；色板不动；正式库未碰。
+
+**c1 PageHeader**（c42e917）：统一标题组件（标题压缩保护min-sizeHint+副题+动作区add_action），替换8页手写26px标题（map 24px对齐）；timeline/species/stats/review头部动作迁入动作区。
+**c2 分组侧栏**（b3fe452）：`_nav()`三元组(key,label,group)=图库/档案/整理/底部设置关于；组标题QSS(SidebarGroup/SidebarSep)；拖排改组内隔离（跨组不动）；nav_order按组持久化`nav_order:<group>`，旧无冒号格式丢弃；switch_to stats→life别名占位。verify_nav_drag重写组内断言。
+**c3 时间线作品集筛选**（a9f1e73）：筛选条第4下拉+refresh过滤块+`apply_collection_filter(cid)`公开联动接口。
+**c4 作品集页**（2e454db）：collections_page list↔detail（封面=集内美学最高并列取置信高/选择移出/删除只解关联/在时间线查看联动/导出本集预选）；db+collection_rename(空名/重名ValueError)+collection_cover+collection_stats；exporter.select_range+collection_id；导出向导「作品集」范围下拉+预选参数；verify_collections 25断言。
+**c5 观鸟生涯页**（a6dd955）：life_page四Tab——总览（档案头卡/6数字卡/里程碑进度条/生涯之最[拍最多TOP3·罕见度之王rarity_score·美学冠军可点开·最常去鸟点·最忙一天]/年度卡行/自绘HeatMap近12月）；时间线（lifer_feed新种收录流=编号+56px首见照+中英学名+日期+📍地点[鸟点回落地区]+年鸟角标，年份折叠+三筛选+生涯清单CSV含罕见度档）；足迹（summary+鸟点足迹卡[SpotDetailDialog兜底]+省级choropleth=distribution_map加title/payload_fn注入参数复用渲染管线，数据=province_species_counts）；徽章（stats_page整体搬入+装备榜修alias[剥"make model"品牌前缀查裸型号表]+同别名聚合+出片时段）；**stats_page.py删除**，nav键life，--open-page stats兼容映射；db+lifer_feed(与lifers()同口径)+day_counts(timeline同口径)+province_species_counts(region_id口径)；verify_life 26断言。
+**c6 小修包**（bf98107）：copyright_dialog照片级三态（留空继承[placeholder显默认]/填写覆盖/∅置空→set_photo_copyright零db改动）+viewer右栏版权状态行；viewer组栏「组内对比选片…」第二入口；导入页文案补RAW/DNG；**顺手修viewer._sync_tags_lab历史重复定义**（后者覆盖前者，c6首版调用落空的根因）。
+**c7 首页**（a94280b，Phase2）：home_page（每日一鸟横幅自时间线整体搬入[时间线删除]/最近导入缩略图排/快速入口/档案速览/「1.0新功能导览」卡[11条目可点跳转, 关闭写seen_tour=1]）；默认启动页about→home+logo回首页；verify_home 16断言。**附带加固**：时间树_build_tree改整树重建（deleteLater旧树）——修offscreen高负载偶发AV（既有陷阱非本轮引入，二分c3复跑也崩证实，加固前崩50%加固后5/5绿）。
+**c8-c11 timeline拆包**（ee4bc10）：timeline_page.py(1660行)→`app/ui/timeline/`包：壳__init__(组装+refresh+签名)+filters(六维筛选+胶囊+`_apply_view_filters`自refresh切出)+select_bar(多选工具条`_build_sel_bar`+批量21法+快捷键)+month_view(月块+时间树+重排)+actions(批量对话框+**「工具▾」收纳**[导出/查重/记录中心/静态站低频降级，头部留高频：选择/批量分享/连拍折叠/档位])；mixin纯搬家方法体零改动；外部导入收口（main_window+9工具脚本）；**assert_pkg_100的11处timeline_page锚点改tl_symbols()=包内5模块符号并集**。
+**c12 controller拆分**（e61b7b1）：main_window后台编排（识别worker/美学回填/连拍分组/sidecar定时/状态文案）→`app/controller.py` AppController纯搬家；MainWindow=窗口壳+导航+页面栈+委托层（worker/aes/burst property+同签名方法），537→380行，调用点零改动。**坑**：首次手术`src.index("def start_recognition")`撞上刚插入的同名委托→从文件中段截断到尾（丢_build_ui等），git checkout ee4bc10恢复后改用带docstring的唯一锚点重做成功。
+
+**验证**：每commit点功能级verify+关联回归绿（各条目详注）；Phase1/3末各全量批跑（47项verify+smoke+e2e）；**失败复核纪律**：i18n/concurrent退出码127=timeout包裹器×WebEngine子进程退出竞态（裸跑EXIT=0 ALL PASS，既有）；usb_scenario=环境无U盘**未执行**（如实标注）；时间树AV为既有offscreen陷阱已加固根治。
+
 ## 2026-11-19 · **UI整体重设计定稿+观鸟生涯/作品集规格书交付（执行切Flash），本轮未动任何代码**
 
 **起因**：用户实测 1.0-test1 反馈"新功能太隐蔽，生涯/作品集找都找不到，UI总体设计薄弱"。两轮代码探查（入口地图+UI骨架）完成根因诊断与真缺口核实（作品集无浏览/版权照片级零UI/装备榜漏alias/组内对比只在连拍右键），用户 AskUserQuestion 四项拍板：**分组侧栏/作品集独立页+筛选下拉/做首页/深度重构**；补充指令：**观鸟生涯独立页（按时间线显示鸟种+拍摄地点）**，工作模式=本会话出设计与计划、执行切 Flash。

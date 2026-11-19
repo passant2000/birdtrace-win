@@ -14,19 +14,53 @@ from .. import theme
 from ..i18n import t, sname
 from ..media import cached_thumbnail, ensure_thumbnail
 
-# 1.0 新功能导览(UI重设计): (标题, 一句话, 跳转key或None)
+# 1.0 新功能导览(UI重设计): (emoji, 名称(中,英对), 说明(中,英对), 跳转key)
+# 双语规范第3条: 模块级常量存元组, 显示时 t(*pair) 求值——不存已翻译串
 TOUR_ITEMS = [
-    ("🗂️ 选片工作流", "时间线 → 选择 → 打星/保留/拒绝，隔离区可恢复，连拍封面右键组内对比", "timeline"),
-    ("🔍 增量重识别", "选择模式下「重新识别…」可选只跑未识别/待复核，人工确认永不覆盖", "timeline"),
-    ("👀 视觉查重", "时间线顶部「查重…」找重复/相似照片，逐组确认才移除", "timeline"),
-    ("📤 记录中心导出", "「记录中心…」导出 birdreport.cn 上报 CSV + 每鸟种最美照归集", "timeline"),
-    ("🧰 组合筛选", "时间线第二行：评分×选片×标签×作品集×鸟点×置信度 六维叠加过滤视图", "timeline"),
-    ("🏷️ 标签 & 作品集", "多选「标记…」打标签、「加入作品集…」；档案组「作品集」页可浏览/导出", "collections"),
-    ("📈 观鸟生涯", "新种收录流/足迹地图/徽章/装备榜都在「观鸟生涯」页（原成就页并入）", "life"),
-    ("🌐 静态站", "时间线顶部「静态站…」一键生成可部署的个人图库站", "timeline"),
-    ("©️ 版权三态", "设置页设库级默认；查看器右栏「版权…」按照片覆盖/置空", None),
-    ("🗄️ RAW/DNG 成对", "导入时同名 RAW/DNG 自动挂在 JPG 附属，识别只跑一次", None),
-    ("📡 增量扫描", "导入页登记常用目录 → 「扫描增量」只导新照片/发现移动改名", "import"),
+    ("🗂️", ("选片工作流", "Culling workflow"),
+     ("时间线 → 选择 → 打星/保留/拒绝，隔离区可恢复，连拍封面右键组内对比",
+      "Timeline → Select → star/keep/reject; quarantine is recoverable; "
+      "right-click a burst cover to compare"), "timeline"),
+    ("🔍", ("增量重识别", "Incremental re-identify"),
+     ("选择模式下「重新识别…」可选只跑未识别/待复核，人工确认永不覆盖",
+      "Select mode → Re-identify can run only on unidentified/pending; "
+      "manual verdicts are never overwritten"), "timeline"),
+    ("👀", ("视觉查重", "Visual duplicates"),
+     ("时间线顶部「查重…」找重复/相似照片，逐组确认才移除",
+      "Timeline → Find duplicates: review each group before removing"),
+      "timeline"),
+    ("📤", ("记录中心导出", "Bird report export"),
+     ("「记录中心…」导出 birdreport.cn 上报 CSV + 每鸟种最美照归集",
+      "Bird report exports CSV rows plus one best photo per species"),
+      "timeline"),
+    ("🧰", ("组合筛选", "Combined filters"),
+     ("时间线第二行：评分×选片×标签×作品集×鸟点×置信度 多维叠加过滤视图",
+      "Timeline's second row stacks rating×pick×tag×collection×spot×"
+      "confidence view filters"), "timeline"),
+    ("🏷️", ("标签 & 作品集", "Tags & collections"),
+     ("多选「标记…」打标签、「加入作品集…」；档案组「作品集」页可浏览/导出",
+      "Select mode: Mark for tags, Add to collection; browse them on the "
+      "Collections page"), "collections"),
+    ("📈", ("观鸟生涯", "Birding life"),
+     ("新种收录流/足迹地图/徽章/装备榜都在「观鸟生涯」页（原成就页并入）",
+      "Life list stream, footprint map, badges and gear live on the "
+      "Birding life page (former Achievements)"), "life"),
+    ("🌐", ("静态站", "Static site"),
+     ("时间线顶部「工具 ▾」→「静态站…」一键生成可部署的个人图库站",
+      "Timeline → Tools ▾ → Static site builds a deployable gallery site"),
+      "timeline"),
+    ("©️", ("版权三态", "Copyright tri-state"),
+     ("设置页设库级默认；查看器右栏「版权…」按照片覆盖/置空",
+      "Set library defaults in Settings; the viewer's Copyright… "
+      "overrides per photo"), None),
+    ("🗄️", ("RAW/DNG 成对", "RAW/DNG pairs"),
+     ("导入时同名 RAW/DNG 自动挂在 JPG 附属，识别只跑一次",
+      "Same-name RAW/DNG files attach to the JPG on import; recognition "
+      "runs once"), None),
+    ("📡", ("增量扫描", "Incremental scan"),
+     ("导入页登记常用目录 → 「扫描增量」只导新照片/发现移动改名",
+      "Register folders on the Import page → Scan for new/renamed files"),
+      "import"),
 ]
 
 
@@ -181,9 +215,10 @@ class HomePage(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(6)
         cols = 2
-        for i, (name, desc, key) in enumerate(TOUR_ITEMS):
-            item = QLabel(f"<b style='color:{theme.LABEL}'>{name}</b>　"
-                          f"<span style='color:{theme.LABEL_2}'>{desc}</span>")
+        for i, (em, name_pair, desc_pair, key) in enumerate(TOUR_ITEMS):
+            item = QLabel(
+                f"<b style='color:{theme.LABEL}'>{em} {t(*name_pair)}</b>　"
+                f"<span style='color:{theme.LABEL_2}'>{t(*desc_pair)}</span>")
             item.setWordWrap(True)
             item.setStyleSheet("background:transparent;font-size:13px;")
             if key:
