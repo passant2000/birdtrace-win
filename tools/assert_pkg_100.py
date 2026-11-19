@@ -146,7 +146,7 @@ def symbols(code):
 # 版本
 v = code_of("app.version")
 syms = symbols(v) if v else set()
-check("版本=1.0.0-test1", "1.0.0-test1" in syms)
+check("版本=1.0.0-test2", "1.0.0-test2" in syms)
 
 # SP引擎
 e = code_of("app.ai.sp_engine")
@@ -280,11 +280,15 @@ s = tl_symbols()
 check("时间线0.8入口", {"burst_btn", "_collapse_on", "_batch_share",
                         "_export_wizard"} <= s
       and any("连拍折叠" in x for x in s if isinstance(x, str)))
+# UI重设计c12: 编排迁app.controller, 锚点=main_window+controller符号并集
 mn8 = code_of("app.ui.main_window")
 s = symbols(mn8) if mn8 else set()
-check("主窗口sidecar定时器", "_flush_sidecars_tick" in s
+_c12 = code_of("app.controller")
+if _c12:
+    s |= symbols(_c12)
+check("主窗口sidecar定时器(编排已在controller)", "_flush_sidecars_tick" in s
       and "start_burst_regroup" in s
-      and "_save_nav_order" in s and "nav_order" in s)
+      and "_save_nav_order" in s and "nav_order:" in s)
 bu2 = code_of("app.db")
 s = symbols(bu2) if bu2 else set()
 check("连拍鸟种统一(unify)", "unify_burst_species" in s)
