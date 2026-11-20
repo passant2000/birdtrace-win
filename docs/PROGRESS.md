@@ -2,6 +2,12 @@
 
 > 进展以本文件为准；规格与踩坑清单见 PLAN.md；后续路线见 后续开发方案.md。新会话从这里接手即可开工。
 
+## 2026-11-20 · **1.0.0-test4 打包完成（本轮=test3实测反馈两批共5条修复），待用户实测**
+
+打包链全绿：版本三连跳（version.py/assert_pkg_100:149锚点/使用说明test4母本）→ make_release（prune省138MB）→ **assert_pkg_100 109/109** → **frozen_check_100 14/14**（识别+美学20s + 署名链/新列迁移/选片/查重/记录中心/静态站全过）→ 发布目录 **releases/鸟迹BirdTrace-1.0.0-test4**（1.2G，robocopy 242文件+使用说明.txt进包=v1.0.0-test4头）→ 发布副本启动冒烟存活（Popen 25s存活）。**坑：这版robocopy不认/NJG（去掉/NFL /NDL保留即可）；cmd start引号转发会"拒绝访问"，冒烟改Python Popen原生拉起；Git Bash的ls显示中文乱码=控制台显示问题，盘上真名用Python pathlib验证**。
+
+**本包内容=ce68208四连修+选片功能答疑（不加UI提示，用户拍板）**：①地图侧栏"竖虚线"根因=裸`QFrame{}`选择器泄漏给每张鸟点卡片border-right（**test2误诊滚动条修偏了**；离屏像素探针实锤x≈w-17覆盖79%），修=QFrame#MapSide收窄 ②足迹图等比投影（原经纬各自铺满=中国拉宽~2.6倍）+滚轮缩放（光标锚点1-8倍）+拖动平移（越界夹取）+双击复位+图例操作提示 ③生涯时间线鸟种搜索补拼音全拼/首字母（lifers补cn_pinyin/cn_initials列，_tl_match与鸟种库同口径）④选鸟点空白**三重修**：db.spot_lifer_feed该点收录流换口径（旧按生涯首见照片地点筛几乎必空）+spot_visits去rank=1筛（与spots_overview口径打架）+**life_page:856三个点import超顶层包真凶**（选有鸟种的点refresh中途断=整页空白，Qt吞异常）；附带年份选项集换口径+头部"收录N种"+空点空态文案。验证：新tools/verify_feedback_test3.py 40断言ALL PASS（A像素级/B缩放几何级锚点/C拼音/D收录流/E页面级真MainWindow）+回归6项绿（life/spot_detail/species_map/i18n/smoke/e2e）。**待真机实测：侧栏虚线/足迹图缩放/拼音搜索/选鸟点收录流**。修完 bump 1.0.0 正式。**push 待指示**。
+
 ## 2026-11-20 · **1.0.0-test3 打包完成（本轮=反馈修复9条+1.0收官功能验收包），待用户实测**
 
 打包链全绿：版本三连跳 → make_release → **assert_pkg_100 109/109** → **frozen_check_100 14/14**（识别全链路15s + 署名链 creator=冻结测试者【创作者单源迁移实测】+ 新列渐进迁移/选片/版权/查重/记录中心/静态站）→ 发布目录 **releases/鸟迹BirdTrace-1.0.0-test3**（1.2G，robocopy）+使用说明（含 2026-11-20 段）→ 发布副本启动冒烟存活。
