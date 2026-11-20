@@ -31,7 +31,6 @@ COPY_FILES = [
     "assets/map/maplibre-gl.js",
     "assets/map/maplibre-gl.css",
     "assets/map/china_provinces.json",
-    "assets/templates/site_index.html",
 ]
 
 
@@ -113,6 +112,12 @@ def main():
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(PROJ / rel, dst)
         print("copy", rel)
+    # 静态站模板目录(多页: index/gallery/species/timeline/regions + css/js)
+    tpl_src = PROJ / "assets" / "templates" / "site"
+    tpl_dst = DIST / "assets" / "templates" / "site"
+    if tpl_src.is_dir():
+        shutil.copytree(tpl_src, tpl_dst, dirs_exist_ok=True)
+        print("copy", tpl_src.relative_to(PROJ))
     freed = prune_dist(DIST)
     print(f"prune freed {freed // 1048576}MB")
     print("RELEASE READY:", DIST)

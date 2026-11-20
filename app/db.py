@@ -1868,6 +1868,15 @@ class Library:
                 monthly[int(r["m"]) - 1] = r["n"]
             except (ValueError, IndexError):
                 pass
+        monthly_species = [0] * 12
+        for r in self.conn.execute(
+                "SELECT substr(taken_at,6,2) m, COUNT(DISTINCT eff_code) n "
+                "FROM v_records WHERE substr(taken_at,1,4)=? GROUP BY m",
+                (year,)):
+            try:
+                monthly_species[int(r["m"]) - 1] = r["n"]
+            except (ValueError, IndexError):
+                pass
         photos_year = self.conn.execute(
             "SELECT COUNT(DISTINCT photo_id) FROM v_records "
             "WHERE substr(taken_at,1,4)=?", (year,)).fetchone()[0]
@@ -1887,9 +1896,109 @@ class Library:
                          "date": (li["first_at"] or "")[:10]})
         return {"new": len(year_first), "yearbird": ys["yearbird"],
                 "photos": photos_year, "days": days,
-                "monthly": monthly, "busiest": busiest, "grid": grid,
+                "monthly": monthly, "monthly_species": monthly_species,
+                "busiest": busiest, "grid": grid,
                 "total_species": len(lifers),
                 "best18": self.best_of_year(year)}
+
+    # ---------- 年鉴增补(设计规范§3.2: 鸟种档案/地图/时间线三页) ----------
+    def year_species(self, year: str) -> list[dict]:
+        """年度鸟种档案: 每种=代表照+中英名+次数+首录标记+首末日期+地区,
+        按该年首见升序(与设计稿一致)。代表照=美学×置信最高且非拒绝片;
+        地区取代表照所在批次(无批次区域留空, 不虚构)。只读查询。"""
+        from .core import regions as _regions
+        rows = self.conn.execute(
+            "SELECT v.eff_code AS code, COALESCE(s.cn, s.en, v.eff_code) cn, "
+            "  s.en AS en, COUNT(DISTINCT v.photo_id) AS n, "
+            "  MIN(v.taken_at) AS first, MAX(v.taken_at) AS last "
+            "FROM v_records v LEFT JOIN species s ON s.code=v.eff_code "
+            "WHERE substr(v.taken_at,1,4)=? GROUP BY v.eff_code "
+            "ORDER BY first, v.eff_code", (year,)).fetchall()
+        if not rows:
+            return []
+        cand: dict[str, dict] = {}
+        for r in self.conn.execute(
+                "SELECT v.eff_code code, p.path, p.file_hash h, b.region_id rid, "
+                "  COALESCE(p.aesthetic,0)*COALESCE(v.confidence,0) score "
+                "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+                "LEFT JOIN batches b ON b.id=p.batch_id "
+                "WHERE substr(v.taken_at,1,4)=? "
+                "  AND (p.pick IS NULL OR p.pick<>'reject')", (year,)):
+            cur = cand.get(r["code"])
+            if cur is None or r["score"] > cur["score"]:
+                cand[r["code"]] = dict(r)
+        lifer_year = {li["code"]: (li["first_at"] or "")[:4]
+                      for li in self.lifers()}
+        out = []
+        for r in rows:
+            d = dict(r)
+            c = cand.get(d["code"]) or {}
+            d["path"] = c.get("path")
+            d["hash"] = c.get("h") or ""
+            rid = c.get("rid")
+            d["region"] = _regions.region_display(rid) if rid else ""
+            d["first_record"] = lifer_year.get(d["code"]) == year
+            out.append(d)
+        return out
+
+    def year_geo(self, year: str) -> dict:
+        """年度地理分布(年鉴地图页): 省级地区计数(按批次 region_id) +
+        有坐标的鸟点计数。无坐标鸟点不出现(不虚构位置)。只读查询。"""
+        from .core import regions as _regions
+        provs = []
+        for r in self.conn.execute(
+                "SELECT b.region_id rid, COUNT(DISTINCT v.photo_id) n "
+                "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+                "JOIN batches b ON b.id=p.batch_id "
+                "WHERE substr(v.taken_at,1,4)=? AND b.region_id IS NOT NULL "
+                "GROUP BY b.region_id ORDER BY n DESC", (year,)):
+            provs.append({"rid": r["rid"],
+                          "name": _regions.region_display(r["rid"]),
+                          "n": r["n"]})
+        spots = [dict(r) for r in self.conn.execute(
+            "SELECT sp.id, sp.name, sp.lat, sp.lon, "
+            "  COUNT(DISTINCT v.photo_id) n "
+            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "JOIN spots sp ON sp.id=p.spot_id "
+            "WHERE substr(v.taken_at,1,4)=? "
+            "  AND sp.lat IS NOT NULL AND sp.lon IS NOT NULL "
+            "GROUP BY sp.id ORDER BY n DESC", (year,))]
+        return {"provinces": provs, "spots": spots}
+
+    def year_timeline(self, year: str, per_month: int = 3) -> list[dict]:
+        """年度时间线(年鉴时间线页): 每月按当月张数取前 N 种, 每种带
+        代表照; 月=该月照片数(与月度柱同口径)。只读查询。"""
+        month_n = {r["ym"]: r["n"] for r in self.conn.execute(
+            "SELECT substr(v.taken_at,1,7) ym, COUNT(DISTINCT v.photo_id) n "
+            "FROM v_records v WHERE substr(v.taken_at,1,4)=? GROUP BY ym",
+            (year,))}
+        rows = self.conn.execute(
+            "SELECT substr(v.taken_at,1,7) ym, v.eff_code code, "
+            "  COALESCE(s.cn, s.en, v.eff_code) cn, s.en AS en, "
+            "  COUNT(DISTINCT v.photo_id) n, MIN(v.taken_at) first "
+            "FROM v_records v LEFT JOIN species s ON s.code=v.eff_code "
+            "WHERE substr(v.taken_at,1,4)=? "
+            "GROUP BY ym, v.eff_code "
+            "ORDER BY ym, n DESC, first", (year,)).fetchall()
+        bym: dict[str, list] = {}
+        for r in rows:
+            bym.setdefault(r["ym"], []).append(dict(r))
+        out = []
+        for ym in sorted(bym):
+            items = bym[ym][:per_month]
+            for it in items:
+                ph = self.conn.execute(
+                    "SELECT p.path, p.file_hash h FROM v_records v "
+                    "JOIN photos p ON p.id=v.photo_id "
+                    "WHERE v.eff_code=? AND substr(v.taken_at,1,7)=? "
+                    "  AND (p.pick IS NULL OR p.pick<>'reject') "
+                    "ORDER BY COALESCE(p.aesthetic,0)*"
+                    "COALESCE(v.confidence,0) DESC LIMIT 1",
+                    (it["code"], ym)).fetchone()
+                it["path"] = ph["path"] if ph else None
+                it["hash"] = ph["h"] if ph else ""
+            out.append({"ym": ym, "n": month_n.get(ym, 0), "items": items})
+        return out
 
     # ---------- 美学评分 ----------
     def set_aesthetic(self, photo_id: int, score: float):
@@ -1981,6 +2090,18 @@ class Library:
         1.0前补, 不阻塞交付)。隐私: 只出省市(region), 鸟点名/坐标
         绝不进数据(用户可后补开关)。"""
         species = []
+        from .core import regions as _regions
+        # 每鸟种×月份张数(设计稿详情页月份柱; 一次聚合免 N+1)
+        sp_months: dict[str, list[int]] = {}
+        for r in self.conn.execute(
+                "SELECT v.eff_code code, substr(v.taken_at,6,2) m, "
+                "  COUNT(DISTINCT v.photo_id) n FROM v_records v "
+                "WHERE v.rank=1 GROUP BY code, m"):
+            arr = sp_months.setdefault(r["code"], [0] * 12)
+            try:
+                arr[int(r["m"]) - 1] = r["n"]
+            except (ValueError, IndexError, TypeError):
+                pass
         for r in self.conn.execute(
                 "SELECT v.eff_code AS code, COALESCE(s.cn, s.en, v.eff_code) "
                 "AS cn, s.en AS en, COUNT(DISTINCT v.photo_id) AS n, "
@@ -1995,8 +2116,10 @@ class Library:
                 "ORDER BY best_score DESC").fetchall():
             # 每鸟种代表照+照片hash清单(file_hash命名, 增量上传天然去重)
             best = self.conn.execute(
-                "SELECT p.file_hash AS h, p.width, p.height, p.aesthetic "
+                "SELECT p.file_hash AS h, p.width, p.height, p.aesthetic, "
+                "  b.region_id AS rid "
                 "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+                "LEFT JOIN batches b ON b.id=p.batch_id "
                 "WHERE v.eff_code=? AND v.rank=1 AND p.aesthetic IS NOT NULL "
                 "  AND (v.confirmed_code IS NOT NULL OR v.confidence>=0.5) "
                 "ORDER BY p.aesthetic * v.confidence DESC LIMIT 1",
@@ -2009,25 +2132,42 @@ class Library:
             species.append({
                 "code": r["code"], "cn": r["cn"], "en": r["en"] or "",
                 "count": r["n"], "first": r["first"], "last": r["last"],
+                "region": (_regions.region_display(best["rid"])
+                           if best and best["rid"] else ""),
+                "months": sp_months.get(r["code"], [0] * 12),
                 "best": best["h"] if best else (photos[0]["h"] if photos else ""),
                 "photos": photos})
-        months = [{"ym": r["ym"], "n": r["n"]} for r in self.conn.execute(
-            "SELECT substr(COALESCE(e.dt_original, p.added_at),1,7) AS ym, "
-            "COUNT(*) AS n FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
-            "GROUP BY ym ORDER BY ym").fetchall() if r["ym"]]
-        regions = [{"region": r["region"], "n": r["n"]} for r in self.conn.execute(
+        # 时间轴: 每月张数 + 每月最多3张代表图(设计稿时间轴屏)
+        m_photos: dict[str, list[str]] = {}
+        for r in self.conn.execute(
+                "SELECT substr(COALESCE(e.dt_original, p.added_at),1,7) ym, "
+                "  p.file_hash h FROM photos p "
+                "LEFT JOIN exif e ON e.photo_id=p.id "
+                "WHERE (p.pick IS NULL OR p.pick<>'reject') "
+                "  AND p.file_hash IS NOT NULL "
+                "ORDER BY ym, COALESCE(p.aesthetic,0) DESC"):
+            arr = m_photos.setdefault(r["ym"], [])
+            if r["ym"] and len(arr) < 8 and r["h"] not in arr:
+                arr.append(r["h"])
+
+        regions = [{"region": r["region"],
+                    "name": _regions.region_display(r["region"]),
+                    "n": r["n"]} for r in self.conn.execute(
             "SELECT b.region_id AS region, COUNT(*) AS n FROM photos p "
             "JOIN batches b ON b.id=p.batch_id GROUP BY b.region_id "
             "ORDER BY n DESC").fetchall()]
         # 标签/作品集筛选视图(10a兑现预留字段): 只收站内照片(排除拒绝片),
         # 每张带主鸟种名做卡片说明; 空组不进数据
         h2cn: dict[str, str] = {}
+        h2code: dict[str, str] = {}
         for r in self.conn.execute(
-                "SELECT p.file_hash h, COALESCE(s.cn, s.en, '') cn "
+                "SELECT p.file_hash h, COALESCE(s.cn, s.en, '') cn, "
+                "  v.eff_code code "
                 "FROM photos p JOIN v_records v ON v.photo_id=p.id AND v.rank=1 "
                 "LEFT JOIN species s ON s.code=v.eff_code "
                 "WHERE (p.pick IS NULL OR p.pick<>'reject')"):
             h2cn.setdefault(r["h"], r["cn"] or "")
+            h2code.setdefault(r["h"], r["code"] or "")
 
         def _grp_photos(member_pids: list[int]) -> list[dict]:
             out, seen = [], set()
@@ -2040,6 +2180,26 @@ class Library:
                     out.append({"h": r["h"], "cn": h2cn[r["h"]]})
             return out
 
+        def _dedup(hs: list[str]) -> list[dict]:
+            out, seen = [], set()
+            for h in hs:
+                key = h2code.get(h) or h
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"h": h, "cn": h2cn.get(h, ""),
+                            "code": h2code.get(h, "")})
+                if len(out) >= 3:
+                    break
+            return out
+
+        months = [{"ym": r["ym"], "n": r["n"],
+                   "photos": _dedup(m_photos.get(r["ym"], []))}
+                  for r in self.conn.execute(
+                      "SELECT substr(COALESCE(e.dt_original, p.added_at),1,7) "
+                      "AS ym, COUNT(*) AS n FROM photos p "
+                      "LEFT JOIN exif e ON e.photo_id=p.id "
+                      "GROUP BY ym ORDER BY ym").fetchall() if r["ym"]]
         tags = []
         for r in self.conn.execute(
                 "SELECT t.id, t.name FROM tags t ORDER BY t.name"):
@@ -2060,8 +2220,33 @@ class Library:
         n_site = self.conn.execute(
             "SELECT COUNT(*) FROM photos "
             "WHERE (pick IS NULL OR pick<>'reject')").fetchone()[0]
+        # Hero 代表照(设计稿首页): 全库美学最高的一张可用照片
+        hero_row = self.conn.execute(
+            "SELECT p.file_hash h, COALESCE(s.cn, s.en, '') cn, "
+            "  s.en AS en, substr(COALESCE(e.dt_original, p.added_at),1,10) d "
+            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "LEFT JOIN species s ON s.code=v.eff_code "
+            "LEFT JOIN exif e ON e.photo_id=p.id "
+            "WHERE v.rank=1 AND (p.pick IS NULL OR p.pick<>'reject') "
+            "  AND p.aesthetic IS NOT NULL AND p.width IS NOT NULL "
+            "ORDER BY (p.width > p.height) DESC, "
+            "  p.aesthetic * v.confidence DESC LIMIT 1").fetchone()
+        n_spots = self.conn.execute(
+            "SELECT COUNT(DISTINCT spot_id) FROM photos "
+            "WHERE spot_id IS NOT NULL AND (pick IS NULL OR pick<>'reject')"
+        ).fetchone()[0]
+        years = [r["y"] for r in self.conn.execute(
+            "SELECT DISTINCT substr(COALESCE(e.dt_original, p.added_at),1,4) y "
+            "FROM photos p LEFT JOIN exif e ON e.photo_id=p.id "
+            "WHERE y IS NOT NULL AND y<>'' ORDER BY y DESC").fetchall()]
         meta = {"photos": n_site,   # 与鸟种照片同口径: 拒绝片不上站
                 "species": len(species),
+                "spots": n_spots,
+                "years": len(years),
+                "year_list": years,
+                "hero": ({"h": hero_row["h"], "cn": hero_row["cn"] or "",
+                          "en": hero_row["en"] or "", "date": hero_row["d"] or ""}
+                         if hero_row else None),
                 "creator": self.effective_copyright(
                     self.conn.execute(
                         "SELECT id FROM photos ORDER BY id DESC LIMIT 1"
