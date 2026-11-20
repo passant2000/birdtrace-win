@@ -509,7 +509,12 @@ class YearbookDoc:
             pg.line(MARGIN, MARGIN + 8, PAGE_W - MARGIN, MARGIN + 8,
                     pal.line, 0.2)
             top = MARGIN + 14
-        items = self.species[page * SP_PER_PAGE:(page + 1) * SP_PER_PAGE]
+        # 均衡分页: 50 种/9 页 → 6,6,6,6,6,5,5,5,5(避免最后一页只剩 2 张)
+        n = len(self.species)
+        base, rem = divmod(n, self.sp_pages) if self.sp_pages else (0, 0)
+        start = page * base + min(page, rem)
+        size = base + (1 if page < rem else 0)
+        items = self.species[start:start + size]
         cw = (CONTENT_W - GUTTER * 2) / 2
         ph_h = cw * 0.60      # 与设计稿一致(87×52mm), 3 行不溢出
         row_h = ph_h + 22
