@@ -31,7 +31,7 @@ CONTENT_H = PAGE_H - 2 * MARGIN   # 269mm
 GUTTER = 4.0                      # mm, 12 列栅格间距
 COL = (CONTENT_W - 11 * GUTTER) / 12.0
 
-SP_PER_PAGE = 6                   # 鸟种档案每页卡数(2列×3行)
+SP_PER_PAGE = 4                   # 鸟种档案每页卡数(2列×2行, 大图)
 GRID_COLS, GRID_ROWS = 3, 6       # 十八图 3×6
 GRID_RATIO = 5 / 3                # 统一裁切比例(宽/高)
 
@@ -102,12 +102,33 @@ class Pg:
                         QPointF(self.mm(x2), self.mm(y2)))
 
     def photo(self, pm: QPixmap | None, rect: QRectF, radius=0.0,
-              pos=(0.5, 0.5)) -> bool:
-        """cover 裁切填充(保护主体: pos 控制取景重心)。缺图=浅底占位。"""
+              pos=(0.5, 0.5), fit=False) -> bool:
+        """照片填充。默认 cover 裁切(pos 控取景重心); fit=True=**整图可见**
+        (KeepAspectRatio 居中, 中性浅底垫底——竖版鸟照不被裁掉头尾,
+        实测反馈: 档案页竖图被裁切显示不全)。缺图=浅底占位。"""
         if pm is None or pm.isNull():
             self.fill(rect, self.pal.card if self.pal.bg != self.pal.card
                       else "#F0F1F4", radius)
             return False
+        if fit:
+            self.p.save()
+            if radius:
+                clip = QPainterPath()
+                clip.addRoundedRect(rect, self.mm(radius), self.mm(radius))
+                self.p.setClipPath(clip)
+            else:
+                self.p.setClipRect(rect)
+            pad = "#F1F3F5" if self.pal.bg == "#FFFFFF" else "#1E262F"
+            self.p.setPen(Qt.NoPen)
+            self.p.setBrush(QColor(pad))
+            self.p.drawRect(rect)
+            fg = pm.scaled(int(rect.width()), int(rect.height()),
+                           Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.p.drawPixmap(int(rect.x() + (rect.width() - fg.width()) / 2),
+                              int(rect.y() + (rect.height() - fg.height()) / 2),
+                              fg)
+            self.p.restore()
+            return True
         scaled = pm.scaled(int(rect.width()), int(rect.height()),
                            Qt.KeepAspectRatioByExpanding,
                            Qt.SmoothTransformation)
@@ -484,6 +505,26 @@ class YearbookDoc:
         return None
 
     # ---------- 3.. 鸟种档案 ----------
+    def sp_sizes(self) -> list[int]:
+        """档案每页张数(每页行满: 6 或 4, 不再出现"缺一个角")。
+        50 种/9 页 → 6,6,6,6,6,6,6,4,4。"""
+        n, pages = len(self.species), self.sp_pages
+        if n == 0:
+            return [0]
+        sizes, rem = [], n
+        for i in range(pages):
+            left = pages - i - 1
+            if left == 0:
+                sz = rem
+            else:
+                sz = min(SP_PER_PAGE, rem - 2 * left)
+                if sz % 2:
+                    sz -= 1
+                sz = max(2, sz)
+            sizes.append(sz)
+            rem -= sz
+        return sizes
+
     def _species(self, pg: Pg, page: int):
         pal = pg.pal
         pg.fill(pg.r(0, 0, PAGE_W, PAGE_H), pal.bg)
@@ -509,27 +550,42 @@ class YearbookDoc:
             pg.line(MARGIN, MARGIN + 8, PAGE_W - MARGIN, MARGIN + 8,
                     pal.line, 0.2)
             top = MARGIN + 14
-        # 均衡分页: 50 种/9 页 → 6,6,6,6,6,5,5,5,5(避免最后一页只剩 2 张)
-        n = len(self.species)
-        base, rem = divmod(n, self.sp_pages) if self.sp_pages else (0, 0)
-        start = page * base + min(page, rem)
-        size = base + (1 if page < rem else 0)
-        items = self.species[start:start + size]
+        # 分页表(偶数, 行满): 6 或 4 张/页
+        sizes = self.sp_sizes()
+        start = sum(sizes[:page])
+        items = self.species[start:start + sizes[page]]
         cw = (CONTENT_W - GUTTER * 2) / 2
-        ph_h = cw * 0.60      # 与设计稿一致(87×52mm), 3 行不溢出
+        # 行数少时照片放大填满版面(4 张=2 行 → 大图; 6 张=3 行 → 87×52mm)
+        rows = max(1, math.ceil(len(items) / 2))
+        avail = PAGE_H - MARGIN - top - 4
+        ph_h = (avail - (rows - 1) * 8 - rows * 22) / rows
+        cap = 88.0 if rows > 1 else 150.0     # 单行(收尾页)照片放大填版面
+        ph_h = max(min(ph_h, cap), cw * 0.60)
         row_h = ph_h + 22
+        # 单行收尾页: 整行垂直居中(留白上下均分, 不显得"堆在顶上")
+        base_y = top
+        if rows == 1:
+            base_y = top + max(0.0, (avail - (ph_h + 22)) / 2)
+        odd_tail = len(items) % 2 == 1
         for idx, s in enumerate(items):
-            cx = MARGIN + (idx % 2) * (cw + GUTTER * 2)
-            cy = top + (idx // 2) * (row_h + GUTTER * 2)
-            box = pg.r(cx, cy, cw, ph_h)
-            pm = self.photo(s.get("hash"), s.get("path"), int(cw * 8))
-            pg.photo(pm, box, 0.6, pos=(0.5, 0.4))
-            pg.text(pg.r(cx, cy + ph_h + 2.5, cw, 5.4), s["cn"], 4.2,
+            full = odd_tail and idx == len(items) - 1   # 单张收尾=通栏大图
+            if full:
+                cx, c_w, c_ph = MARGIN, CONTENT_W, ph_h * 0.92
+            else:
+                cx = MARGIN + (idx % 2) * (cw + GUTTER * 2)
+                c_w, c_ph = cw, ph_h
+            cy = base_y + (idx // 2) * (row_h + GUTTER * 2)
+            box = pg.r(cx, cy, c_w, c_ph)
+            pm = self.photo(s.get("hash"), s.get("path"),
+                            int(c_w * 8) if not full else int(CONTENT_W * 8))
+            # 档案卡=整图可见(竖版鸟照不裁头尾)
+            pg.photo(pm, box, 0.6, fit=True)
+            pg.text(pg.r(cx, cy + c_ph + 2.5, c_w, 5.4), s["cn"], 4.2,
                     pal.ink, bold=True)
             if s.get("en"):
-                pg.text(pg.r(cx, cy + ph_h + 8.4, cw, 4), s["en"], 2.4,
+                pg.text(pg.r(cx, cy + c_ph + 8.4, c_w, 4), s["en"], 2.4,
                         pal.ink2)
-            meta_y = cy + ph_h + 13.5
+            meta_y = cy + c_ph + 13.5
             if s.get("first_record"):
                 bw = 9.0
                 pg.p.setPen(QPen(QColor(pal.accent), max(1, pg.mm(0.2))))
@@ -545,7 +601,7 @@ class YearbookDoc:
                     (s.get("first") or "")[:10]]
             if s.get("region"):
                 bits.append(s["region"])
-            pg.text(pg.r(meta_x, meta_y, cw - (meta_x - cx), 4.2),
+            pg.text(pg.r(meta_x, meta_y, c_w - (meta_x - cx), 4.2),
                     " · ".join(x for x in bits if x), 2.2, pal.ink3,
                     tracking=0.04)
 

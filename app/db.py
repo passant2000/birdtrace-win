@@ -1430,6 +1430,19 @@ class Library:
             "GROUP BY sp.id ORDER BY last_at DESC NULLS LAST, sp.id DESC").fetchall()
         return [dict(r) for r in rows]
 
+    def spot_regions(self) -> dict[int, str]:
+        """鸟点 → 主地区(该点照片所属批次 region_id 的众数)。只读查询。
+        生涯页足迹「点省份只看该省鸟点」用。"""
+        rows = self.conn.execute(
+            "SELECT p.spot_id sid, b.region_id rid, COUNT(*) n "
+            "FROM photos p JOIN batches b ON b.id=p.batch_id "
+            "WHERE p.spot_id IS NOT NULL AND b.region_id IS NOT NULL "
+            "GROUP BY p.spot_id, b.region_id ORDER BY n DESC").fetchall()
+        out: dict[int, str] = {}
+        for r in rows:
+            out.setdefault(r["sid"], r["rid"])
+        return out
+
     def spot_info(self, spot_id: int):
         r = self.conn.execute("SELECT * FROM spots WHERE id=?", (spot_id,)).fetchone()
         return dict(r) if r else None

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -84,7 +84,12 @@ def _load_features() -> list:
 
 
 class ChinaMapWidget(QWidget):
-    """省级 choropleth。counts: {region_id(CN-XX): 鸟种数}。"""
+    """省级 choropleth。counts: {region_id(CN-XX): 鸟种数}。
+
+    province_clicked(省名): 单击省份(非拖动)时发出, 供外部筛选列表;
+    再次点击同一省/点空白 = 取消选中(发空串)。"""
+
+    province_clicked = Signal(str)
 
     def __init__(self, counts: dict[str, int], parent=None):
         super().__init__(parent)
@@ -97,6 +102,9 @@ class ChinaMapWidget(QWidget):
         self._zoom = 1.0                 # 1=全图, 上限8
         self._vx, self._vy = _CW / 2, _CH / 2   # 视口中心(画布坐标)
         self._drag = None                # 拖动平移: 上次按下的鼠标位置
+        self._press = None               # 按下位置(判断单击/拖动)
+        self._moved = False
+        self._sel: str | None = None     # 选中省名(点击筛选)
         self.setMinimumHeight(430)
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
@@ -162,19 +170,32 @@ class ChinaMapWidget(QWidget):
     # ---------- 事件: 拖动平移/滚轮缩放/双击复位(test3反馈"不能缩放") ----------
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
+            self._press = e.position()
+            self._moved = False
             self._drag = e.position()
             self.setCursor(Qt.ClosedHandCursor)
         super().mousePressEvent(e)
 
     def mouseReleaseEvent(self, e):
+        was_drag = self._moved
         if self._drag is not None:
             self._drag = None
             self.setCursor(Qt.OpenHandCursor)
+        # 单击(没拖动)= 选中省份 → 通知外部筛选; 再点同一省/空白=取消
+        if not was_drag and self._press is not None:
+            name = self._feature_at(e.position())
+            self._sel = None if name == self._sel else name
+            self.update()
+            self.province_clicked.emit(self._sel or "")
+        self._press = None
         super().mouseReleaseEvent(e)
 
     def mouseMoveEvent(self, e):
         pos = e.position()
         if self._drag is not None:
+            if (abs(pos.x() - self._press.x()) > 3
+                    or abs(pos.y() - self._press.y()) > 3):
+                self._moved = True
             s = self._view_scale()
             self._vx -= (pos.x() - self._drag.x()) / s
             self._vy -= (pos.y() - self._drag.y()) / s
@@ -215,10 +236,17 @@ class ChinaMapWidget(QWidget):
         e.accept()
 
     def mouseDoubleClickEvent(self, e):
+        self._moved = True          # 双击不算单击(不触发省份筛选)
         self._zoom = 1.0
         self._vx, self._vy = _CW / 2, _CH / 2
         self.update()
         e.accept()
+
+    def set_selection(self, name: str | None):
+        """外部设置选中省(空=清除), 只重绘不重发信号。"""
+        if name != self._sel:
+            self._sel = name
+            self.update()
 
     # ---------- 绘制 ----------
     def paintEvent(self, e):
@@ -243,7 +271,10 @@ class ChinaMapWidget(QWidget):
                 path.addPolygon(_make_polygon(poly))
                 path.closeSubpath()
             fill = self._tier_color(n)
-            if name == self._hover:
+            if name == self._sel:
+                p.setPen(QPen(QColor(theme.GREEN), 2.2 * k))
+                fill = QColor(fill).lighter(108) if n else QColor(LAND)
+            elif name == self._hover:
                 p.setPen(QPen(QColor(theme.BLUE), 1.4 * k))
                 fill = QColor(fill).lighter(105) if n else QColor(LAND)
             else:

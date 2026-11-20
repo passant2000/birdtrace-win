@@ -984,58 +984,159 @@ class LifePage(QWidget):
                               f"color:{theme.LABEL};background:transparent;")
         cv.addWidget(summary)
 
-        # 省级足迹地图直接内嵌(实测反馈8): 自绘choropleth, 省名+数字
-        # 直接标注在图上, 悬浮看详情; 免WebEngine轻加载
-        if provs:
-            from .china_map_widget import ChinaMapWidget, map_legend
-            cv.addWidget(ChinaMapWidget(dict(provs)))
-            cv.addWidget(map_legend())
-
-        # 鸟点足迹卡列表
-        if not spots:
+        if not spots and not provs:
             empty = QLabel(t("还没有鸟点——在时间线给照片挂点，或地图页新建",
                              "No spots yet — mount photos on the timeline "
                              "or create one on the map page"))
             empty.setObjectName("Hint")
             cv.addWidget(empty)
             return
-        srow = QHBoxLayout()
-        srow.setSpacing(12)
-        for sp in spots[:6]:
-            card = QFrame()
-            card.setObjectName("Card")
-            card.setFixedWidth(230)
-            v = QVBoxLayout(card)
-            v.setContentsMargins(14, 12, 14, 12)
-            v.setSpacing(4)
-            nm = QLabel(sp["name"])
-            nm.setStyleSheet(f"font-size:14px;font-weight:700;"
-                             f"color:{theme.LABEL};background:transparent;")
-            nm.setWordWrap(True)
-            v.addWidget(nm)
-            city = sp.get("city") or ""
-            n_ph = sp.get("n_photos", 0)
-            n_sp = sp.get("n_species", 0)
-            meta = QLabel(t(f"{city + ' · ' if city else ''}{n_ph} 张 · "
-                            f"{n_sp} 种",
-                            f"{city + ' · ' if city else ''}{n_ph} photos · "
-                            f"{n_sp} species"))
-            meta.setObjectName("Hint")
-            v.addWidget(meta)
-            first_last = self._spot_range(sp["id"])
-            if first_last:
-                fr = QLabel(first_last)
-                fr.setObjectName("Hint")
-                v.addWidget(fr)
-            go = QPushButton(t("查看", "View"))
-            go.setCursor(Qt.PointingHandCursor)
-            go.clicked.connect(lambda _=False, sid=sp["id"]: self._open_spot(sid))
-            v.addWidget(go)
-            srow.addWidget(card)
-        srow.addStretch(1)
+
+        # 两栏(2026-11-20 实测反馈): 左=地图(滚轮缩放/拖动平移只作用于地图),
+        # 右=鸟点列表(独立滚动); 点省份 → 右侧只列该省鸟点, 再点取消
+        self._fp_spots = spots
+        self._fp_regions = self.lib.spot_regions()
+        from ..core.yearbook import region_province_name
+        self._fp_name_to_rid = {v: k for k, v in
+                                region_province_name().items()}
+
         host = QWidget()
-        host.setLayout(srow)
-        cv.addWidget(host)
+        host.setMinimumHeight(560)      # 两栏撑起来(地图 430 + 图例/提示)
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(14)
+
+        # 左栏: 地图 + 图例 + 点击提示
+        lcol = QVBoxLayout()
+        lcol.setSpacing(8)
+        self._fp_map = None
+        if provs:
+            from .china_map_widget import ChinaMapWidget, map_legend
+            self._fp_map = ChinaMapWidget(dict(provs))
+            self._fp_map.setMinimumHeight(430)
+            self._fp_map.province_clicked.connect(self._fp_on_province)
+            lcol.addWidget(self._fp_map, 1)
+            lcol.addWidget(map_legend())
+            hint = QLabel(t("点击省份 → 右侧只看该省鸟点；再点一次取消"
+                            "（滚轮缩放 / 拖动平移只影响地图）",
+                            "Click a province to filter the list on the "
+                            "right; click again to clear (zoom/pan affect "
+                            "the map only)"))
+            hint.setObjectName("Hint")
+            hint.setWordWrap(True)
+            lcol.addWidget(hint)
+        else:
+            tip = QLabel(t("还没有带地区的照片，地图暂不可用",
+                           "No geo-tagged photos yet"))
+            tip.setObjectName("Hint")
+            lcol.addWidget(tip)
+        lcol.addStretch(1)
+        lhost = QWidget()
+        lhost.setLayout(lcol)
+        row.addWidget(lhost, 3)
+
+        # 右栏: 筛选头 + 独立滚动列表
+        rcol = QVBoxLayout()
+        rcol.setSpacing(8)
+        bar = QHBoxLayout()
+        self._fp_title = QLabel("")
+        self._fp_title.setStyleSheet(
+            f"font-size:13px;font-weight:700;color:{theme.LABEL};"
+            "background:transparent;")
+        bar.addWidget(self._fp_title, 1)
+        self._fp_clear = QPushButton(t("显示全部", "Show all"))
+        self._fp_clear.setCursor(Qt.PointingHandCursor)
+        self._fp_clear.clicked.connect(self._fp_clear_filter)
+        bar.addWidget(self._fp_clear)
+        rcol.addLayout(bar)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMinimumWidth(300)
+        self._fp_host = QWidget()
+        self._fp_lay = QVBoxLayout(self._fp_host)
+        self._fp_lay.setContentsMargins(0, 0, 4, 0)
+        self._fp_lay.setSpacing(8)
+        scroll.setWidget(self._fp_host)
+        rcol.addWidget(scroll, 1)
+        rhost = QWidget()
+        rhost.setLayout(rcol)
+        row.addWidget(rhost, 2)
+
+        cv.addWidget(host, 1)
+        self._fp_fill(spots)
+
+    def _fp_clear_filter(self):
+        if self._fp_map is not None:
+            self._fp_map.set_selection(None)
+        self._fp_fill(self._fp_spots)
+
+    def _fp_on_province(self, name: str):
+        if not name:
+            self._fp_fill(self._fp_spots)
+            return
+        rid = self._fp_name_to_rid.get(name)
+        sel = [s for s in self._fp_spots
+               if self._fp_regions.get(s["id"]) == rid]
+        self._fp_fill(sel, province=name)
+
+    def _fp_fill(self, spots: list[dict], province: str = ""):
+        """重建右侧鸟点卡列表(只动列表, 不动地图)。"""
+        if not hasattr(self, "_fp_lay"):
+            return
+        while self._fp_lay.count():
+            it = self._fp_lay.takeAt(0)
+            w = it.widget() if it else None
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self._fp_title.setText(t(f"鸟点 · {province}（{len(spots)}）",
+                                 f"Spots · {province} ({len(spots)})")
+                                if province else
+                                t(f"鸟点（{len(spots)}）", f"Spots ({len(spots)})"))
+        if not spots:
+            empty = QLabel(t("该省还没有鸟点——换成别的省份，或点「显示全部」",
+                             "No spots in this province — pick another one or "
+                             "press “Show all”"))
+            empty.setObjectName("Hint")
+            empty.setWordWrap(True)
+            self._fp_lay.addWidget(empty)
+            self._fp_lay.addStretch(1)
+            return
+        for sp in spots:
+            self._fp_lay.addWidget(self._fp_card(sp))
+        self._fp_lay.addStretch(1)
+
+    def _fp_card(self, sp: dict) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(4)
+        nm = QLabel(sp["name"])
+        nm.setStyleSheet(f"font-size:14px;font-weight:700;"
+                         f"color:{theme.LABEL};background:transparent;")
+        nm.setWordWrap(True)
+        v.addWidget(nm)
+        city = sp.get("city") or ""
+        meta = QLabel(t(f"{city + ' · ' if city else ''}"
+                        f"{sp.get('n_photos', 0)} 张 · "
+                        f"{sp.get('n_species', 0)} 种",
+                        f"{city + ' · ' if city else ''}"
+                        f"{sp.get('n_photos', 0)} photos · "
+                        f"{sp.get('n_species', 0)} species"))
+        meta.setObjectName("Hint")
+        v.addWidget(meta)
+        rng = self._spot_range(sp["id"])
+        if rng:
+            fr = QLabel(rng)
+            fr.setObjectName("Hint")
+            v.addWidget(fr)
+        go = QPushButton(t("查看", "View"))
+        go.setCursor(Qt.PointingHandCursor)
+        go.clicked.connect(lambda _=False, sid=sp["id"]: self._open_spot(sid))
+        v.addWidget(go)
+        return card
 
     def _spot_range(self, spot_id: int) -> str:
         row = self.lib.conn.execute(

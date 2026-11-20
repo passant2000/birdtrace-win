@@ -116,8 +116,17 @@ def main():
     fake = YB.YearbookDoc({"best18": [], "monthly": [0] * 12},
                           [{"cn": f"x{i}", "n": 1} for i in range(12)],
                           {"provinces": [], "spots": []}, [], "2026")
-    check(fake.sp_pages == 2 and fake.page_count == 7,
-          f"12 种=2 页档案/共 7 页 ({fake.sp_pages}/{fake.page_count})")
+    check(fake.sp_pages == 3 and fake.page_count == 8,
+          f"12 种=3 页档案(每页4张)/共 8 页 "
+          f"({fake.sp_pages}/{fake.page_count})")
+    fake50 = YB.YearbookDoc({"best18": [], "monthly": [0] * 12},
+                            [{"cn": f"x{i}", "n": 1} for i in range(50)],
+                            {"provinces": [], "spots": []}, [], "2026")
+    sizes = fake50.sp_sizes()
+    check(sum(sizes) == 50 and all(sz % 2 == 0 for sz in sizes),
+          f"50 种分页=偶数行满不缺口 ({sizes})")
+    check(sizes[-1] == 2 and len(sizes) == 13,
+          f"50 种=12页×4+1页×2 ({len(sizes)} 页)")
 
     # ---------- [2] 渲染: 深浅主题 / 封面两式 / 地图 ----------
     print("[2] 渲染")

@@ -150,6 +150,51 @@ def main():
         app.processEvents()
     texts3 = " ".join(w.text() for w in page.tabs[2].widget().findChildren(QLabel))
     check("足迹" in texts3 and "奥森南园" in texts3, f"足迹Tab鸟点卡 ({texts3[:80]})")
+    # 两栏独立 + 点省份筛选(2026-11-20 实测反馈)
+    check(getattr(page, "_fp_map", None) is not None, "足迹: 左侧地图栏存在")
+    check(page._fp_lay.count() > 0, "足迹: 右侧鸟点列表存在")
+    check("鸟点" in page._fp_title.text(), f"列表标题 ({page._fp_title.text()})")
+    # 模拟点击地图上的北京 → 只显示该省鸟点
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    cw = page._fp_map
+    cw.resize(620, 430)
+    cw.show()
+    cw.grab()                        # 触发 paint → 建 paths 缓存
+    for _ in range(3):
+        app.processEvents()
+    pt = QPointF(*cw._proj(116.4, 39.9))     # 北京市中心
+    for tp, btn, btns in ((QEvent.MouseButtonPress, Qt.LeftButton,
+                           Qt.LeftButton),
+                          (QEvent.MouseButtonRelease, Qt.LeftButton,
+                           Qt.NoButton)):
+        cw.__getattribute__("mousePressEvent" if tp == QEvent.MouseButtonPress
+                            else "mouseReleaseEvent")(
+            QMouseEvent(tp, pt, pt, btn, btns, Qt.NoModifier))
+    check(cw._sel == "北京市", f"点击省份→选中 ({cw._sel})")
+    check("北京市" in page._fp_title.text(),
+          f"右侧列表按省份过滤 ({page._fp_title.text()})")
+    # 无鸟点省份 → 空态
+    page._fp_on_province("西藏自治区")
+    labels = " ".join(w.text() for w in page._fp_host.findChildren(QLabel))
+    check("该省还没有鸟点" in labels, "无鸟点省份空态文案")
+    # 清除恢复全部
+    page._fp_clear_filter()
+    check(page._fp_map._sel is None and "（1）" in page._fp_title.text(),
+          f"显示全部恢复 ({page._fp_title.text()})")
+    # 拖动不触发选省(位移>3px)
+    page._fp_map.set_selection(None)
+    p0 = QPointF(*cw._proj(116.4, 39.9))
+    cw.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, p0, p0,
+                                   Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    p1 = QPointF(p0.x() + 40, p0.y() + 20)
+    cw.mouseMoveEvent(QMouseEvent(QEvent.MouseMove, p1, p1, Qt.NoButton,
+                                  Qt.LeftButton, Qt.NoModifier))
+    cw.mouseReleaseEvent(QMouseEvent(QEvent.MouseButtonRelease, p1, p1,
+                                     Qt.LeftButton, Qt.NoButton,
+                                     Qt.NoModifier))
+    check(cw._sel is None, "拖动平移不触发省份筛选")
+
     # 内嵌省级地图(实测反馈8): 构造+渲染冒烟
     from app.ui.china_map_widget import ChinaMapWidget
     cmap = ChinaMapWidget(dict(provs))
