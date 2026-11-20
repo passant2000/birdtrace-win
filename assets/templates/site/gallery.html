@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="__LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__L_GALLERY__ · BirdTrace</title>
+<script>try{var t=localStorage.getItem("bt-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="nav">
+  <a class="logo" href="index.html"><span class="bird">◈</span>BirdTrace</a>
+  <nav class="links">
+    <a class="on" href="gallery.html">__NAV_SPECIES__</a>
+    <a href="timeline.html">__NAV_TIME__</a>
+    <a href="regions.html">__NAV_REGION__</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="icon" id="theme" title="__THEME__" aria-label="__THEME__">☾</button>
+</header>
+
+<main class="wrap">
+  <section class="block">
+    <div class="head">
+      <div><h2>__L_GALLERY__</h2><div class="en">Species Gallery</div></div>
+      <div class="count" id="count">__COUNT__</div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="chips" id="gchips" style="margin-top:10px"></div>
+    <div class="chips" style="margin-top:10px">
+      <input class="search" id="q" placeholder="__L_SEARCH__" type="search">
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<footer>__FOOT__</footer>
+<script src="gallery.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

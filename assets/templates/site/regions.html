@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="__LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__L_REGIONS__ · BirdTrace</title>
+<script>try{var t=localStorage.getItem("bt-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="nav">
+  <a class="logo" href="index.html"><span class="bird">◈</span>BirdTrace</a>
+  <nav class="links">
+    <a href="gallery.html">__NAV_SPECIES__</a>
+    <a href="timeline.html">__NAV_TIME__</a>
+    <a class="on" href="regions.html">__NAV_REGION__</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="icon" id="theme" title="__THEME__" aria-label="__THEME__">☾</button>
+</header>
+
+<main class="wrap">
+  <section class="block">
+    <div class="head">
+      <div><h2>__L_REGIONS__</h2><div class="en">Regions</div></div>
+      <div class="count">__PRIVACY__</div>
+    </div>
+    <div class="region">
+      <div class="mapbox">__MAP_SVG__</div>
+      <div class="rlist">__REGION_ROWS__</div>
+    </div>
+    <div class="note">__L_PRIVACY_NOTE__</div>
+  </section>
+</main>
+
+<footer>__FOOT__</footer>
+<script src="gallery.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

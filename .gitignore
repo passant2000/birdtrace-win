@@ -16,7 +16,11 @@ packaging/dist/
 packaging/build/
 
 # 资产(从birdtrace.apk提取 + 模型权重, 许可见README)
-assets/
+assets/*
+# 例外: 静态站模板是我们自己写的源码(非 APK 提取资产), 必须进仓库——
+# 否则 fresh clone 生成站点时无模板(旧版靠内嵌 fallback 掩盖了这一点)
+!assets/templates/
+!assets/templates/**
 
 # 大二进制一律防误提交
 *.onnx

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="__LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<meta name="description" content="__DESC__">
+<script>try{var t=localStorage.getItem("bt-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="nav">
+  <a class="logo" href="index.html"><span class="bird">◈</span>BirdTrace</a>
+  <nav class="links">
+    <a href="gallery.html">__NAV_SPECIES__</a>
+    <a href="timeline.html">__NAV_TIME__</a>
+    <a href="regions.html">__NAV_REGION__</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="icon" id="theme" title="__THEME__" aria-label="__THEME__">☾</button>
+</header>
+
+<main>
+  <div class="hero">
+    __HERO_IMG__
+    <div class="scrim"></div>
+    <div class="txt">
+      <h1>BirdTrace</h1>
+      <div class="tag">__TAGLINE__</div>
+      <div class="stats">
+        <div><b>__N_PHOTOS__</b>__L_PHOTOS__</div>
+        <div><b>__N_SPECIES__</b>__L_SPECIES__</div>
+        <div><b>__N_SPOTS__</b>__L_SPOTS__</div>
+        <div><b>__N_YEARS__</b>__L_YEARS__</div>
+      </div>
+    </div>
+    <div class="scroll">⌄</div>
+    <div class="credit">__HERO_CREDIT__</div>
+  </div>
+
+  <section class="block"><div class="wrap">
+    <div class="head">
+      <div><h2>__L_FEATURED__</h2><div class="en">Featured species</div></div>
+      <a class="more" href="gallery.html">__L_ALL__ →</a>
+    </div>
+    <div class="grid" id="featured"></div>
+  </div></section>
+
+  <section class="block"><div class="wrap">
+    <div class="head">
+      <div><h2>__L_RECENT__</h2><div class="en">Recent</div></div>
+      <a class="more" href="timeline.html">__L_TIMELINE__ →</a>
+    </div>
+    <div id="recent" style="margin-top:18px"></div>
+  </div></section>
+</main>
+
+<footer>__FOOT__</footer>
+<script src="gallery.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
