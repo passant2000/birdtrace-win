@@ -1221,7 +1221,8 @@ class Library:
           与用户"清空当全新软件"的习惯一致; 不存在删了照片还占号的幽灵lifer。
         """
         rows = self.conn.execute(
-            "SELECT s.code, s.cn, s.en, s.sci, MIN(v.taken_at) AS first_at, "
+            "SELECT s.code, s.cn, s.en, s.sci, s.cn_pinyin, s.cn_initials, "
+            "  MIN(v.taken_at) AS first_at, "
             "  (SELECT v2.photo_id FROM v_records v2 WHERE v2.eff_code=s.code "
             "   ORDER BY v2.taken_at ASC LIMIT 1) AS photo_id "
             "FROM v_records v JOIN species s ON s.code=v.eff_code "
@@ -1285,9 +1286,47 @@ class Library:
         return {r["d"]: r["c"] for r in self.conn.execute(sql, args).fetchall()
                 if r["d"]}
 
+    def spot_lifer_feed(self, spot_id: int) -> list[dict]:
+        """鸟点收录流(生涯页时间线选鸟点, test3反馈"点选鸟点啥也不显示"):
+        该点拍到的**每种**鸟 + 在**该点**的首见时间/首见照片——不是生涯
+        首见(首见照片在别处的种在此照样列出, 旧实现按生涯首见照片地点筛
+        →几乎永远空)。口径与lifers()一致(eff_code全记录不筛rank),
+        no=全局lifer_no(查不到给点内序号), 字段形状对齐lifer_feed。
+        返回按该点首见时间升序。只读查询。"""
+        rows = self.conn.execute(
+            "SELECT s.code, s.cn, s.en, s.sci, s.cn_pinyin, s.cn_initials, "
+            "  MIN(v.taken_at) AS first_at "
+            "FROM v_records v JOIN photos p ON p.id=v.photo_id "
+            "JOIN species s ON s.code=v.eff_code "
+            "WHERE p.spot_id=? GROUP BY s.code ORDER BY first_at ASC",
+            (spot_id,)).fetchall()
+        if not rows:
+            return []
+        lifer_no = {li["code"]: li["lifer_no"] for li in self.lifers()}
+        sp = self.conn.execute(
+            "SELECT name FROM spots WHERE id=?", (spot_id,)).fetchone()
+        spot_name = sp["name"] if sp else ""
+        out = []
+        for i, r in enumerate(rows):
+            d = dict(r)
+            pid = self.conn.execute(
+                "SELECT v.photo_id FROM v_records v JOIN photos p "
+                "ON p.id=v.photo_id WHERE p.spot_id=? AND v.eff_code=? "
+                "ORDER BY v.taken_at ASC, v.photo_id ASC LIMIT 1",
+                (spot_id, d["code"])).fetchone()
+            d["photo_id"] = pid["photo_id"] if pid else None
+            d["no"] = lifer_no.get(d["code"], i + 1)
+            d["spot_name"] = spot_name
+            d["region"] = ""
+            d["year_bird"] = False
+            out.append(d)
+        return out
+
     def spot_visits(self, spot_id: int) -> dict:
         """鸟点到访概览(生涯页时间线下钻, 实测反馈6): 到访天数/首末日期/
-        鸟种清单(按张数降序, 带中英名)。只读查询。"""
+        鸟种清单(按张数降序, 带中英名)。只读查询。鸟种口径=eff_code全部
+        记录不筛rank(test3修: 原筛rank=1与spots_overview口径打架——地图
+        侧栏说1种、这里说没有, 鸟点下钻卡凭空消失), 张数按照片去重。"""
         row = self.conn.execute(
             "SELECT COUNT(DISTINCT substr(COALESCE(e.dt_original, "
             "p.added_at),1,10)) days, MIN(COALESCE(e.dt_original, "
@@ -1296,8 +1335,8 @@ class Library:
             "ON e.photo_id=p.id WHERE p.spot_id=?",
             (spot_id,)).fetchone()
         species = self.conn.execute(
-            "SELECT v.eff_code code, s.cn, s.en, COUNT(*) n "
-            "FROM photos p JOIN v_records v ON v.photo_id=p.id AND v.rank=1 "
+            "SELECT v.eff_code code, s.cn, s.en, COUNT(DISTINCT v.photo_id) n "
+            "FROM photos p JOIN v_records v ON v.photo_id=p.id "
             "JOIN species s ON s.code=v.eff_code WHERE p.spot_id=? "
             "GROUP BY v.eff_code ORDER BY n DESC, s.cn",
             (spot_id,)).fetchall()

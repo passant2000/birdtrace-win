@@ -819,7 +819,11 @@ class MapPage(QWidget):
         # ---- 左侧栏 ----
         side = QFrame()
         side.setFixedWidth(self.SIDEBAR_W)
-        side.setStyleSheet(f"QFrame{{background:{theme.CARD};"
+        # test3反馈: 必须用 #MapSide 限定——裸 QFrame{} 会命中所有QFrame子孙
+        # (鸟点卡片全是QFrame), 每张卡右缘各画1px border-right, 串起来
+        # 视觉=贯穿侧栏的"竖虚线"(test2误诊滚动条, probe_map_dash实锤)。
+        side.setObjectName("MapSide")
+        side.setStyleSheet(f"QFrame#MapSide{{background:{theme.CARD};"
                            f"border-right:1px solid {theme.SEP};}}")
         sv = QVBoxLayout(side)
         sv.setContentsMargins(16, 22, 16, 14)

@@ -698,23 +698,25 @@ class LifePage(QWidget):
         cv.addWidget(self._tl_filter_host)
         self._sync_tl_filter_items(feed)
 
-        years = sorted({(li["first_at"] or "")[:4] for li in feed
-                        if li["first_at"]}, reverse=True)
         # 过滤
         q = (self._tl_search.text() or "").strip().lower()
         yf = self._tl_year.currentData()
         sf = self._tl_spot.currentData()
         spot_name = ""
         if sf is not None:
+            # test3反馈"点选鸟点啥也不显示": 旧=在生涯首见流里按首见照片
+            # 地点筛(首见在别处的种全消失→几乎必空); 改=换口径成该点
+            # 收录流(该点拍到的每种鸟+在该点的首见), db.spot_lifer_feed。
             spot_name = self._tl_spot.currentText()
+            feed = self.lib.spot_lifer_feed(sf)
+            self._sync_tl_filter_items(feed, spots=False)  # 年份选项集换口径
             card = self._spot_drill_card(sf, spot_name)
             if card is not None:
                 cv.addWidget(card)   # 下钻: 去过几次/鸟种清单(可点)
+        years = sorted({(li["first_at"] or "")[:4] for li in feed
+                        if li["first_at"]}, reverse=True)
         if q:
-            matches = [li for li in feed if
-                       q in (li["cn"] or "").lower()
-                       or q in (li["en"] or "").lower()
-                       or q in (li["sci"] or "").lower()]
+            matches = [li for li in feed if self._tl_match(li, q)]
             if len(matches) == 1:
                 # 下钻: 该鸟种所有拍摄日期+鸟点(可点开图)
                 cv.addWidget(self._species_drill_card(matches[0]["code"]))
@@ -724,17 +726,19 @@ class LifePage(QWidget):
             if yf and y != yf:
                 continue
             if q:
-                group = [li for li in group if
-                         q in (li["cn"] or "").lower()
-                         or q in (li["en"] or "").lower()
-                         or q in (li["sci"] or "").lower()]
-            if spot_name:
-                group = [li for li in group if li["spot_name"] == spot_name]
+                group = [li for li in group if self._tl_match(li, q)]
             if not group:
                 continue
-            n_ph_year = sum(self.lib.day_counts(y).values())
-            head = QPushButton(t(f"▾ {y} · 新种 {len(group)} · 照片 {n_ph_year}",
-                                 f"▾ {y} · {len(group)} new · {n_ph_year} photos"))
+            if spot_name:
+                # 鸟点口径下列的不是"新种"是该点收录, 照片数也是全库口径
+                # 不再展示, 头部文案如实换掉
+                head = QPushButton(t(f"▾ {y} · 收录 {len(group)} 种",
+                                     f"▾ {y} · {len(group)} species"))
+            else:
+                n_ph_year = sum(self.lib.day_counts(y).values())
+                head = QPushButton(
+                    t(f"▾ {y} · 新种 {len(group)} · 照片 {n_ph_year}",
+                      f"▾ {y} · {len(group)} new · {n_ph_year} photos"))
             head.setCursor(Qt.PointingHandCursor)
             head.setStyleSheet(f"text-align:left;background:{theme.FILL};"
                                "border-radius:10px;padding:8px 12px;"
@@ -751,13 +755,27 @@ class LifePage(QWidget):
             cv.addWidget(list_w)
             shown += len(group)
         if not shown:
-            empty = QLabel(t("还没有收录——识别完成后这里按时间记录你的新种",
-                             "Nothing yet — new species will appear here "
-                             "after recognition"))
+            if spot_name:
+                empty = QLabel(t(f"{spot_name} 还没有已识别的鸟种",
+                                 f"No identified species at {spot_name} yet"))
+            else:
+                empty = QLabel(t("还没有收录——识别完成后这里按时间记录你的新种",
+                                 "Nothing yet — new species will appear here "
+                                 "after recognition"))
             empty.setObjectName("Hint")
             cv.addWidget(empty)
 
     # ---------- 时间线Tab: 筛选行(持久) + 下钻卡(实测反馈6) ----------
+    @staticmethod
+    def _tl_match(li: dict, q: str) -> bool:
+        """鸟种搜索匹配(test3反馈"只支持中文"): 中/英/学名/拼音全拼/
+        拼音首字母全命中——与鸟种库搜索(species_overview)同口径。"""
+        return (q in (li["cn"] or "").lower()
+                or q in (li["en"] or "").lower()
+                or q in (li["sci"] or "").lower()
+                or q in (li["cn_pinyin"] or "").lower()
+                or q in (li["cn_initials"] or "").lower())
+
     def _make_tl_filters(self) -> QWidget:
         """筛选行控件只建一次; 选项在 _sync_tl_filter_items 里重填。"""
         host = QWidget()
@@ -770,7 +788,8 @@ class LifePage(QWidget):
         self._tl_spot.addItem(t("全部鸟点", "All spots"), None)
         self._tl_search = QLineEdit()
         self._tl_search.setPlaceholderText(
-            t("搜鸟种名（中英/学名）…", "Search species (CN/EN/Latin)…"))
+            t("搜鸟种名（中文/拼音/英文/学名）…",
+              "Search species (CN / pinyin / EN / Latin)…"))
         self._tl_search.setFixedWidth(200)
         self._tl_search.setClearButtonEnabled(True)
         self._tl_year.currentIndexChanged.connect(lambda _i: self.refresh())
@@ -781,8 +800,10 @@ class LifePage(QWidget):
         frow.addWidget(self._tl_search, 1)
         return host
 
-    def _sync_tl_filter_items(self, feed: list[dict]):
-        """重填年份/鸟点选项, 保留当前选择(blockSignals防重入)。"""
+    def _sync_tl_filter_items(self, feed: list[dict], spots: bool = True):
+        """重填年份/鸟点选项, 保留当前选择(blockSignals防重入)。
+        spots=False=只重填年份(选了鸟点后feed换口径, 年份选项集跟着换,
+        鸟点选项不动防递归)。"""
         years = sorted({(li["first_at"] or "")[:4] for li in feed
                         if li["first_at"]}, reverse=True)
         cur_y = self._tl_year.currentData()
@@ -794,6 +815,8 @@ class LifePage(QWidget):
             idx = self._tl_year.findData(cur_y)
             self._tl_year.setCurrentIndex(idx if idx >= 0 else 0)
         self._tl_year.blockSignals(False)
+        if not spots:
+            return
         cur_s = self._tl_spot.currentData()
         self._tl_spot.blockSignals(True)
         self._tl_spot.clear()
@@ -830,7 +853,9 @@ class LifePage(QWidget):
             "see its records)"))
         sub.setObjectName("Hint")
         lay.addWidget(sub)
-        from ...theme.widgets import FlowLayout
+        from ..theme.widgets import FlowLayout   # 一级模块两个点(三个点
+        # =超出顶层包, test3抓出的潜伏bug: 选有鸟种的点→此行ImportError
+        # →refresh中途断→时间线整页空白)
         chips_host = QWidget()
         flow = FlowLayout(chips_host, spacing=6)
         flow.setContentsMargins(0, 0, 0, 0)
