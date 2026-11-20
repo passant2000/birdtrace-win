@@ -607,9 +607,15 @@ check("连拍组级操作P1改判+P2整组重识别(0.8.6)",
 check("rebox追加落库append_record(0.8.6修旧bug)",
       "append_record" in (symbols(code_of("app.db")) or set())
       and "append_record" in (symbols(code_of("app.ui.rebox_dialog")) or set()))
+# 静态站模板目录(多页)必须在 exe 旁的 assets 里(旧实现 __file__ 推导在
+# frozen 下落到 _internal → 静默用内嵌 fallback, 这里做打包级守护)
+_tpl = DIST / "assets" / "templates" / "site"
+for _n in ("index.html", "gallery.html", "species.html", "timeline.html",
+           "regions.html", "style.css", "app.js"):
+    check(f"站点模板 {_n}", (_tpl / _n).is_file(), f"({_tpl})")
 
-print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
-sys.exit(1 if fail else 0)
+
+# (汇总与退出移到文件末尾——此前放在这里导致后面 1.0 锚点全是死代码)
 
 # ---- 1.0冲刺新锚点 ----
 for name, suffix, sym in [
@@ -633,6 +639,11 @@ for name, suffix, sym in [
     ("扫描: scan_increment", "app.core.scan", "scan_increment"),
     ("成对: _merge_pairs", "app.core.importer", "_merge_pairs"),
     ("静态站导出: build_site", "app.core.static_site", "build_site"),
+    ("年鉴页面模型", "app.core.yearbook", "YearbookDoc"),
+    ("年鉴统一绘制", "app.core.yearbook", "Pg"),
+    ("年鉴组装", "app.core.yearbook", "build_doc"),
+    ("年鉴PDF", "app.ui.yearbook_pdf", "write_pdf"),
+    ("年鉴预览", "app.ui.yearbook_page", "_Preview"),
     ("别名: alias_of", "app.core.camera_aliases", "alias_of"),
     ("对比对话框", "app.ui.compare_dialog", "CompareDialog"),
     ("隔离区对话框", "app.ui.quarantine_dialog", "QuarantineDialog"),
@@ -644,4 +655,7 @@ for name, suffix, sym in [
     c = code_of(suffix)
     check(name, c is not None and sym in symbols(c),
           f"({suffix}.{sym})")
+
+print(f"\n===== 断言汇总: PASS={ok} FAIL={fail} =====")
+sys.exit(1 if fail else 0)
 
